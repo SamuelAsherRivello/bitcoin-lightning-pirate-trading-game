@@ -1,0 +1,195 @@
+html {
+    height: 100%;
+    overflow: hidden;
+    background: #080b10;
+}
+
+body {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    background: #080b10;
+    color: #f6f3ec;
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+}
+
+body:has(.app-shell--light) {
+    background: #eef2f5;
+    color: #18212f;
+}
+
+body:has(.app-shell--dark) {
+    background: #080b10;
+    color: #f6f3ec;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+button,
+input,
+select,
+textarea {
+    font: inherit;
+}
+
+.app-shell {
+    --app-background: #eef2f5;
+    --app-surface: rgba(255, 255, 255, 0.92);
+    --app-surface-strong: #ffffff;
+    --app-subtle: #e8eef2;
+    --app-raised: #f8fbfb;
+    --app-border: rgba(48, 67, 84, 0.18);
+    --app-control: #ffffff;
+    --app-control-border: rgba(38, 80, 115, 0.26);
+    --app-control-hover: #e9f2f4;
+    --app-text: #18212f;
+    --app-text-muted: #3a4b5d;
+    --app-text-subtle: #687789;
+    --app-accent: #0b6b78;
+    --app-accent-strong: #064f59;
+    --app-accent-soft: #d9f0ef;
+    --app-positive: #087443;
+    --app-negative: #bd2a2a;
+    --app-shadow-soft: 0 12px 32px rgba(29, 47, 60, 0.12);
+    height: 100vh;
+    min-height: 100vh;
+    overflow-x: hidden;
+    overflow-y: scroll;
+    scrollbar-gutter: stable;
+    scrollbar-color: #0b6b78 #d9f0ef;
+    background:
+        linear-gradient(132deg, rgba(217, 240, 239, 0.9), transparent 38%),
+        linear-gradient(28deg, rgba(248, 230, 216, 0.78), transparent 42%),
+        var(--app-background);
+    color: var(--app-text);
+}
+
+.app-shell--dark {
+    --app-background: #080b10;
+    --app-surface: rgba(20, 25, 32, 0.88);
+    --app-surface-strong: #141920;
+    --app-subtle: #1d2930;
+    --app-raised: #1a2229;
+    --app-border: rgba(187, 198, 195, 0.18);
+    --app-control: #171f27;
+    --app-control-border: rgba(201, 212, 207, 0.24);
+    --app-control-hover: #23313a;
+    --app-text: #f6f3ec;
+    --app-text-muted: #d4d6cf;
+    --app-text-subtle: #9fa8a9;
+    --app-accent: #55c7b9;
+    --app-accent-strong: #8ce3d8;
+    --app-accent-soft: rgba(85, 199, 185, 0.16);
+    --app-positive: #5ed69a;
+    --app-negative: #ff827c;
+    --app-shadow-soft: 0 12px 38px rgba(0, 0, 0, 0.28);
+    scrollbar-color: #55c7b9 #141920;
+    background:
+        radial-gradient(circle at 20% 0%, rgba(85, 199, 185, 0.18), transparent 34%),
+        radial-gradient(circle at 92% 18%, rgba(241, 166, 109, 0.14), transparent 36%),
+        linear-gradient(160deg, #080b10 0%, #111922 48%, #080b10 100%);
+}
+
+.app-shell::-webkit-scrollbar {
+    width: 14px;
+}
+
+.app-shell::-webkit-scrollbar-track {
+    background: #d9f0ef;
+}
+
+.app-shell::-webkit-scrollbar-thumb {
+    border: 3px solid #d9f0ef;
+    border-radius: 999px;
+    background: #0b6b78;
+}
+
+.app-shell--dark::-webkit-scrollbar-track {
+    background: #141920;
+}
+
+.app-shell--dark::-webkit-scrollbar-thumb {
+    border-color: #141920;
+    background: #55c7b9;
+}
+
+.page-content {
+    width: min(1120px, calc(100% - 40px));
+    margin: 0 auto;
+    padding: 42px 0 56px;
+}
+
+.template-page h1 {
+    margin: 0 0 18px;
+    color: var(--app-text);
+    font-size: clamp(36px, 6vw, 64px);
+    line-height: 1;
+    letter-spacing: 0;
+}
+
+.template-page__data {
+    display: inline-flex;
+    min-height: 40px;
+    align-items: center;
+    margin: 0 0 24px;
+    padding: 8px 14px;
+    border: 1px solid var(--app-border);
+    border-radius: 8px;
+    background: var(--app-surface);
+    color: var(--app-accent-strong);
+    font-size: 16px;
+    font-weight: 750;
+    box-shadow: var(--app-shadow-soft);
+}
+
+.template-page__readme-link {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    margin-top: 4px;
+    color: var(--app-accent-strong);
+    font-size: 15px;
+    font-weight: 750;
+    text-decoration: none;
+}
+
+.template-page__readme-link:hover,
+.template-page__readme-link:focus-visible {
+    text-decoration: underline;
+}
+
+.template-page__body {
+    display: grid;
+    gap: 18px;
+    width: 100%;
+}
+
+.template-page__body p {
+    margin: 0;
+    color: var(--app-text-muted);
+    font-size: 19px;
+    line-height: 1.65;
+}
+
+.template-page__warning {
+    color: var(--app-negative);
+    font-weight: 850;
+}
+
+@media (max-width: 760px) {
+    .page-content {
+        width: min(100% - 28px, 1120px);
+        padding: 30px 0 42px;
+    }
+
+    .template-page h1 {
+        font-size: clamp(34px, 12vw, 54px);
+    }
+
+    .template-page__body p {
+        font-size: 17px;
+        line-height: 1.58;
+    }
+}

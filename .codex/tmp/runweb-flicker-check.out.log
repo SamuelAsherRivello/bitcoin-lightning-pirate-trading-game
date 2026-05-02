@@ -1,0 +1,27 @@
+Starting web app for laptop and phone testing on the same Wi-Fi.
+Laptop: http://127.0.0.1:8080
+Phone:  not available unless you pass this laptop's Wi-Fi IPv4 address with -Address.
+
+Building Tailwind CSS...
+
+> tailwind:build
+> npm run tailwind:build:web && npm run tailwind:build:desktop
+
+
+> tailwind:build:web
+> tailwindcss -i ./packages/ui/input.css -o ./packages/web/assets/tailwind.css
+
+
+> tailwind:build:desktop
+> tailwindcss -i ./packages/ui/input.css -o ./packages/desktop/assets/tailwind.css
+
+  1.07s  INFO -----------------------------------------------------------------
+                Serving your app: web! 🚀
+                • Press [33m`ctrl+c`[0m to exit the server
+                • Press [33m`r`[0m to rebuild the app
+                • Press [33m`p`[0m to toggle automatic rebuilds
+                • Press [33m`v`[0m to toggle verbose logging
+                • Press [33m`/`[0m for more commands and shortcuts
+                Learn more at [34mhttps://dioxuslabs.com/learn/0.7/getting_started[0m
+               ----------------------------------------------------------------
+  6.58s  INFO Build completed successfully in [33m5.51s[0m, launching app! 💫

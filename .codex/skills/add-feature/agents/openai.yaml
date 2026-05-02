@@ -1,0 +1,4 @@
+interface:
+  display_name: "Add Feature"
+  short_description: "Add Dioxus features with specs and checks"
+  default_prompt: "Use $add-feature to define and implement a target feature in this Dioxus template app."

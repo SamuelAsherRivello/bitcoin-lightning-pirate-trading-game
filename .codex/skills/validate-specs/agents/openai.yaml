@@ -1,0 +1,4 @@
+interface:
+  display_name: "Validate Specs"
+  short_description: "Audit spec and codebase drift"
+  default_prompt: "Use $validate-specs to audit the active feature specs against the codebase truth."

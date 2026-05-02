@@ -1,0 +1,14 @@
+{
+  "name": "dioxus-bitcoin-lightning-game",
+  "scripts": {
+    "tailwind:build": "npm run tailwind:build:web && npm run tailwind:build:desktop",
+    "tailwind:build:web": "tailwindcss -i ./packages/ui/input.css -o ./packages/web/assets/tailwind.css",
+    "tailwind:build:desktop": "tailwindcss -i ./packages/ui/input.css -o ./packages/desktop/assets/tailwind.css",
+    "tailwind:watch:web": "tailwindcss -i ./packages/ui/input.css -o ./packages/web/assets/tailwind.css --watch",
+    "tailwind:watch:desktop": "tailwindcss -i ./packages/ui/input.css -o ./packages/desktop/assets/tailwind.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.17",
+    "tailwindcss": "^4.1.17"
+  }
+}

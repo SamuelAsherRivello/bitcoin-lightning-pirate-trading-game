@@ -1,0 +1,16 @@
+.page-footer {
+  width: min(1120px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 22px 20px 28px;
+  color: var(--app-text-subtle);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .page-footer {
+    width: min(100% - 28px, 1120px);
+    padding: 18px 20px 24px;
+  }
+}
