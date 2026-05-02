@@ -1,0 +1,4 @@
+interface:
+  display_name: "List Skill Repetoir"
+  short_description: "List available skills with repo usage counts."
+  default_prompt: "List every available skill in this repository with short descriptions and call counts."

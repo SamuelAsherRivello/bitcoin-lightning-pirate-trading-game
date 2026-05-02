@@ -1,0 +1,60 @@
+# AI agent ignore file.
+# Keep agents focused on source, docs, scripts, assets, and project guidance.
+
+# Version control internals
+.git/
+
+# Rust and Dioxus build outputs
+target/
+**/target/
+dist/
+**/dist/
+.dioxus/
+**/.dioxus/
+.dx/
+**/.dx/
+
+# Local runtime data and generated browser/test artifacts
+data/
+test-results/
+coverage/
+**/coverage/
+
+# Logs, traces, and crash dumps
+*.log
+*.trace
+*.dmp
+*.pdb
+
+# Temporary and backup files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+**/*.rs.bk
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+
+# Dependency caches from auxiliary tooling
+node_modules/
+**/node_modules/
+.pnpm-store/
+**/.pnpm-store/
+.npm/
+**/.npm/
+
+# Large packaged binaries and archives are usually less useful than source.
+*.exe
+*.dll
+*.msi
+*.zip
+*.7z
+*.tar
+*.tar.gz

@@ -1,0 +1,31 @@
+{
+  "source_page": "https://en.wikipedia.org/wiki/Flag_icons_for_languages",
+  "source_page_accessed_at": "2026-04-29T17:41:24.9644506-03:00",
+  "note": "Static language selector flag assets sourced from Wikimedia Commons based on the national flag usage discussed on the source page.",
+  "assets": [
+    {
+      "language": "en-US",
+      "country": "United States",
+      "source_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Flag_of_the_United_States.svg",
+      "local_path": "en-us.svg"
+    },
+    {
+      "language": "es-MX",
+      "country": "Mexico",
+      "source_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Flag_of_Mexico.svg",
+      "local_path": "es-mx.svg"
+    },
+    {
+      "language": "pt-BR",
+      "country": "Brazil",
+      "source_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Flag_of_Brazil.svg",
+      "local_path": "pt-br.svg"
+    },
+    {
+      "language": "fr-FR",
+      "country": "France",
+      "source_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Flag_of_France.svg",
+      "local_path": "fr-fr.svg"
+    }
+  ]
+}

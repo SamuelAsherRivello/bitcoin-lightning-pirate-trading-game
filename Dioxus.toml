@@ -1,0 +1,5 @@
+[application]
+sub_package = "web"
+
+[web.app]
+title = "Bitcoin Lightning Pirate Trading Game"
