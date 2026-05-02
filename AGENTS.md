@@ -19,6 +19,14 @@ Provide concise code examples with detailed descriptions
 * Do not introduce browser SQLite or OPFS worker startup for template data caching.
 * Keep `Documentation/DioxusFeatureMatrix.md` updated as development continues whenever Dioxus feature usage, routes, cache behavior, platform support, or suggested future work changes.
 
+# AI Agent Safety Rules
+
+* Do not read, create, edit, move, rename, delete, or otherwise operate on files outside this project repository unless the user explicitly names another repository as part of the current request.
+* Keep all generated files, scratch files, downloaded assets, caches, and temporary outputs inside this project repository.
+* Do not run destructive git operations. This includes `git reset --hard`, `git clean`, forced checkout that discards work, deleting branches or tags, force-pushing, rewriting history, or deleting commits.
+* Normal git commits are allowed when the user asks for them. Do not rebase, squash, amend existing commits, or rewrite commit history; if the user wants rebase or squash work, the user must do it himself.
+* Do not delete a repository or remove an existing commit from any repository. If a request requires history rewriting or destructive cleanup, stop and explain that the user must perform that operation manually.
+
 # Dioxus Dependency
 
 You can add Dioxus to your `Cargo.toml` like this:
