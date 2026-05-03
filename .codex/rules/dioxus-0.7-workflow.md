@@ -40,7 +40,7 @@ Primary docs: https://dioxuslabs.com/learn/0.7/
 ## Routing And Layout
 
 - Keep routes in the single `Route` enum in `packages/ui/src/client/mod.rs`.
-- The default route `/` renders `Page01`; `/page-02` renders `Page02`; `/page-03` renders `Page03`.
+- The default route `/` renders `Home`; `/setup` renders `Set Up`; `/play` renders `Play Game`; `/debug` renders `Debug Network`.
 - Use `#[derive(Routable, Clone, PartialEq)]`, `#[route("/path")]`, `#[layout(AppLayout)]`, and `Router::<Route> {}`.
 - Render router-aware navigation only under `Router::<Route> {}`.
 

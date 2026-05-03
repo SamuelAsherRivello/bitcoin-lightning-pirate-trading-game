@@ -8,6 +8,7 @@ default = []
 
 [dependencies]
 dioxus = { workspace = true, features = ["router"] }
+lightning-service = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -15,10 +16,13 @@ dioxus-i18n = "0.5.1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 futures = "0.3"
+gloo-net = "0.6"
 gloo-timers = { version = "0.3", features = ["futures"] }
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Storage", "Window"] }
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["console", "Document", "Element", "HtmlElement", "Storage", "Window"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 futures-timer = "3"
 rusqlite = { version = "0.32", features = ["bundled"] }
+ureq = { version = "2", features = ["json"] }

@@ -57,6 +57,7 @@ cargo check -p ui --target wasm32-unknown-unknown
 cargo check -p web --target wasm32-unknown-unknown
 cargo check -p desktop
 .\Scripts\Common\RunWeb.ps1
+.\Scripts\Common\StopWeb.ps1
 .\Scripts\Common\RunDesktop.ps1
 .\Scripts\Other\RunTests.ps1
 ```

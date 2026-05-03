@@ -8,11 +8,11 @@ All UI work MUST use Dioxus 0.7 patterns. Components use `#[component] fn Name(.
 ### II. Shared UI, Platform Entry Points
 Product behavior belongs in `packages/ui` unless it is truly platform-specific. `packages/web` and `packages/desktop` remain thin launch and asset surfaces. Changes MUST preserve both browser and desktop support unless a spec explicitly narrows the platform scope.
 
-### III. Visible Loading And Cache Feedback
-Template data loading, cache reads, cache writes, refreshes, and database creation MUST remain visible to users through the app's loading and toast-style status feedback. Browser builds MUST use localStorage snapshots rather than browser SQLite or OPFS worker startup.
+### III. Visible Loading And Lab Feedback
+Template data loading, cache reads, cache writes, refreshes, database creation, Lightning lab setup tests, route changes, invoice creation, payment attempts, and block waits MUST remain visible to users through the app's loading and toast-style status feedback. Browser builds MUST use localStorage snapshots rather than browser SQLite or OPFS worker startup.
 
 ### IV. Local Preferences Stay Local
-Theme, language, and browser template data snapshots remain local user preferences. UI preferences MUST be persisted through the storage service rather than the SQLite database.
+Theme, language, non-sensitive Lightning lab setup preferences, and browser demo lab snapshots remain local user preferences. UI preferences MUST be persisted through the storage service rather than the SQLite database. Sensitive Lightning credentials belong in a server-side lab profile by default, not browser local storage.
 
 ### V. Database Creation Is Explicit
 First-time native database/schema/seed setup MUST live in `create_database_if_missing()` in the database service. Normal read paths MUST NOT recreate, clear, or reseed an existing database.
@@ -31,7 +31,8 @@ RSX SHOULD stay declarative and readable: use component syntax inside RSX, direc
 
 - Keep the workspace split between `packages/ui`, `packages/web`, and `packages/desktop`.
 - Keep static app chrome localizable through the Fluent locale assets in `packages/ui/assets/i18n/`.
-- Preserve the top navigation order: `Page01`, `Page02`, `Page03`.
+- Preserve the top navigation order: `Set Up`, `Play Game`, `Debug Network`.
+- Keep direct LND access behind `packages/lightning-service` and app-level server-operation contracts. Browser UI must not directly handle production or mainnet node credentials.
 - Keep `Documentation/DioxusFeatureMatrix.md` updated as development continues.
 - Keep `Documentation/Images/Screenshot01.png` and `Documentation/Images/Infographic01.png` as replaceable image slots.
 - Do not introduce broad app redesigns or unrelated refactors while implementing a feature spec.
@@ -48,4 +49,4 @@ RSX SHOULD stay declarative and readable: use component syntax inside RSX, direc
 
 This constitution applies to all future Spec Kit specifications, plans, and task lists for this repository. Specs may add narrower acceptance criteria, but they must not contradict these principles without explicitly updating this constitution and documenting the reason.
 
-**Version**: 1.1.0 | **Ratified**: 2026-04-30 | **Last Amended**: 2026-05-02
+**Version**: 1.2.0 | **Ratified**: 2026-04-30 | **Last Amended**: 2026-05-02

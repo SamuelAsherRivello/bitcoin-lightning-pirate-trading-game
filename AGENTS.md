@@ -9,14 +9,17 @@ Provide concise code examples with detailed descriptions
 * Prefer repository scripts for repeat workflows:
 	* `.\Scripts\Common\InstallDependencies.ps1`
 	* `.\Scripts\Common\RunWeb.ps1`
+	* `.\Scripts\Common\StopWeb.ps1`
 	* `.\Scripts\Common\RunDesktop.ps1`
 	* `.\Scripts\Other\RunTests.ps1`
 * Keep both web and desktop support intact unless the request is explicitly platform-specific.
 * For browser-visible changes, serve the real web app and verify the page when practical.
-* Preserve visible loading or toast-style status feedback during template data loading, cache reads, cache writes, and database creation.
+* Preserve visible loading or toast-style status feedback during template data loading, cache reads, cache writes, database creation, setup testing, route opening, block waits, invoice creation, and payment attempts.
 * Template data cache behavior currently lives in `packages/ui/src/client/services`: browser builds use localStorage snapshots, and non-wasm builds use native SQLite.
+* Lightning lab behavior lives behind `packages/ui/src/client/services/lightning_server_functions.rs` and `packages/lightning-service`; browser builds persist only non-sensitive setup preferences and demo lab snapshots.
 * Keep first-time native database/schema/seed setup in the clearly named `create_database_if_missing()` service method. Normal reads should not recreate or reseed an existing database.
 * Do not introduce browser SQLite or OPFS worker startup for template data caching.
+* The primary product routes, from left to right, are `Home`, `Set Up`, `Play Game`, and `Debug Network`. `Home` owns why the demo exists and the FAQ/concepts content.
 * Keep `Documentation/DioxusFeatureMatrix.md` updated as development continues whenever Dioxus feature usage, routes, cache behavior, platform support, or suggested future work changes.
 
 # AI Agent Safety Rules
@@ -295,5 +298,6 @@ The initial UI rendered by the component on the client must be identical to the 
 
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
-shell commands, and other important information, read the current plan
+shell commands, and other important information, read the current plan:
+`specs/002-lightning-game-poc/plan.md`
 <!-- SPECKIT END -->

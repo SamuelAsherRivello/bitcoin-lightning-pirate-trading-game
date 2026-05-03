@@ -29,6 +29,7 @@ Prefer the repository scripts when possible:
 ```powershell
 .\Scripts\Common\InstallDependencies.ps1
 .\Scripts\Common\RunWeb.ps1
+.\Scripts\Common\StopWeb.ps1
 .\Scripts\Common\RunDesktop.ps1
 .\Scripts\Other\RunTests.ps1
 ```
@@ -39,7 +40,7 @@ For direct Dioxus web work, use:
 dx serve --platform web --addr 127.0.0.1 --port 8080
 ```
 
-The web script stops an older `dx serve` process on the requested port before starting a new one. If you run `dx serve` directly and port `8080` is already occupied, stop the old server and restart it so browser testing uses the latest build for this checkout.
+The web script stops an older `dx serve` process on the requested port before starting a new one. Use `.\Scripts\Common\StopWeb.ps1` to stop the Dioxus web server and generated game server without starting a replacement. If you run `dx serve` directly and port `8080` is already occupied, stop the old server and restart it so browser testing uses the latest build for this checkout.
 
 ## Runtime Notes
 

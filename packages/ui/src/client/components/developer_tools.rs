@@ -2,7 +2,6 @@ use dioxus::prelude::*;
 use dioxus_i18n::{prelude::i18n, t};
 
 use crate::client::components::toast::{Toast, ToastTone};
-use crate::client::models::TemplateDataLoadRequest;
 use crate::client::services::localization_service::AppLanguage;
 use crate::client::services::server_contact_service::contact_server;
 use crate::client::services::storage_service::{save_language, save_theme, Theme};
@@ -11,7 +10,6 @@ use crate::client::services::storage_service::{save_language, save_theme, Theme}
 pub fn DeveloperTools() -> Element {
     let mut theme = use_context::<Signal<Theme>>();
     let mut language = use_context::<Signal<AppLanguage>>();
-    let mut data_load_request = use_context::<Signal<TemplateDataLoadRequest>>();
     let selected_language = language();
     let mut language_menu_open = use_signal(|| false);
     let mut toast = use_context::<Signal<Option<Toast>>>();
@@ -40,31 +38,6 @@ pub fn DeveloperTools() -> Element {
                             d: "M12 .5C5.65.5.5 5.65.5 12c0 5.1 3.29 9.42 7.86 10.95.58.11.79-.25.79-.56v-2.16c-3.2.7-3.88-1.36-3.88-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18A11.1 11.1 0 0 1 12 6.06c.98 0 1.96.13 2.88.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.25 5.68.41.35.78 1.05.78 2.12v3.18c0 .31.21.67.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z",
                         }
                     }
-                    }
-                    button {
-                    class: "developer-tools__refresh-data",
-                    r#type: "button",
-                    aria_label: t!("refresh-template-data"),
-                    "data-tooltip": t!("refresh-template-data"),
-                    onclick: move |_| {
-                        data_load_request.with_mut(|request| {
-                            request.sequence += 1;
-                        });
-                    },
-                    svg {
-                        class: "developer-tools__button-icon",
-                        width: "18",
-                        height: "18",
-                        view_box: "0 0 24 24",
-                        fill: "none",
-                        stroke: "currentColor",
-                        stroke_width: "2",
-                        stroke_linecap: "round",
-                        stroke_linejoin: "round",
-                        path { d: "M21 12a9 9 0 1 1-2.64-6.36" }
-                        path { d: "M21 3v6h-6" }
-                    }
-                    span { "DB" }
                     }
                     button {
                     class: "developer-tools__server",

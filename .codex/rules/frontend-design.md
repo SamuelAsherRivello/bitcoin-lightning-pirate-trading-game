@@ -6,12 +6,12 @@ Use this rule when changing user-visible UI, CSS, layout, component composition,
 
 - Keep the template quiet, readable, and easy to repopulate.
 - Favor reusable app structure over product-specific decoration.
-- Preserve the top bar, theme toggle, language dropdown, toast region, and three-page route shape unless a future spec changes them.
+- Preserve the top bar, theme toggle, language dropdown, toast region, and current four-page route shape unless a future spec changes them.
 - Keep copy and imagery generic; `Documentation/Images/Screenshot01.png` and `Documentation/Images/Infographic01.png` are replaceable slots.
 
 ## Layout
 
-- Keep `Page01`, `Page02`, and `Page03` visually consistent.
+- Keep `Home`, `Set Up`, `Play Game`, and `Debug Network` visually consistent.
 - Use dense but comfortable spacing and stable dimensions for top navigation controls.
 - Avoid nested cards and avoid decorative orbs/blobs.
 - Make text fit in controls at desktop and mobile widths; collapse nav labels to short labels before allowing wrapping.

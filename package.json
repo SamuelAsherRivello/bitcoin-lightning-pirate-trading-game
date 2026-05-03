@@ -9,6 +9,7 @@
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.1.17",
+    "playwright": "^1.59.1",
     "tailwindcss": "^4.1.17"
   }
 }

@@ -1,6 +1,9 @@
 use dioxus_i18n::fluent::{FluentArgs, FluentBundle, FluentResource};
 use dioxus_i18n::unic_langid::LanguageIdentifier;
-use ui::{AppLanguage, TemplateData, TemplateDataLoadRequest, Theme};
+use ui::{
+    get_operation_faq, AppLanguage, ConnectionStatus, SetupMode, SetupProfile, TemplateData,
+    TemplateDataLoadRequest, Theme,
+};
 
 const LOCALES: [(&str, &str); 4] = [
     ("en-US", include_str!("../assets/i18n/en-US.ftl")),
@@ -10,6 +13,20 @@ const LOCALES: [(&str, &str); 4] = [
 ];
 
 const TRANSLATION_KEYS: &[&str] = &[
+    "nav-setup",
+    "nav-setup-short",
+    "nav-play-game",
+    "nav-play-game-short",
+    "nav-debug-network",
+    "nav-debug-network-short",
+    "view-setup",
+    "view-play-game",
+    "view-debug-network",
+    "locked-play-game",
+    "locked-debug-network",
+    "setup-title",
+    "play-game-title",
+    "debug-network-title",
     "nav-page-01",
     "nav-page-01-short",
     "nav-page-02",
@@ -89,6 +106,52 @@ fn template_data_seed_is_the_default_database_row() {
 #[test]
 fn template_data_load_request_starts_at_zero() {
     assert_eq!(TemplateDataLoadRequest::initial().sequence, 0);
+}
+
+#[test]
+fn setup_profile_defaults_to_polar_connection() {
+    let profile = SetupProfile::default();
+
+    assert_eq!(profile.sats_per_transaction, 1_000);
+    assert_eq!(profile.setup_mode, SetupMode::ServerConfig);
+    assert_eq!(profile.connection_status, ConnectionStatus::NotConfigured);
+    assert!(!profile.polar_connection.is_complete());
+    assert_eq!(
+        profile.polar_automation.bridge_url,
+        "http://localhost:37373"
+    );
+    assert_eq!(profile.polar_automation.bitcoin_backend_name, "backend1");
+    assert!(profile.polar_automation.is_complete());
+}
+
+#[test]
+fn setup_mode_labels_match_connection_tabs() {
+    assert_eq!(
+        SetupMode::BrowserRegtestOnly.label(),
+        "Mock Connection (Offline)"
+    );
+    assert_eq!(
+        SetupMode::ServerConfig.label(),
+        "Polar Connection (Networked)"
+    );
+}
+
+#[test]
+fn operation_faq_covers_block_dependent_actions() {
+    let rows = get_operation_faq();
+
+    assert!(rows
+        .iter()
+        .any(|row| row.operation == "Create invoice" && !row.needs_mined_block));
+    assert!(rows
+        .iter()
+        .any(|row| row.operation == "Pay invoice" && !row.needs_mined_block));
+    assert!(rows
+        .iter()
+        .any(|row| row.operation == "Open channel" && row.needs_mined_block));
+    assert!(rows
+        .iter()
+        .any(|row| row.operation == "Wait for next block" && row.needs_mined_block));
 }
 
 #[test]

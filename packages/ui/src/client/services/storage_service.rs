@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::client::models::{LabState, SetupProfile};
 use crate::client::services::localization_service::AppLanguage;
 
 #[cfg(target_arch = "wasm32")]
@@ -59,6 +60,30 @@ pub fn save_language(language: AppLanguage) {
     platform::save_language(language);
 }
 
+pub fn load_setup_profile() -> SetupProfile {
+    platform::load_setup_profile().unwrap_or_default()
+}
+
+pub fn save_setup_profile(profile: &SetupProfile) {
+    platform::save_setup_profile(profile);
+}
+
+pub fn clear_setup_profile() {
+    platform::clear_setup_profile();
+}
+
+pub fn load_lab_state_snapshot() -> Option<LabState> {
+    platform::load_lab_state_snapshot()
+}
+
+pub fn save_lab_state_snapshot(state: &LabState) {
+    platform::save_lab_state_snapshot(state);
+}
+
+pub fn clear_lab_state_snapshot() {
+    platform::clear_lab_state_snapshot();
+}
+
 #[cfg(target_arch = "wasm32")]
 pub fn load_template_data_snapshot() -> Option<TemplateDataLoadResult> {
     platform::load_template_data_snapshot()
@@ -71,12 +96,16 @@ pub fn save_template_data_snapshot(result: &TemplateDataLoadResult) {
 
 #[cfg(target_arch = "wasm32")]
 mod platform {
-    use crate::client::models::{TemplateDataLoadResult, TemplateDataSource};
+    use crate::client::models::{
+        LabState, SetupProfile, TemplateDataLoadResult, TemplateDataSource,
+    };
 
     use super::{AppLanguage, Theme, TEMPLATE_DATA_SNAPSHOT_KEY};
 
     const THEME_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:theme";
     const LANGUAGE_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:language";
+    const SETUP_PROFILE_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:setup-profile";
+    const LAB_STATE_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:lab-state";
 
     pub fn load_theme() -> Option<Theme> {
         let value = local_storage()?
@@ -116,6 +145,60 @@ mod platform {
         let _ = storage.set_item(LANGUAGE_STORAGE_KEY, &value);
     }
 
+    pub fn load_setup_profile() -> Option<SetupProfile> {
+        let value = local_storage()?
+            .get_item(SETUP_PROFILE_STORAGE_KEY)
+            .ok()
+            .flatten()?;
+        serde_json::from_str(&value).ok()
+    }
+
+    pub fn save_setup_profile(profile: &SetupProfile) {
+        let Some(storage) = local_storage() else {
+            return;
+        };
+        let Ok(value) = serde_json::to_string(profile) else {
+            return;
+        };
+
+        let _ = storage.set_item(SETUP_PROFILE_STORAGE_KEY, &value);
+    }
+
+    pub fn clear_setup_profile() {
+        let Some(storage) = local_storage() else {
+            return;
+        };
+
+        let _ = storage.remove_item(SETUP_PROFILE_STORAGE_KEY);
+    }
+
+    pub fn load_lab_state_snapshot() -> Option<LabState> {
+        let value = local_storage()?
+            .get_item(LAB_STATE_STORAGE_KEY)
+            .ok()
+            .flatten()?;
+        serde_json::from_str(&value).ok()
+    }
+
+    pub fn save_lab_state_snapshot(state: &LabState) {
+        let Some(storage) = local_storage() else {
+            return;
+        };
+        let Ok(value) = serde_json::to_string(state) else {
+            return;
+        };
+
+        let _ = storage.set_item(LAB_STATE_STORAGE_KEY, &value);
+    }
+
+    pub fn clear_lab_state_snapshot() {
+        let Some(storage) = local_storage() else {
+            return;
+        };
+
+        let _ = storage.remove_item(LAB_STATE_STORAGE_KEY);
+    }
+
     pub fn load_template_data_snapshot() -> Option<TemplateDataLoadResult> {
         let storage = local_storage()?;
         let value = storage
@@ -148,6 +231,8 @@ mod platform {
 mod platform {
     use std::fs;
     use std::path::PathBuf;
+
+    use crate::client::models::{LabState, SetupProfile};
 
     use super::{AppLanguage, Theme};
 
@@ -185,6 +270,32 @@ mod platform {
         }
     }
 
+    pub fn load_setup_profile() -> Option<SetupProfile> {
+        let value = fs::read_to_string(setup_profile_path()).ok()?;
+        serde_json::from_str(&value).ok()
+    }
+
+    pub fn save_setup_profile(profile: &SetupProfile) {
+        write_json(&setup_profile_path(), profile);
+    }
+
+    pub fn clear_setup_profile() {
+        let _ = fs::remove_file(setup_profile_path());
+    }
+
+    pub fn load_lab_state_snapshot() -> Option<LabState> {
+        let value = fs::read_to_string(lab_state_path()).ok()?;
+        serde_json::from_str(&value).ok()
+    }
+
+    pub fn save_lab_state_snapshot(state: &LabState) {
+        write_json(&lab_state_path(), state);
+    }
+
+    pub fn clear_lab_state_snapshot() {
+        let _ = fs::remove_file(lab_state_path());
+    }
+
     fn settings_path() -> PathBuf {
         std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
@@ -197,5 +308,29 @@ mod platform {
             .unwrap_or_else(|_| PathBuf::from("."))
             .join("data")
             .join("language-settings.json")
+    }
+
+    fn setup_profile_path() -> PathBuf {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("data")
+            .join("setup-profile.json")
+    }
+
+    fn lab_state_path() -> PathBuf {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("data")
+            .join("lightning-lab-state.json")
+    }
+
+    fn write_json<T: serde::Serialize>(path: &PathBuf, value: &T) {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        if let Ok(value) = serde_json::to_string(value) {
+            let _ = fs::write(path, value);
+        }
     }
 }

@@ -7,13 +7,16 @@ use dioxus_i18n::prelude::*;
 pub enum Route {
     #[layout(AppLayout)]
     #[route("/")]
-    Page01 {},
+    Home {},
 
-    #[route("/page-02")]
-    Page02 {},
+    #[route("/setup")]
+    SetUp {},
 
-    #[route("/page-03")]
-    Page03 {},
+    #[route("/play")]
+    PlayGame {},
+
+    #[route("/debug")]
+    DebugNetwork {},
 }
 
 #[component]
@@ -23,14 +26,14 @@ fn AppLayout() -> Element {
     let initial_language = language();
     use_init_i18n(|| services::localization_service::config(initial_language));
 
-    let data_load_request = use_signal(models::TemplateDataLoadRequest::initial);
-    let data_load_cache = use_signal(|| None::<Result<models::TemplateDataLoadResult, String>>);
+    let setup_profile = use_signal(services::storage_service::load_setup_profile);
+    let lab_state = use_signal(services::storage_service::load_lab_state_snapshot);
     let toast = use_signal(|| None::<components::toast::Toast>);
 
     use_context_provider(|| theme);
     use_context_provider(|| language);
-    use_context_provider(|| data_load_request);
-    use_context_provider(|| data_load_cache);
+    use_context_provider(|| setup_profile);
+    use_context_provider(|| lab_state);
     use_context_provider(|| toast);
 
     let shell_class = format!("app-shell {}", theme().class_name());
@@ -55,14 +58,17 @@ fn PageStack() -> Element {
         div {
             class: "page-stack",
             style: "position: relative; isolation: isolate;",
-            Page { route: Route::Page01 {}, will_preload: true,
-                Page01 {}
+            Page { route: Route::Home {}, will_preload: true,
+                Home {}
             }
-            Page { route: Route::Page02 {}, will_preload: true,
-                Page02 {}
+            Page { route: Route::SetUp {}, will_preload: true,
+                SetUp {}
             }
-            Page { route: Route::Page03 {}, will_preload: true,
-                Page03 {}
+            Page { route: Route::PlayGame {}, will_preload: true,
+                PlayGame {}
+            }
+            Page { route: Route::DebugNetwork {}, will_preload: true,
+                DebugNetwork {}
             }
         }
     }
@@ -72,21 +78,26 @@ mod app;
 pub use app::App;
 
 pub mod pages {
-    pub mod page01;
-    pub mod page02;
-    pub mod page03;
+    pub mod debug_network;
+    pub mod home;
+    pub mod play_game;
+    pub mod setup;
     pub mod template_page;
 }
-pub use pages::page01::Page01;
-pub use pages::page02::Page02;
-pub use pages::page03::Page03;
+pub use pages::debug_network::DebugNetwork;
+pub use pages::home::Home;
+pub use pages::play_game::PlayGame;
+pub use pages::setup::SetUp;
 
 pub mod components {
     pub mod app_error;
     pub mod developer_tools;
+    pub mod game;
+    pub mod network;
     pub mod page;
     pub mod page_footer;
     pub mod page_header;
+    pub mod setup;
     pub mod toast;
 }
 pub use components::app_error::AppErrorFallback;
@@ -97,7 +108,10 @@ pub use components::page_header::PageHeader;
 
 pub mod models;
 pub use models::{
-    TemplateData, TemplateDataLoadRequest, TemplateDataLoadResult, TemplateDataSource,
+    BlockWaitAction, BlockWaitReason, ConnectionStatus, DemoNode, DemoNodeId, InvoiceRequest,
+    LabState, OperationFaqRow, PaymentAttempt, PolarAutomationProfile, PolarConnectionProfile,
+    PolarNodeConnection, RouteStatus, SetupMode, SetupProfile, TemplateData,
+    TemplateDataLoadRequest, TemplateDataLoadResult, TemplateDataSource, TradeRoute,
 };
 
 pub mod services;

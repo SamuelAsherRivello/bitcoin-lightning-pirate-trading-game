@@ -211,7 +211,9 @@ mod platform {
         let root = std::env::current_dir()
             .map_err(|error| format!("Could not find current directory for database: {error}"))?;
 
-        Ok(root.join("data").join("dioxus-bitcoin-lightning-game.sqlite"))
+        Ok(root
+            .join("data")
+            .join("dioxus-bitcoin-lightning-game.sqlite"))
     }
 
     fn create_schema(connection: &Connection) -> Result<(), String> {
