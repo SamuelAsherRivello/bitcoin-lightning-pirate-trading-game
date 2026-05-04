@@ -1,28 +1,48 @@
+use dioxus::prelude::dioxus_router::Navigator;
 use dioxus::prelude::*;
 use dioxus_i18n::t;
 
 use crate::client::components::game::{HistoryItems, RouteSummary};
-use crate::client::components::toast::{Toast, ToastTone};
+use crate::client::components::toast::{OperationPrompt, Toast, ToastTone};
 use crate::client::models::{DemoNodeId, LabState, RouteStatus, SetupProfile};
 use crate::client::services::lightning_server_functions::{
-    create_invoice_and_maybe_autosend, get_lab_state, open_trade_route, wait_for_next_block,
+    create_invoice_and_maybe_autosend, get_lab_state_or_recover, open_trade_route,
+    recover_if_polar_lab_unhealthy, wait_for_next_block, PolarLabRecovery,
 };
 use crate::client::Route;
 
 #[component]
 pub fn PlayGame() -> Element {
+    let active_route = use_route::<Route>();
     let setup_profile = use_context::<Signal<SetupProfile>>();
     let mut lab_state = use_context::<Signal<Option<LabState>>>();
     let toast = use_context::<Signal<Option<Toast>>>();
+    let operation_prompt = use_context::<Signal<Option<OperationPrompt>>>();
     let toast_sequence = use_signal(|| 30_000_u64);
+    let prompt_sequence = use_signal(|| 50_000_u64);
     let mut is_busy = use_signal(|| false);
+    let navigator = navigator();
 
     use_effect(move || {
         let profile = setup_profile();
-        if profile.is_connected() && lab_state.peek().is_none() {
+        if active_route == (Route::PlayGame {}) && profile.is_connected() {
             spawn(async move {
-                if let Ok(state) = get_lab_state(profile).await {
-                    lab_state.set(Some(state));
+                match get_lab_state_or_recover(profile).await {
+                    Ok(state) => {
+                        if lab_state.peek().is_none() || lab_state.peek().as_ref() != Some(&state) {
+                            lab_state.set(Some(state));
+                        }
+                    }
+                    Err(recovery) => {
+                        apply_lab_recovery(
+                            setup_profile,
+                            lab_state,
+                            operation_prompt,
+                            prompt_sequence,
+                            navigator,
+                            recovery,
+                        );
+                    }
                 }
             });
         }
@@ -120,7 +140,18 @@ pub fn PlayGame() -> Element {
                                                 lab_state.set(Some(next_state));
                                                 push_toast(toast, toast_sequence, "Trade route is under construction.", ToastTone::Success);
                                             }
-                                            Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
+                                            Err(message) => handle_lab_action_error(
+                                                setup_profile(),
+                                                setup_profile,
+                                                lab_state,
+                                                toast,
+                                                toast_sequence,
+                                                operation_prompt,
+                                                prompt_sequence,
+                                                navigator,
+                                                message,
+                                            )
+                                            .await,
                                         }
                                         is_busy.set(false);
                                     }
@@ -140,7 +171,18 @@ pub fn PlayGame() -> Element {
                                                 lab_state.set(Some(next_state));
                                                 push_toast(toast, toast_sequence, "Regtest mined the next block.", ToastTone::Success);
                                             }
-                                            Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
+                                            Err(message) => handle_lab_action_error(
+                                                setup_profile(),
+                                                setup_profile,
+                                                lab_state,
+                                                toast,
+                                                toast_sequence,
+                                                operation_prompt,
+                                                prompt_sequence,
+                                                navigator,
+                                                message,
+                                            )
+                                            .await,
                                         }
                                         is_busy.set(false);
                                     }
@@ -169,7 +211,18 @@ pub fn PlayGame() -> Element {
                                                 lab_state.set(Some(next_state));
                                                 push_toast(toast, toast_sequence, "Invoice created and paid.", ToastTone::Success);
                                             }
-                                            Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
+                                            Err(message) => handle_lab_action_error(
+                                                setup_profile(),
+                                                setup_profile,
+                                                lab_state,
+                                                toast,
+                                                toast_sequence,
+                                                operation_prompt,
+                                                prompt_sequence,
+                                                navigator,
+                                                message,
+                                            )
+                                            .await,
                                         }
                                         is_busy.set(false);
                                     }
@@ -219,4 +272,53 @@ fn push_toast(
         message: message.into(),
         tone,
     }));
+}
+
+async fn handle_lab_action_error(
+    profile: SetupProfile,
+    setup_profile: Signal<SetupProfile>,
+    lab_state: Signal<Option<LabState>>,
+    toast: Signal<Option<Toast>>,
+    toast_sequence: Signal<u64>,
+    operation_prompt: Signal<Option<OperationPrompt>>,
+    prompt_sequence: Signal<u64>,
+    navigator: Navigator,
+    message: String,
+) {
+    if let Some(recovery) = recover_if_polar_lab_unhealthy(profile).await {
+        apply_lab_recovery(
+            setup_profile,
+            lab_state,
+            operation_prompt,
+            prompt_sequence,
+            navigator,
+            recovery,
+        );
+    } else {
+        push_toast(toast, toast_sequence, message, ToastTone::Error);
+    }
+}
+
+fn apply_lab_recovery(
+    mut setup_profile: Signal<SetupProfile>,
+    mut lab_state: Signal<Option<LabState>>,
+    mut operation_prompt: Signal<Option<OperationPrompt>>,
+    mut prompt_sequence: Signal<u64>,
+    navigator: Navigator,
+    recovery: PolarLabRecovery,
+) {
+    let next_id = *prompt_sequence.peek() + 1;
+    prompt_sequence.set(next_id);
+    setup_profile.set(recovery.profile);
+    lab_state.set(recovery.lab_state);
+    operation_prompt.set(Some(OperationPrompt {
+        operation_id: next_id,
+        title: "Polar setup needs attention".to_string(),
+        message: recovery.message,
+        tone: ToastTone::Error,
+        is_pending: false,
+        can_cancel: false,
+        cancel_requested: false,
+    }));
+    let _ = navigator.replace(Route::Home {});
 }

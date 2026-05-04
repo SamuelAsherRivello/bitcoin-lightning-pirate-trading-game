@@ -1,9 +1,19 @@
 use crate::client::models::{
-    BlockWaitReason, DemoNodeId, LabState, SetupProfile, DEFAULT_ROUTE_CAPACITY_SATS,
+    BlockWaitReason, ConnectionStatus, DemoNodeId, LabState, SetupProfile,
+    DEFAULT_BITCOIN_BACKEND_NAME, DEFAULT_ROUTE_CAPACITY_SATS,
 };
 use crate::client::services::{polar_bridge_service, storage_service};
 
-pub use polar_bridge_service::{PolarServerEnsureResult, PolarServerEnsureStatus};
+pub use polar_bridge_service::{
+    PolarLabHealthIssue, PolarServerEnsureResult, PolarServerEnsureStatus,
+};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PolarLabRecovery {
+    pub profile: SetupProfile,
+    pub lab_state: Option<LabState>,
+    pub message: String,
+}
 
 pub async fn test_setup(profile: SetupProfile) -> Result<LabState, String> {
     let state = if profile.setup_mode == lightning_service::SetupMode::ServerConfig
@@ -35,6 +45,15 @@ pub async fn save_setup_preferences(profile: SetupProfile) -> Result<SetupProfil
     Ok(profile)
 }
 
+pub async fn verify_polar_bridge(profile: SetupProfile) -> Result<SetupProfile, String> {
+    lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
+    polar_bridge_service::test_bridge(&profile.polar_automation).await?;
+
+    storage_service::save_setup_profile(&profile);
+    storage_service::clear_lab_state_snapshot();
+    Ok(profile)
+}
+
 pub async fn ensure_polar_server(profile: SetupProfile) -> Result<PolarServerEnsureResult, String> {
     lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
     let mut profile = profile;
@@ -51,10 +70,27 @@ pub async fn ensure_polar_server(profile: SetupProfile) -> Result<PolarServerEns
 }
 
 pub async fn create_polar_demo_nodes(profile: SetupProfile) -> Result<LabState, String> {
+    create_polar_demo_nodes_with_progress(profile, |_| {}).await
+}
+
+pub async fn create_polar_demo_nodes_with_progress<F>(
+    profile: SetupProfile,
+    report_progress: F,
+) -> Result<LabState, String>
+where
+    F: FnMut(String),
+{
     lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
     let mut profile = profile;
-    profile.polar_automation =
-        polar_bridge_service::create_demo_nodes(&profile.polar_automation).await?;
+    let required_balance_sats = profile
+        .sats_per_transaction
+        .max(DEFAULT_ROUTE_CAPACITY_SATS);
+    profile.polar_automation = polar_bridge_service::create_demo_nodes_with_progress(
+        &profile.polar_automation,
+        required_balance_sats,
+        report_progress,
+    )
+    .await?;
 
     let mut state = lightning_service::test_setup(profile).map_err(|error| error.to_string())?;
     state.profile.connection_status = lightning_service::ConnectionStatus::PartiallyConnected;
@@ -73,6 +109,22 @@ pub async fn destroy_polar_demo_nodes(profile: SetupProfile) -> Result<SetupProf
     profile.connection_status = lightning_service::ConnectionStatus::SavedOffline;
     profile.last_verified_at = None;
     profile.polar_automation.network_id.clear();
+    storage_service::save_setup_profile(&profile);
+    storage_service::clear_lab_state_snapshot();
+    Ok(profile)
+}
+
+pub async fn delete_created_polar_server(profile: SetupProfile) -> Result<SetupProfile, String> {
+    lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
+    polar_bridge_service::delete_polar_network(&profile.polar_automation).await?;
+
+    let mut profile = profile;
+    profile.connection_status = lightning_service::ConnectionStatus::NotConfigured;
+    profile.last_verified_at = None;
+    profile.polar_automation.network_id.clear();
+    profile.polar_automation.bitcoin_backend_name =
+        lightning_service::DEFAULT_BITCOIN_BACKEND_NAME.to_string();
+
     storage_service::save_setup_profile(&profile);
     storage_service::clear_lab_state_snapshot();
     Ok(profile)
@@ -137,7 +189,42 @@ pub async fn get_lab_state(profile: SetupProfile) -> Result<LabState, String> {
         lightning_service::default_lab_state(profile)
     };
 
-    refresh_polar_block_height(state).await
+    let refreshed_state = refresh_polar_block_height(state).await?;
+    storage_service::save_lab_state_snapshot(&refreshed_state);
+    Ok(refreshed_state)
+}
+
+pub async fn recover_if_polar_lab_unhealthy(profile: SetupProfile) -> Option<PolarLabRecovery> {
+    if !profile.is_connected() || !should_read_polar(&profile) {
+        return None;
+    }
+
+    match polar_bridge_service::validate_lab_health(&profile.polar_automation).await {
+        Ok(report) => {
+            if report.profile != profile.polar_automation {
+                let mut saved_profile = profile;
+                saved_profile.polar_automation = report.profile;
+                storage_service::save_setup_profile(&saved_profile);
+            }
+            None
+        }
+        Err(issue) => Some(recover_from_polar_lab_issue(profile, issue).await),
+    }
+}
+
+pub async fn get_lab_state_or_recover(profile: SetupProfile) -> Result<LabState, PolarLabRecovery> {
+    if let Some(recovery) = recover_if_polar_lab_unhealthy(profile.clone()).await {
+        return Err(recovery);
+    }
+
+    match get_lab_state(profile.clone()).await {
+        Ok(state) => Ok(state),
+        Err(message) => Err(recover_from_polar_lab_issue(
+            profile,
+            PolarLabHealthIssue::BridgeUnavailable(message),
+        )
+        .await),
+    }
 }
 
 pub async fn open_trade_route(
@@ -247,10 +334,165 @@ pub async fn reset_lab() -> Result<SetupProfile, String> {
     Ok(SetupProfile::default())
 }
 
+async fn recover_from_polar_lab_issue(
+    profile: SetupProfile,
+    issue: PolarLabHealthIssue,
+) -> PolarLabRecovery {
+    let recovery = recovery_for_issue(profile, issue);
+
+    storage_service::save_setup_profile(&recovery.profile);
+    storage_service::clear_lab_state_snapshot();
+
+    recovery
+}
+
+fn recovery_for_issue(mut profile: SetupProfile, issue: PolarLabHealthIssue) -> PolarLabRecovery {
+    let message = recovery_message(&issue);
+    let lab_state = match issue {
+        PolarLabHealthIssue::BridgeUnavailable(_) => {
+            profile.connection_status = ConnectionStatus::NotConfigured;
+            profile.last_verified_at = None;
+            None
+        }
+        PolarLabHealthIssue::NetworkMissing { .. }
+        | PolarLabHealthIssue::NetworkStopped { .. }
+        | PolarLabHealthIssue::BitcoinBackendMissing { .. } => {
+            profile.connection_status = ConnectionStatus::SavedOffline;
+            profile.last_verified_at = None;
+            profile.polar_automation.network_id.clear();
+            profile.polar_automation.bitcoin_backend_name =
+                DEFAULT_BITCOIN_BACKEND_NAME.to_string();
+            None
+        }
+        PolarLabHealthIssue::DemoNodeMissing { .. }
+        | PolarLabHealthIssue::DemoNodeStopped { .. } => {
+            profile.connection_status = ConnectionStatus::SavedOffline;
+            profile.last_verified_at = None;
+            None
+        }
+    };
+
+    PolarLabRecovery {
+        profile,
+        lab_state,
+        message,
+    }
+}
+
+fn recovery_message(issue: &PolarLabHealthIssue) -> String {
+    match issue {
+        PolarLabHealthIssue::BridgeUnavailable(_) => {
+            "Cannot reach Polar bridge. Open Polar, then return to Set Up.".to_string()
+        }
+        PolarLabHealthIssue::NetworkMissing { .. } => {
+            "Polar server is missing. Recreate or reuse it in Set Up.".to_string()
+        }
+        PolarLabHealthIssue::NetworkStopped { .. } => {
+            "Polar network stopped. Start it again in Set Up.".to_string()
+        }
+        PolarLabHealthIssue::BitcoinBackendMissing { .. } => {
+            "Polar Bitcoin backend is missing. Recheck the server in Set Up.".to_string()
+        }
+        PolarLabHealthIssue::DemoNodeMissing { node_id, .. } => {
+            format!(
+                "Polar demo node {} is missing. Recreate Alice, Bob, and Carol in Set Up.",
+                node_id.label()
+            )
+        }
+        PolarLabHealthIssue::DemoNodeStopped { node_id, .. } => {
+            format!(
+                "Polar demo node {} is stopped. Recreate or start demo nodes in Set Up.",
+                node_id.label()
+            )
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::models::{PolarAutomationProfile, DEFAULT_NETWORK_NAME};
+
+    fn connected_profile() -> SetupProfile {
+        let mut profile = SetupProfile::default();
+        profile.connection_status = ConnectionStatus::Connected;
+        profile.network_name = DEFAULT_NETWORK_NAME.to_string();
+        profile.polar_automation = PolarAutomationProfile {
+            bridge_url: "http://localhost:37373".to_string(),
+            network_id: "1".to_string(),
+            bitcoin_backend_name: DEFAULT_BITCOIN_BACKEND_NAME.to_string(),
+        };
+        profile
+    }
+
+    #[test]
+    fn bridge_failure_resumes_at_bridge_step() {
+        let recovery = recovery_for_issue(
+            connected_profile(),
+            PolarLabHealthIssue::BridgeUnavailable("offline".to_string()),
+        );
+
+        assert_eq!(
+            recovery.profile.connection_status,
+            ConnectionStatus::NotConfigured
+        );
+        assert_eq!(recovery.profile.polar_automation.network_id, "1");
+        assert!(recovery.lab_state.is_none());
+    }
+
+    #[test]
+    fn stopped_network_resumes_at_server_step() {
+        let recovery = recovery_for_issue(
+            connected_profile(),
+            PolarLabHealthIssue::NetworkStopped {
+                network_id: "1".to_string(),
+                status: "Stopped".to_string(),
+            },
+        );
+
+        assert_eq!(
+            recovery.profile.connection_status,
+            ConnectionStatus::SavedOffline
+        );
+        assert!(recovery.profile.polar_automation.network_id.is_empty());
+        assert_eq!(
+            recovery.profile.polar_automation.bitcoin_backend_name,
+            DEFAULT_BITCOIN_BACKEND_NAME
+        );
+        assert!(recovery.lab_state.is_none());
+    }
+
+    #[test]
+    fn missing_demo_node_resumes_at_demo_node_step() {
+        let recovery = recovery_for_issue(
+            connected_profile(),
+            PolarLabHealthIssue::DemoNodeMissing {
+                network_id: "1".to_string(),
+                node_id: DemoNodeId::Alice,
+            },
+        );
+
+        assert_eq!(
+            recovery.profile.connection_status,
+            ConnectionStatus::SavedOffline
+        );
+        assert_eq!(recovery.profile.polar_automation.network_id, "1");
+        assert!(recovery.lab_state.is_none());
+    }
+}
+
 async fn refresh_polar_block_height(mut state: LabState) -> Result<LabState, String> {
     if should_read_polar(&state.profile) {
-        state.block_height =
+        let previous_height = state.block_height;
+        let polar_height =
             polar_bridge_service::get_blockchain_height(&state.profile.polar_automation).await?;
+        state = if polar_height > previous_height {
+            lightning_service::apply_external_block_height(state, polar_height)
+                .map_err(|error| error.to_string())?
+        } else {
+            state.block_height = polar_height;
+            state
+        };
     }
 
     Ok(state)

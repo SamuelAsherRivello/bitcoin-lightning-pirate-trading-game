@@ -13,11 +13,11 @@ A learner opens the app, sees `Home`, learns why the demo is useful, visits `Set
 
 **Why this priority**: Without a clear setup path, the rest of the app cannot teach Lightning operations or run the game.
 
-**Independent Test**: Start with no saved setup, open the app, complete the setup form using a running Polar bridge, let the app reuse or create the named Polar server, create the demo Lightning nodes from the app, refresh the page, and verify `Play Game` and `Debug Network` unlock.
+**Independent Test**: Start with no saved setup, open the app, complete the setup form using a running Polar bridge, let the app reuse or create the named Polar server, create the demo Lightning nodes from the app, refresh the page, and verify `Play Game` and `Network Dashboard` unlock.
 
 **Acceptance Scenarios**:
 
-1. **Given** no saved connection profile, **When** the learner opens the app, **Then** `Home` and `Set Up` are enabled while `Play Game` and `Debug Network` are visible but disabled.
+1. **Given** no saved connection profile, **When** the learner opens the app, **Then** `Home` and `Set Up` are enabled while `Play Game` and `Network Dashboard` are visible but disabled.
 2. **Given** the learner is on `Home`, **When** they read `Why this demo exists`, **Then** they understand that this is a Polar regtest lab, the app controls all demo nodes, and setup validation rejects hosted, production, mainnet, and other non-regtest profiles.
 3. **Given** Polar and its localhost bridge are running, **When** the learner saves the bridge URL and submits a Polar server name, **Then** the app reuses that server if it exists or creates it if it does not, reports the result through a toast, and continues the setup wizard.
 4. **Given** a saved profile whose nodes are offline, **When** the learner reloads the app, **Then** the app explains that setup is saved but Polar is not reachable and keeps gameplay locked.
@@ -37,22 +37,23 @@ A learner uses `Play Game` to control Alice, trade with Bob at the Beach and Car
 
 1. **Given** setup is complete and no Alice-Bob channel is active, **When** Alice opens a trade route to Bob, **Then** the app starts channel opening and marks the route as under construction until a Bitcoin block confirms it.
 2. **Given** a route is under construction, **When** the learner clicks `Wait for Next Block`, **Then** the app advances the local regtest chain and updates the route to active after confirmation.
-3. **Given** an active Alice-Bob route, **When** Alice buys an item from Bob, **Then** Bob creates an invoice for the configured sats-per-transaction amount and Alice pays it.
-4. **Given** a payment completes, **When** the learner views the action summary, **Then** the summary states that the trade used Lightning and did not need a new Bitcoin block.
+3. **Given** a route is under construction, **When** the learner mines the next block directly in Polar, **Then** the app detects the higher block height while polling and updates the route to active without requiring `Wait for Next Block`.
+4. **Given** an active Alice-Bob route, **When** Alice buys an item from Bob, **Then** Bob creates an invoice for the configured sats-per-transaction amount and Alice pays it.
+5. **Given** a payment completes, **When** the learner views the action summary, **Then** the summary states that the trade used Lightning and did not need a new Bitcoin block.
 
 ---
 
 ### User Story 3 - Debug The Network (Priority: P3)
 
-A learner opens `Debug Network` to inspect nodes, channels, balances, invoices, and payments.
+A learner opens `Network Dashboard` to inspect nodes, channels, balances, invoices, and payments.
 
 **Why this priority**: The app must teach both the game-level idea and the real network-level mechanics.
 
-**Independent Test**: With setup complete and at least one channel/payment created, open `Debug Network` and verify that the channel row, node balances, invoice history, and payment history match the game actions.
+**Independent Test**: With setup complete and at least one channel/payment created, open `Network Dashboard` and verify that the channel row, node balances, invoice history, and payment history match the game actions.
 
 **Acceptance Scenarios**:
 
-1. **Given** Alice and Bob have a channel, **When** the learner views `Debug Network`, **Then** the page shows a row with Alice on the left, Bob on the right, a purse-to-purse channel/payment visual, status, capacity, local/remote balances, and action buttons.
+1. **Given** Alice and Bob have a channel, **When** the learner views `Network Dashboard`, **Then** the page shows a row with Alice on the left, Bob on the right, a purse-to-purse channel/payment visual, status, capacity, local/remote balances, and action buttons.
 2. **Given** Bob clicks `Create Invoice`, **When** Alice has `AutoSend` enabled for that channel, **Then** the app visibly creates the invoice, pays it from Alice, and logs both steps.
 3. **Given** a channel is pending, **When** the learner views the row, **Then** the row states that a Bitcoin block is required before Lightning payments can use that channel.
 4. **Given** a channel is active, **When** the learner views recent payments, **Then** the page states that completed Lightning payments did not require a new Bitcoin block.
@@ -94,8 +95,8 @@ A learner opens `Home` to understand why the demo exists, Bitcoin, Lightning, th
 
 ### Functional Requirements
 
-- **FR-001**: The app MUST provide exactly four primary user pages, from left to right: `Home`, `Set Up`, `Play Game`, and `Debug Network`.
-- **FR-002**: `Play Game` and `Debug Network` MUST remain visible but disabled until setup is saved and successfully verified; `Home` and `Set Up` MUST remain available before setup.
+- **FR-001**: The app MUST provide exactly four primary user pages, from left to right: `Home`, `Set Up`, `Play Game`, and `Network Dashboard`.
+- **FR-002**: `Play Game` and `Network Dashboard` MUST remain visible but disabled until setup is saved and successfully verified; `Home` and `Set Up` MUST remain available before setup.
 - **FR-003**: Disabled pages MUST explain that the learner must complete `Set Up` before gameplay or network debugging can start.
 - **FR-004**: `Home` MUST contain `Why this demo exists` and FAQ/concepts content.
 - **FR-005**: `Why this demo exists` MUST explain that this is a Polar regtest Lightning lab, the app controls all demo nodes, and the demo separates game-level actions from network-level mechanics.
@@ -118,20 +119,22 @@ A learner opens `Home` to understand why the demo exists, Bitcoin, Lightning, th
 - **FR-017**: The game MUST represent a pending channel as a trade route under construction until the next Bitcoin block.
 - **FR-018**: The game MUST provide `Wait for Next Block` instead of fixed wait-time wording.
 - **FR-019**: `Wait for Next Block` MUST explain that mainnet blocks arrive about every 10 minutes on average but regtest mines instantly.
+- **FR-019a**: While connected to Polar, every primary page MUST poll lab state so a block mined directly in Polar activates pending routes and enables Lightning-only actions such as `Buy Item`.
 - **FR-020**: Game purchases, sales, tips, or tolls MUST use the configured sats-per-transaction amount.
 - **FR-021**: A receive action MUST create a Lightning invoice; it MUST NOT imply that money arrives without a sender paying.
 - **FR-022**: A send action MUST pay a known invoice from the selected sender node.
 - **FR-023**: AutoSend MUST be visibly marked as a lab/demo feature and MUST use the configured transaction amount as its max per automatic payment.
 - **FR-023a**: `Play Game` MUST show `Recent actions` as history rows with the current action title and body on the left, plus zero to three right-side detail pills for steps such as `Invoice Sent`, `Invoice Paid`, `Channel Open Request`, `Block Mined`, and `Channel Open Complete`.
-- **FR-024**: `Debug Network` MUST show channel rows with node blocks on each side and a line from wallet/purse to wallet/purse.
+- **FR-024**: `Network Dashboard` MUST show channel rows with node blocks on each side and a line from wallet/purse to wallet/purse.
 - **FR-025**: Each channel row MUST show status, capacity, local/remote balances, whether a block is required, and available actions.
-- **FR-026**: `Debug Network` MUST show recent invoices and payments generated by the app.
+- **FR-026**: `Network Dashboard` MUST show recent invoices and payments generated by the app.
 - **FR-027**: `Home` MUST include FAQ content explaining Bitcoin, Lightning, their pros and cons, and that blocks are needed to enter and exit Lightning channels while payments over active channels do not wait for new blocks.
 - **FR-028**: The Home FAQ content MUST include a simplified operation table for create invoice, pay invoice, fund wallet, open channel, close channel, check payment status, and wait/mine block.
 - **FR-029**: The app MUST include a `Lab mode` warning explaining that controlling all demo nodes is appropriate for education but not for real player funds.
 - **FR-030**: The app MUST present production guidance that a real game would normally request payment from a player's own Lightning wallet rather than spending from it directly.
 - **FR-031**: The app MUST provide a `Create Demo Nodes` action that asks Polar to add, name, start, fund, and confirm Alice, Bob, and Carol LND nodes using the configured Bitcoin backend.
 - **FR-032**: The app MUST provide a `Destroy Demo Nodes` action that asks Polar to remove Alice, Bob, and Carol and clears the active lab state.
+- **FR-033**: The `packages/lightning-service` crate MUST keep its Lightning domain models, validation, and server-side adapter boundaries reusable enough for future Rust projects, avoiding Dioxus UI dependencies and app-specific presentation concerns inside the service crate.
 
 ### Key Entities
 
@@ -154,7 +157,7 @@ A learner opens `Home` to understand why the demo exists, Bitcoin, Lightning, th
 - **SC-003**: After setup, a learner can complete one channel-open-and-confirm flow and one Lightning payment flow in under 5 minutes.
 - **SC-004**: The app clearly distinguishes block-required actions from instant Lightning actions in every relevant game and debug state.
 - **SC-005**: A learner can refresh the app after saving setup and resume with the same transaction amount and connection state.
-- **SC-006**: A learner can open `Debug Network` after a game trade and identify the invoice, payment, channel, and balance movement caused by that trade.
+- **SC-006**: A learner can open `Network Dashboard` after a game trade and identify the invoice, payment, channel, and balance movement caused by that trade.
 - **SC-007**: A learner can open `Home` before setup and identify at least one operation that needs a mined block and one operation that does not.
 
 ## Assumptions

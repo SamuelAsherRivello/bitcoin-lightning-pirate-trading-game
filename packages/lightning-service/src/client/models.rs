@@ -175,8 +175,37 @@ impl PolarAutomationProfile {
     }
 
     pub fn is_local_bridge(&self) -> bool {
-        let bridge_url = self.bridge_url.trim().to_ascii_lowercase();
-        bridge_url.starts_with("http://localhost:") || bridge_url.starts_with("http://127.0.0.1:")
+        Self::is_valid_local_bridge_url(&self.bridge_url)
+    }
+
+    pub fn is_valid_local_bridge_url(bridge_url: &str) -> bool {
+        let Some(without_scheme) = bridge_url
+            .trim()
+            .to_ascii_lowercase()
+            .strip_prefix("http://")
+            .map(str::to_string)
+        else {
+            return false;
+        };
+
+        if without_scheme.contains('?') || without_scheme.contains('#') {
+            return false;
+        }
+
+        let authority = without_scheme.trim_end_matches('/');
+        if authority.contains('/') {
+            return false;
+        }
+
+        let Some((host, port)) = authority.split_once(':') else {
+            return false;
+        };
+
+        if host != "localhost" && host != "127.0.0.1" {
+            return false;
+        }
+
+        port.parse::<u16>().is_ok_and(|port| port > 0)
     }
 }
 
@@ -427,4 +456,39 @@ pub struct LabState {
     pub block_height: u64,
     pub warnings: Vec<String>,
     pub action_log: Vec<ActionLogEntry>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PolarAutomationProfile;
+
+    #[test]
+    fn polar_bridge_url_accepts_localhost_and_loopback_with_ports() {
+        assert!(PolarAutomationProfile::is_valid_local_bridge_url(
+            "http://localhost:37373"
+        ));
+        assert!(PolarAutomationProfile::is_valid_local_bridge_url(
+            "http://127.0.0.1:37373/"
+        ));
+    }
+
+    #[test]
+    fn polar_bridge_url_rejects_non_local_or_malformed_urls() {
+        for bridge_url in [
+            "",
+            "https://localhost:37373",
+            "http://localhost",
+            "http://localhost:0",
+            "http://localhost:not-a-port",
+            "http://localhost:37373/path",
+            "http://localhost:37373?debug=true",
+            "http://localhost.example.com:37373",
+            "http://192.168.1.10:37373",
+        ] {
+            assert!(
+                !PolarAutomationProfile::is_valid_local_bridge_url(bridge_url),
+                "{bridge_url} should be rejected"
+            );
+        }
+    }
 }

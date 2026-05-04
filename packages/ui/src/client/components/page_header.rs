@@ -2,7 +2,9 @@ use dioxus::prelude::*;
 use dioxus_i18n::t;
 
 use crate::client::components::developer_tools::DeveloperTools;
-use crate::client::components::toast::{Toast, ToastRegion};
+use crate::client::components::toast::{
+    OperationPrompt, OperationPromptRegion, Toast, ToastRegion,
+};
 use crate::client::models::SetupProfile;
 use crate::client::Route;
 
@@ -16,6 +18,7 @@ pub fn PageHeader() -> Element {
     let setup_profile = use_context::<Signal<SetupProfile>>();
     let setup_is_connected = setup_profile().is_connected();
     let toast = use_context::<Signal<Option<Toast>>>();
+    let operation_prompt = use_context::<Signal<Option<OperationPrompt>>>();
 
     rsx! {
         header { id: "page-header",
@@ -101,6 +104,7 @@ pub fn PageHeader() -> Element {
                 DeveloperTools {}
             }
             ToastRegion { toast }
+            OperationPromptRegion { prompt: operation_prompt }
         }
     }
 }

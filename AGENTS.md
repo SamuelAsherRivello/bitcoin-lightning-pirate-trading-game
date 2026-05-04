@@ -19,7 +19,7 @@ Provide concise code examples with detailed descriptions
 * Lightning lab behavior lives behind `packages/ui/src/client/services/lightning_server_functions.rs` and `packages/lightning-service`; browser builds persist only non-sensitive setup preferences and demo lab snapshots.
 * Keep first-time native database/schema/seed setup in the clearly named `create_database_if_missing()` service method. Normal reads should not recreate or reseed an existing database.
 * Do not introduce browser SQLite or OPFS worker startup for template data caching.
-* The primary product routes, from left to right, are `Home`, `Set Up`, `Play Game`, and `Debug Network`. `Home` owns why the demo exists and the FAQ/concepts content.
+* The primary product routes, from left to right, are `Home`, `Set Up`, `Play Game`, and `Network Dashboard`. `Home` owns why the demo exists and the FAQ/concepts content.
 * Keep `Documentation/DioxusFeatureMatrix.md` updated as development continues whenever Dioxus feature usage, routes, cache behavior, platform support, or suggested future work changes.
 
 # AI Agent Safety Rules

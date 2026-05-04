@@ -4,15 +4,18 @@ use dioxus_i18n::t;
 use wasm_bindgen::JsCast;
 
 use crate::client::components::setup::WarningCallout;
-use crate::client::components::toast::{Toast, ToastTone};
+use crate::client::components::toast::{
+    wait_for_prompt_message_minimum, OperationPrompt, Toast, ToastTone,
+};
 use crate::client::models::{
     ConnectionStatus, LabState, PolarAutomationProfile, SetupMode, SetupProfile,
+    DEFAULT_BITCOIN_BACKEND_NAME,
 };
 use crate::client::services::lightning_server_functions::{
-    complete_polar_setup, create_polar_demo_nodes, destroy_polar_demo_nodes, ensure_polar_server,
-    lock_polar_setup_completion, reset_lab, reset_polar_setup_start, save_setup_preferences,
-    test_setup, PolarServerEnsureStatus,
+    complete_polar_setup, create_polar_demo_nodes_with_progress, destroy_polar_demo_nodes,
+    ensure_polar_server, reset_lab, test_setup, verify_polar_bridge, PolarServerEnsureStatus,
 };
+use crate::client::services::storage_service;
 
 const DOCKER_DESKTOP_URL: &str = "https://www.docker.com/products/docker-desktop/";
 const POLAR_DOWNLOAD_URL: &str = "https://lightningpolar.com/";
@@ -42,17 +45,22 @@ pub fn SetUp() -> Element {
     let mut setup_profile = use_context::<Signal<SetupProfile>>();
     let mut lab_state = use_context::<Signal<Option<LabState>>>();
     let toast = use_context::<Signal<Option<Toast>>>();
-    let toast_sequence = use_signal(|| 20_000_u64);
+    let operation_prompt = use_context::<Signal<Option<OperationPrompt>>>();
+    let toast_sequence = use_signal(|| 10_000_u64);
+    let prompt_sequence = use_signal(|| 20_000_u64);
     let mut amount_text = use_signal(|| setup_profile().sats_per_transaction.to_string());
     let mut setup_mode = use_signal(|| setup_profile().setup_mode);
     let mut polar_bridge_url = use_signal(|| setup_profile().polar_automation.bridge_url.clone());
     let mut polar_server_name = use_signal(|| setup_profile().network_name.clone());
     let mut is_busy = use_signal(|| false);
+    let mut show_complete_reset_confirm = use_signal(|| false);
 
     let current_profile = setup_profile();
     let current_lab_state = lab_state();
     let active_step = polar_wizard_step(&current_profile, current_lab_state.as_ref());
     let bridge_url_is_valid = is_valid_local_bridge_url(&polar_bridge_url());
+    let browser_origin_is_valid = browser_origin_allows_polar_bridge();
+    let bridge_url_can_submit = bridge_url_is_valid && browser_origin_is_valid;
     let server_name_is_valid = !polar_server_name().trim().is_empty();
 
     rsx! {
@@ -70,7 +78,7 @@ pub fn SetUp() -> Element {
                         strong { "{current_profile.connection_status.label()}" }
                         p {
                             if current_profile.is_connected() {
-                                "Play Game and Debug Network are unlocked."
+                                "Play Game and Network Dashboard are unlocked."
                             } else {
                                 "Complete the Polar app setup before gameplay unlocks."
                             }
@@ -281,16 +289,19 @@ pub fn SetUp() -> Element {
                                                 if !bridge_url_is_valid && active_step == PolarWizardStep::BridgeUrl {
                                                     p { class: "field-error", "Use a local bridge URL such as http://localhost:37373." }
                                                 }
+                                                if bridge_url_is_valid && !browser_origin_is_valid && active_step == PolarWizardStep::BridgeUrl {
+                                                    p { class: "field-error", "Open this app at http://localhost:8080 before connecting to Polar." }
+                                                }
                                             }),
                                             actions: Some(rsx! {
                                                 button {
                                                     id: "polar-bridge-url-submit",
                                                     class: "primary-action",
                                                     r#type: "button",
-                                                    disabled: is_busy() || active_step != PolarWizardStep::BridgeUrl || !bridge_url_is_valid,
+                                                    disabled: is_busy() || active_step != PolarWizardStep::BridgeUrl || !bridge_url_can_submit,
                                                     onclick: move |_| async move {
                                                         is_busy.set(true);
-                                                        push_toast(toast, toast_sequence, "Bridge URL sending...", ToastTone::Info);
+                                                        push_toast(toast, toast_sequence, "Checking Polar bridge...", ToastTone::Info);
 
                                                         match profile_from_inputs(
                                                             amount_text(),
@@ -306,11 +317,11 @@ pub fn SetUp() -> Element {
                                                                 profile.connection_status = ConnectionStatus::SavedOffline;
                                                                 profile.last_verified_at = None;
                                                                 profile.polar_automation.network_id.clear();
-                                                                match save_setup_preferences(profile.clone()).await {
+                                                                match verify_polar_bridge(profile.clone()).await {
                                                                     Ok(saved_profile) => {
                                                                         setup_profile.set(saved_profile);
                                                                         lab_state.set(None);
-                                                                        push_toast(toast, toast_sequence, "Bridge URL sent", ToastTone::Success);
+                                                                        push_toast(toast, toast_sequence, "Connected to Polar bridge.", ToastTone::Success);
                                                                     }
                                                                     Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
                                                                 }
@@ -399,19 +410,13 @@ pub fn SetUp() -> Element {
                                                     disabled: is_busy() || active_step != PolarWizardStep::ServerName,
                                                     onclick: move |_| async move {
                                                         is_busy.set(true);
-                                                        push_toast(toast, toast_sequence, "Resetting Polar server setup...", ToastTone::Info);
-
-                                                        match reset_polar_setup_start(setup_profile()).await {
-                                                            Ok(saved_profile) => {
-                                                                setup_profile.set(saved_profile.clone());
-                                                                lab_state.set(None);
-                                                                polar_bridge_url.set(saved_profile.polar_automation.bridge_url.clone());
-                                                                polar_server_name.set(saved_profile.network_name.clone());
-                                                                push_toast(toast, toast_sequence, "Returned to step 1.", ToastTone::Success);
-                                                                focus_step_control("polar-bridge-url-input").await;
-                                                            }
-                                                            Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
-                                                        }
+                                                        let saved_profile = reset_to_bridge_url_step(setup_profile());
+                                                        setup_profile.set(saved_profile.clone());
+                                                        lab_state.set(None);
+                                                        polar_bridge_url.set(saved_profile.polar_automation.bridge_url.clone());
+                                                        polar_server_name.set(saved_profile.network_name.clone());
+                                                        push_toast(toast, toast_sequence, "Returned to step 1.", ToastTone::Success);
+                                                        focus_step_control("polar-bridge-url-input").await;
 
                                                         is_busy.set(false);
                                                     },
@@ -443,31 +448,16 @@ pub fn SetUp() -> Element {
                                                     r#type: "button",
                                                     disabled: is_busy() || active_step != PolarWizardStep::DemoNodes,
                                                     onclick: move |_| async move {
-                                                        is_busy.set(true);
-                                                        push_toast(toast, toast_sequence, "Demo nodes sending...", ToastTone::Info);
-
-                                                        match profile_from_inputs(
+                                                        create_demo_nodes_step(
+                                                            is_busy,
+                                                            setup_profile,
+                                                            lab_state,
+                                                            operation_prompt,
+                                                            prompt_sequence,
                                                             amount_text(),
                                                             polar_server_name(),
-                                                            SetupMode::ServerConfig,
-                                                            polar_automation_from_input(
-                                                                polar_bridge_url(),
-                                                                setup_profile().polar_automation,
-                                                            ),
-                                                            setup_profile(),
-                                                        ) {
-                                                            Ok(profile) => match create_polar_demo_nodes(profile).await {
-                                                                Ok(state) => {
-                                                                    setup_profile.set(state.profile.clone());
-                                                                    lab_state.set(Some(state));
-                                                                    push_toast(toast, toast_sequence, "Demo nodes sent", ToastTone::Success);
-                                                                }
-                                                                Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
-                                                            },
-                                                            Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
-                                                        }
-
-                                                        is_busy.set(false);
+                                                            polar_bridge_url(),
+                                                        ).await;
                                                     },
                                                     "SUBMIT"
                                                 }
@@ -478,8 +468,6 @@ pub fn SetUp() -> Element {
                                                     disabled: is_busy() || active_step != PolarWizardStep::DemoNodes,
                                                     onclick: move |_| async move {
                                                         is_busy.set(true);
-                                                        push_toast(toast, toast_sequence, "Destroying Alice, Bob, and Carol...", ToastTone::Info);
-
                                                         match profile_from_inputs(
                                                             amount_text(),
                                                             polar_server_name(),
@@ -490,16 +478,15 @@ pub fn SetUp() -> Element {
                                                             ),
                                                             setup_profile(),
                                                         ) {
-                                                            Ok(profile) => match destroy_polar_demo_nodes(profile).await {
-                                                                Ok(saved_profile) => {
-                                                                    setup_profile.set(saved_profile);
-                                                                    lab_state.set(None);
-                                                                    push_toast(toast, toast_sequence, "Returned to step 2.", ToastTone::Success);
-                                                                    is_busy.set(false);
-                                                                    focus_step_control("polar-server-name-input").await;
-                                                                }
-                                                                Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
-                                                            },
+                                                            Ok(profile) => {
+                                                                let saved_profile = reset_to_server_name_step(profile);
+                                                                setup_profile.set(saved_profile.clone());
+                                                                lab_state.set(None);
+                                                                polar_bridge_url.set(saved_profile.polar_automation.bridge_url.clone());
+                                                                polar_server_name.set(saved_profile.network_name.clone());
+                                                                push_toast(toast, toast_sequence, "Returned to step 2.", ToastTone::Success);
+                                                                focus_step_control("polar-server-name-input").await;
+                                                            }
                                                             Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
                                                         }
 
@@ -521,7 +508,7 @@ pub fn SetUp() -> Element {
                                                     input {
                                                         id: "polar-complete-input",
                                                         r#type: "text",
-                                                        value: "Play Game, Debug Network",
+                                                        value: "Play Game, Network Dashboard",
                                                         readonly: true,
                                                     }
                                                 }
@@ -566,22 +553,7 @@ pub fn SetUp() -> Element {
                                                     class: "secondary-action danger-action",
                                                     r#type: "button",
                                                     disabled: is_busy() || (active_step != PolarWizardStep::Complete && active_step != PolarWizardStep::Done),
-                                                    onclick: move |_| async move {
-                                                        is_busy.set(true);
-                                                        push_toast(toast, toast_sequence, "Locking setup completion...", ToastTone::Info);
-
-                                                        match lock_polar_setup_completion(setup_profile()).await {
-                                                            Ok(state) => {
-                                                                setup_profile.set(state.profile.clone());
-                                                                lab_state.set(Some(state));
-                                                                push_toast(toast, toast_sequence, "Returned to step 3.", ToastTone::Success);
-                                                                focus_step_control("polar-demo-nodes-submit").await;
-                                                            }
-                                                            Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
-                                                        }
-
-                                                        is_busy.set(false);
-                                                    },
+                                                    onclick: move |_| show_complete_reset_confirm.set(true),
                                                     "RESET"
                                                 }
                                             }),
@@ -590,6 +562,70 @@ pub fn SetUp() -> Element {
                                 }
                             }
                         }
+                    }
+                }
+            }
+            if show_complete_reset_confirm() {
+                CompleteResetConfirmationPrompt {
+                    is_busy,
+                    show_prompt: show_complete_reset_confirm,
+                    setup_profile,
+                    lab_state,
+                    toast,
+                    toast_sequence,
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn CompleteResetConfirmationPrompt(
+    mut is_busy: Signal<bool>,
+    mut show_prompt: Signal<bool>,
+    setup_profile: Signal<SetupProfile>,
+    lab_state: Signal<Option<LabState>>,
+    toast: Signal<Option<Toast>>,
+    toast_sequence: Signal<u64>,
+) -> Element {
+    rsx! {
+        div {
+            class: "operation-prompt-backdrop",
+            role: "presentation",
+            div {
+                class: "operation-prompt operation-prompt--error",
+                role: "dialog",
+                aria_modal: "true",
+                aria_label: "Are you sure?",
+                div { class: "operation-prompt__status" }
+                div { class: "operation-prompt__body",
+                    span { class: "eyebrow", "Action required" }
+                    h2 { "Are you sure?" }
+                    p { "The app is properly running. Resetting this step will lock Play Game and Network Dashboard until setup is unlocked again." }
+                }
+                div { class: "operation-prompt__actions",
+                    button {
+                        class: "secondary-action",
+                        r#type: "button",
+                        disabled: is_busy(),
+                        onclick: move |_| show_prompt.set(false),
+                        "Cancel"
+                    }
+                    button {
+                        class: "secondary-action danger-action",
+                        r#type: "button",
+                        disabled: is_busy(),
+                        onclick: move |_| async move {
+                            show_prompt.set(false);
+                            reset_complete_step(
+                                is_busy,
+                                setup_profile,
+                                lab_state,
+                                toast,
+                                toast_sequence,
+                            ).await;
+                        },
+                        "Reset"
                     }
                 }
             }
@@ -823,8 +859,20 @@ fn wizard_step_class(active_step: PolarWizardStep, step: PolarWizardStep) -> &'s
 }
 
 fn is_valid_local_bridge_url(bridge_url: &str) -> bool {
-    let bridge_url = bridge_url.trim().to_ascii_lowercase();
-    bridge_url.starts_with("http://localhost:") || bridge_url.starts_with("http://127.0.0.1:")
+    PolarAutomationProfile::is_valid_local_bridge_url(bridge_url)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn browser_origin_allows_polar_bridge() -> bool {
+    web_sys::window()
+        .and_then(|window| window.location().hostname().ok())
+        .map(|hostname| hostname.eq_ignore_ascii_case("localhost"))
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn browser_origin_allows_polar_bridge() -> bool {
+    true
 }
 
 fn push_toast(
@@ -840,4 +888,257 @@ fn push_toast(
         message: message.into(),
         tone,
     }));
+}
+
+fn restore_saved_setup(profile: &SetupProfile, lab_state: Option<&LabState>) {
+    storage_service::save_setup_profile(profile);
+    match lab_state {
+        Some(state) => storage_service::save_lab_state_snapshot(state),
+        None => storage_service::clear_lab_state_snapshot(),
+    }
+}
+
+fn reset_to_bridge_url_step(mut profile: SetupProfile) -> SetupProfile {
+    profile.connection_status = ConnectionStatus::NotConfigured;
+    profile.last_verified_at = None;
+    profile.polar_automation.network_id.clear();
+    profile.polar_automation.bitcoin_backend_name = DEFAULT_BITCOIN_BACKEND_NAME.to_string();
+    storage_service::save_setup_profile(&profile);
+    storage_service::clear_lab_state_snapshot();
+    profile
+}
+
+fn reset_to_server_name_step(mut profile: SetupProfile) -> SetupProfile {
+    profile.connection_status = ConnectionStatus::SavedOffline;
+    profile.last_verified_at = None;
+    profile.polar_automation.network_id.clear();
+    storage_service::save_setup_profile(&profile);
+    storage_service::clear_lab_state_snapshot();
+    profile
+}
+
+fn reset_to_demo_nodes_step(mut profile: SetupProfile) -> SetupProfile {
+    profile.connection_status = ConnectionStatus::SavedOffline;
+    profile.last_verified_at = None;
+
+    storage_service::save_setup_profile(&profile);
+    storage_service::clear_lab_state_snapshot();
+
+    profile
+}
+
+async fn create_demo_nodes_step(
+    mut is_busy: Signal<bool>,
+    mut setup_profile: Signal<SetupProfile>,
+    mut lab_state: Signal<Option<LabState>>,
+    operation_prompt: Signal<Option<OperationPrompt>>,
+    prompt_sequence: Signal<u64>,
+    amount_text: String,
+    polar_server_name: String,
+    polar_bridge_url: String,
+) {
+    is_busy.set(true);
+    let previous_profile = setup_profile();
+    let previous_lab_state = lab_state();
+    let operation_id = begin_operation_prompt(
+        operation_prompt,
+        prompt_sequence,
+        "Create demo nodes",
+        "Starting demo-node creation...",
+        true,
+    )
+    .await;
+
+    match profile_from_inputs(
+        amount_text,
+        polar_server_name,
+        SetupMode::ServerConfig,
+        polar_automation_from_input(polar_bridge_url, setup_profile().polar_automation),
+        setup_profile(),
+    ) {
+        Ok(profile) => {
+            let progress_prompt = operation_prompt;
+            let progress_operation_id = operation_id;
+            let create_result = create_polar_demo_nodes_with_progress(profile, move |message| {
+                update_operation_prompt_now(
+                    progress_prompt,
+                    progress_operation_id,
+                    message,
+                    ToastTone::Info,
+                    true,
+                    true,
+                );
+            })
+            .await;
+
+            match create_result {
+                Ok(state) => {
+                    if prompt_cancel_requested(operation_prompt, operation_id) {
+                        match destroy_polar_demo_nodes(state.profile.clone()).await {
+                            Ok(_) => {
+                                restore_saved_setup(&previous_profile, previous_lab_state.as_ref());
+                                setup_profile.set(previous_profile);
+                                lab_state.set(previous_lab_state);
+                                update_operation_prompt(
+                                    operation_prompt,
+                                    operation_id,
+                                    "Demo node creation canceled. Alice, Bob, and Carol were removed.",
+                                    ToastTone::Success,
+                                    false,
+                                    false,
+                                )
+                                .await;
+                            }
+                            Err(message) => {
+                                setup_profile.set(state.profile.clone());
+                                lab_state.set(Some(state));
+                                update_operation_prompt(
+                                    operation_prompt,
+                                    operation_id,
+                                    format!(
+                                        "Cancel could not remove the created demo nodes: {message}"
+                                    ),
+                                    ToastTone::Error,
+                                    false,
+                                    false,
+                                )
+                                .await;
+                            }
+                        }
+                    } else {
+                        setup_profile.set(state.profile.clone());
+                        lab_state.set(Some(state));
+                        update_operation_prompt(
+                            operation_prompt,
+                            operation_id,
+                            "Server running. Alice, Bob, and Carol are running and funded.",
+                            ToastTone::Success,
+                            false,
+                            false,
+                        )
+                        .await;
+                    }
+                }
+                Err(message) => {
+                    update_operation_prompt(
+                        operation_prompt,
+                        operation_id,
+                        message,
+                        ToastTone::Error,
+                        false,
+                        false,
+                    )
+                    .await;
+                }
+            }
+        }
+        Err(message) => {
+            update_operation_prompt(
+                operation_prompt,
+                operation_id,
+                message,
+                ToastTone::Error,
+                false,
+                false,
+            )
+            .await;
+        }
+    }
+
+    is_busy.set(false);
+}
+
+async fn reset_complete_step(
+    mut is_busy: Signal<bool>,
+    mut setup_profile: Signal<SetupProfile>,
+    mut lab_state: Signal<Option<LabState>>,
+    toast: Signal<Option<Toast>>,
+    toast_sequence: Signal<u64>,
+) {
+    is_busy.set(true);
+    let saved_profile = reset_to_demo_nodes_step(setup_profile());
+    setup_profile.set(saved_profile);
+    lab_state.set(None);
+    push_toast(
+        toast,
+        toast_sequence,
+        "Returned to step 3.",
+        ToastTone::Success,
+    );
+    focus_step_control("polar-demo-nodes-submit").await;
+
+    is_busy.set(false);
+}
+
+async fn begin_operation_prompt(
+    mut prompt: Signal<Option<OperationPrompt>>,
+    mut sequence: Signal<u64>,
+    title: impl Into<String>,
+    message: impl Into<String>,
+    can_cancel: bool,
+) -> u64 {
+    let operation_id = *sequence.peek() + 1;
+    sequence.set(operation_id);
+    prompt.set(Some(OperationPrompt {
+        operation_id,
+        title: title.into(),
+        message: message.into(),
+        tone: ToastTone::Info,
+        is_pending: true,
+        can_cancel,
+        cancel_requested: false,
+    }));
+    wait_for_prompt_message_minimum().await;
+    operation_id
+}
+
+async fn update_operation_prompt(
+    mut prompt: Signal<Option<OperationPrompt>>,
+    operation_id: u64,
+    message: impl Into<String>,
+    tone: ToastTone,
+    is_pending: bool,
+    can_cancel: bool,
+) {
+    let active_prompt = { prompt.peek().as_ref().cloned() };
+    if let Some(mut active_prompt) = active_prompt {
+        if active_prompt.operation_id == operation_id {
+            active_prompt.message = message.into();
+            active_prompt.tone = tone;
+            active_prompt.is_pending = is_pending;
+            active_prompt.can_cancel = can_cancel;
+            prompt.set(Some(active_prompt));
+            wait_for_prompt_message_minimum().await;
+        }
+    }
+}
+
+fn update_operation_prompt_now(
+    mut prompt: Signal<Option<OperationPrompt>>,
+    operation_id: u64,
+    message: impl Into<String>,
+    tone: ToastTone,
+    is_pending: bool,
+    can_cancel: bool,
+) {
+    let active_prompt = { prompt.peek().as_ref().cloned() };
+    if let Some(mut active_prompt) = active_prompt {
+        if active_prompt.operation_id == operation_id {
+            active_prompt.message = message.into();
+            active_prompt.tone = tone;
+            active_prompt.is_pending = is_pending;
+            active_prompt.can_cancel = can_cancel;
+            prompt.set(Some(active_prompt));
+        }
+    }
+}
+
+fn prompt_cancel_requested(prompt: Signal<Option<OperationPrompt>>, operation_id: u64) -> bool {
+    prompt
+        .peek()
+        .as_ref()
+        .map(|active_prompt| {
+            active_prompt.operation_id == operation_id && active_prompt.cancel_requested
+        })
+        .unwrap_or(false)
 }

@@ -1,4 +1,57 @@
 use super::config::ServerNodeProfile;
+use crate::client::models::DemoNodeId;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LabObserverEvent {
+    LndNodeReady(DemoNodeId),
+    LndNodeUnavailable(DemoNodeId),
+    PeerOnline {
+        from_node: DemoNodeId,
+        to_node: DemoNodeId,
+    },
+    PeerOffline {
+        from_node: DemoNodeId,
+        to_node: DemoNodeId,
+    },
+    ChannelPending {
+        route_id: String,
+    },
+    ChannelActive {
+        route_id: String,
+    },
+    ChannelClosed {
+        route_id: String,
+    },
+    InvoiceCreated {
+        node_id: DemoNodeId,
+        invoice_id: String,
+    },
+    InvoiceSettled {
+        node_id: DemoNodeId,
+        invoice_id: String,
+    },
+    PaymentSucceeded {
+        node_id: DemoNodeId,
+        payment_id: String,
+    },
+    PaymentFailed {
+        node_id: DemoNodeId,
+        payment_id: String,
+        reason: String,
+    },
+    BlockHeightChanged(u64),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LabObserverSource {
+    LndSubscribeState,
+    LndSubscribePeerEvents,
+    LndSubscribeChannelEvents,
+    LndSubscribeInvoices,
+    LndTrackPaymentV2,
+    LndChainNotifier,
+    PolarHealthFallback,
+}
 
 #[derive(Clone, Debug)]
 pub struct LndClientProfile {

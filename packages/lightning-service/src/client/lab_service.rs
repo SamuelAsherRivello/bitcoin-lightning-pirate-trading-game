@@ -116,7 +116,7 @@ pub fn open_trade_route(
     push_log(
         &mut state,
         &format!("Opened {} trade route", to_node.label()),
-        "Channel open started. The route is under construction until the next regtest block confirms it.",
+        "Channel open started. The route is under construction until block 234.",
         &["Channel Open Request"],
     );
 
@@ -173,6 +173,61 @@ pub fn wait_for_next_block(
         ]
     };
     push_log(&mut state, "Waited for next block", &detail, &details);
+
+    Ok(state)
+}
+
+pub fn apply_external_block_height(
+    mut state: LabState,
+    observed_height: u64,
+) -> Result<LabState, LightningError> {
+    ensure_connected(&state)?;
+
+    if observed_height <= state.block_height {
+        state.block_height = observed_height;
+        return Ok(state);
+    }
+
+    let previous_height = state.block_height;
+    state.block_height = observed_height;
+
+    let mut activated_routes = Vec::new();
+    for route in &mut state.trade_routes {
+        if route.status == RouteStatus::UnderConstruction && route.requires_next_block {
+            route.status = RouteStatus::Active;
+            route.requires_next_block = false;
+            activated_routes.push(route.game_label.clone());
+        }
+    }
+
+    if activated_routes.is_empty() {
+        return Ok(state);
+    }
+
+    let action = BlockWaitAction {
+        action_id: format!("block-{}", state.block_actions.len() + 1),
+        reason: BlockWaitReason::ChannelOpenConfirmation,
+        affected_route_id: None,
+        blocks_requested: observed_height.saturating_sub(previous_height),
+        status: BlockWaitStatus::Mined,
+        resulting_height: Some(observed_height),
+    };
+    state.block_actions.push(action);
+
+    let detail = format!(
+        "Polar reached block {observed_height}. Active routes: {}.",
+        activated_routes.join(", ")
+    );
+    push_log(
+        &mut state,
+        "Detected Polar block",
+        &detail,
+        &[
+            "Channel Open Request",
+            "External Block Detected",
+            "Channel Open Complete",
+        ],
+    );
 
     Ok(state)
 }
@@ -333,7 +388,7 @@ pub fn get_operation_faq() -> Vec<OperationFaqRow> {
             needs_bitcoin_node: true,
             needs_mined_block: false,
             plain_explanation: "LND can report payment state without mining a new block.".to_string(),
-            game_example: Some("Debug Network reads the latest payment.".to_string()),
+            game_example: Some("Network Dashboard reads the latest payment.".to_string()),
         },
         OperationFaqRow {
             operation: "Wait for next block".to_string(),
@@ -487,4 +542,39 @@ fn push_log(state: &mut LabState, summary: &str, network_detail: &str, details: 
             created_at: Utc::now(),
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn connected_profile() -> SetupProfile {
+        SetupProfile {
+            connection_status: ConnectionStatus::Connected,
+            ..SetupProfile::default()
+        }
+    }
+
+    #[test]
+    fn external_block_height_activates_pending_trade_route() {
+        let state = default_lab_state(connected_profile());
+        let state = open_trade_route(
+            state,
+            DemoNodeId::Alice,
+            DemoNodeId::Bob,
+            DEFAULT_ROUTE_CAPACITY_SATS,
+        )
+        .expect("open route");
+
+        assert_eq!(state.trade_routes[0].status, RouteStatus::UnderConstruction);
+        assert!(state.trade_routes[0].requires_next_block);
+
+        let state = apply_external_block_height(state, 234).expect("apply external block");
+
+        assert_eq!(state.block_height, 234);
+        assert_eq!(state.trade_routes[0].status, RouteStatus::Active);
+        assert!(!state.trade_routes[0].requires_next_block);
+        assert_eq!(state.block_actions[0].resulting_height, Some(234));
+        assert_eq!(state.action_log[0].summary, "Detected Polar block");
+    }
 }

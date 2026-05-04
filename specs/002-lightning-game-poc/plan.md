@@ -5,7 +5,7 @@
 
 ## Summary
 
-Replace the template pages with a Dioxus 0.7 fullstack learning app that starts with a Home page explaining why the demo exists and Bitcoin/Lightning FAQ concepts, guides a learner through a local Polar regtest setup, creates Alice/Bob/Carol Lightning nodes from an existing Polar Bitcoin backend through Polar's localhost bridge, unlocks a playful Lightning trading game, and exposes a debug network view that proves the underlying channel, invoice, payment, and block-confirmation operations.
+Replace the template pages with a Dioxus 0.7 fullstack learning app that starts with a Home page explaining why the demo exists and Bitcoin/Lightning FAQ concepts, guides a learner through a local Polar regtest setup, creates Alice/Bob/Carol Lightning nodes from an existing Polar Bitcoin backend through Polar's localhost bridge, unlocks a playful Lightning trading game, and exposes a network dashboard view that proves the underlying channel, invoice, payment, and block-confirmation operations.
 
 ## Technical Context
 
@@ -32,7 +32,7 @@ Replace the template pages with a Dioxus 0.7 fullstack learning app that starts 
 - Runtime code must use meaningful `Result` errors and avoid panics/unwraps in LND operations.
 - Dioxus code must use 0.7 APIs only.
 
-**Known Constitution Conflict**: The current constitution says to preserve top navigation order `Page01`, `Page02`, `Page03`, but the new feature requires `Home`, `Set Up`, `Play Game`, and `Debug Network`. Implementation must update `.specify/memory/constitution.md`, `AGENTS.md`, localization assets, and `Documentation/DioxusFeatureMatrix.md` as part of the first task group before route replacement.
+**Known Constitution Conflict**: The current constitution says to preserve top navigation order `Page01`, `Page02`, `Page03`, but the new feature requires `Home`, `Set Up`, `Play Game`, and `Network Dashboard`. Implementation must update `.specify/memory/constitution.md`, `AGENTS.md`, localization assets, and `Documentation/DioxusFeatureMatrix.md` as part of the first task group before route replacement.
 
 ## Project Structure
 
@@ -98,7 +98,7 @@ packages/
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
 | Add `packages/lightning-service` crate | The app needs a server-only boundary around LND credentials and typed Lightning operations | Putting LND calls in UI code risks browser credential exposure and mixes network operations with presentation |
-| Replace `Page01/Page02/Page03` route set | The product concept requires `Home`, `Set Up`, `Play Game`, and `Debug Network` | Keeping placeholder page names would make the learning flow unclear |
+| Replace `Page01/Page02/Page03` route set | The product concept requires `Home`, `Set Up`, `Play Game`, and `Network Dashboard` | Keeping placeholder page names would make the learning flow unclear |
 
 ## Phase 0: Research Summary
 
@@ -124,7 +124,7 @@ See [data-model.md](data-model.md) and [contracts/server-functions.md](contracts
 
 - First implementation lets learners paste the throwaway Polar bridge URL directly in the `Polar Connection (Networked)` tab instead of manually editing setup files.
 - Polar automation must stay visibly labeled for local regtest use only and must never be presented as a production wallet permission model.
-- Use exact page labels requested by the user: `Home`, `Set Up`, `Play Game`, `Debug Network`.
+- Use exact page labels requested by the user: `Home`, `Set Up`, `Play Game`, `Network Dashboard`.
 - Use plain readable personas and locations: Alice, Bob, Carol; Town, Desert, Beach, Mountain.
 - Treat receive as `Create Invoice`; do not imply receive happens without a payer.
 - Treat send as `Pay Invoice`.
