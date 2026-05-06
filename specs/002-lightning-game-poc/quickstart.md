@@ -51,9 +51,9 @@ This quickstart describes the target workflow for validating the feature after i
 7. Open `Set Up`.
 8. In `Setup`, enter or confirm:
    - `Sats per transaction`: `1,000`.
-   - `Polar Connection (Networked)`: selected by default, with `OS Setup` showing install/run steps for Docker and Polar and `Polar Setup` showing compact form rows; the app saves the bridge URL, reuses or creates the named Polar server, and then discovers the backend for demo-node creation.
+   - `Polar Connection (Networked)`: selected by default, with `OS Setup` showing install/run steps for Docker and Polar and `Polar Setup` showing compact form rows; the app saves the bridge URL, reuses or creates the named Polar server, discovers the backend for demo-node creation, and prepopulates an editable Block Height row from Polar.
    - `Mock Connection (Offline)`: the fake-data callout is visible after switching tabs.
-9. Click the enabled `SUBMIT` buttons in order: save Polar MCP bridge URL, ensure Polar server name, create 3 demo nodes, and complete setup. `RESET` returns to the previous step.
+9. Click the enabled `SUBMIT` buttons in order: save Polar MCP bridge URL, ensure Polar server name, create 3 demo nodes, confirm or edit Block Height, and complete setup. `RESET` returns to the previous step.
 10. Confirm Alice, Bob, and Carol are created, started, funded, and gameplay unlocks only after `Complete Setup`.
 11. Refresh the page.
 12. Confirm `Play Game` and `Network Dashboard` are enabled.
@@ -83,11 +83,13 @@ This quickstart describes the target workflow for validating the feature after i
    - A visible wallet/purse-to-wallet/purse line.
    - Channel status.
    - Local and remote balances.
-   - `Create Invoice`, `Pay Invoice`, and AutoSend controls.
-3. Create an invoice from Bob.
-4. Pay it from Alice.
-5. Confirm the row balances update.
-6. Confirm recent invoices and recent payments show the operation.
+   - `Open Trade Route`, `Wait for Block <next height>`, `Create Invoice`, `Pay Invoice`, and AutoSend controls.
+3. Open the Alice-Bob trade route if it does not exist yet.
+4. Mine the next block in Polar, or click the `Wait for Block <next height>` action.
+5. Create an invoice from Bob.
+6. Pay it from Alice.
+7. Confirm the row balances update.
+8. Confirm recent invoices and recent payments show the operation.
 ## 6. Verify Desktop
 
 1. Stop the web server if needed.

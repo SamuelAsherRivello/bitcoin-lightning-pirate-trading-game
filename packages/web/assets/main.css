@@ -245,8 +245,19 @@ textarea {
 .status-card {
     display: grid;
     align-content: center;
-    gap: 10px;
+    gap: 14px;
     padding: 22px;
+}
+
+.status-card__metric {
+    display: grid;
+    gap: 6px;
+}
+
+.status-card__value {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .status-card strong {
@@ -537,6 +548,7 @@ textarea {
 
 .operation-prompt {
     width: min(100%, 460px);
+    min-height: min(320px, calc(100dvh - 48px));
     max-height: calc(100dvh - 48px);
     display: grid;
     grid-template-columns: 10px 1fr;
@@ -550,6 +562,7 @@ textarea {
 }
 
 .operation-prompt__status {
+    grid-row: 1 / -1;
     background: var(--app-accent);
 }
 
@@ -587,7 +600,9 @@ textarea {
 }
 
 .operation-prompt__actions {
+    align-self: end;
     display: flex;
+    align-items: center;
     justify-content: flex-end;
     gap: 8px;
     padding: 10px 22px 22px;
@@ -697,6 +712,10 @@ textarea {
 }
 
 .app-setup-section .instruction--with-actions {
+    --setup-step-input-left: 300px;
+    --setup-step-number-track: 36px;
+    --setup-step-gap: 12px;
+    --setup-step-padding: 12px;
     grid-template-columns: 36px minmax(0, 1fr) 172px;
 }
 
@@ -715,6 +734,12 @@ textarea {
     grid-template-columns: max-content minmax(0, 1fr);
     align-items: center;
     column-gap: 12px;
+}
+
+.app-setup-section .instruction--with-actions .instruction__body--with-value {
+    grid-template-columns:
+        minmax(0, calc(var(--setup-step-input-left) - var(--setup-step-padding) - var(--setup-step-number-track) - var(--setup-step-gap) - var(--setup-step-gap)))
+        minmax(0, 1fr);
 }
 
 .instruction__name {
@@ -1283,6 +1308,10 @@ textarea {
 
     .instruction__value-after {
         grid-column: auto;
+    }
+
+    .app-setup-section .instruction--with-actions .instruction__body--with-value {
+        grid-template-columns: 1fr;
     }
 
     .network-route-visual {

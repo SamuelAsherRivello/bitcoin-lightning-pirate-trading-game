@@ -228,6 +228,8 @@ pub struct SetupProfile {
     pub polar_connection: PolarConnectionProfile,
     #[serde(default)]
     pub polar_automation: PolarAutomationProfile,
+    #[serde(default)]
+    pub polar_block_height_confirmed: bool,
     pub last_verified_at: Option<DateTime<Utc>>,
     pub connection_status: ConnectionStatus,
 }
@@ -246,6 +248,7 @@ impl Default for SetupProfile {
             setup_mode: SetupMode::ServerConfig,
             polar_connection: PolarConnectionProfile::default(),
             polar_automation: PolarAutomationProfile::default(),
+            polar_block_height_confirmed: false,
             last_verified_at: None,
             connection_status: ConnectionStatus::NotConfigured,
         }

@@ -10,6 +10,7 @@ Represents learner-facing setup state.
 - `network_name`: Expected Polar network name, default `Dioxus Bitcoin Lightning Game`.
 - `setup_mode`: `ServerConfig` for the visible `Polar Connection (Networked)` tab or `BrowserRegtestOnly` for the visible `Mock Connection (Offline)` tab.
 - `polar_automation`: UI-entered Polar bridge URL plus app-discovered Polar network and Bitcoin backend values.
+- `polar_block_height_confirmed`: Whether the learner has accepted or edited the Polar Setup `Block Height` row before final unlock.
 - `last_verified_at`: Optional timestamp of the last successful setup test.
 - `connection_status`: `NotConfigured`, `SavedOffline`, `Connected`, `PartiallyConnected`, `Invalid`.
 
@@ -17,6 +18,7 @@ Represents learner-facing setup state.
 
 - Transaction amount must be a positive whole number within the demo range.
 - Setup is complete only when the app has created Alice, Bob, and Carol or mock mode is connected.
+- Polar Connection setup requires the learner to confirm a whole-number Block Height before final unlock; `0` is valid.
 - Mock Connection mode must show fake offline-data messaging and must not require credential acknowledgement.
 - Polar Connection mode must include a local bridge URL. The app ensures the named Polar server exists through the bridge, discovers the Bitcoin backend when possible, and falls back to the `backend1` backend convention.
 

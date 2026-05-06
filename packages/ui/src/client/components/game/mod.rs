@@ -1,6 +1,29 @@
 use dioxus::prelude::*;
 
+use crate::client::components::help::FieldHelpIcon;
 use crate::client::models::{ActionLogEntry, TradeRoute};
+
+#[component]
+pub fn LabStatusWidget(sats_per_transaction: u64, block_height: u64) -> Element {
+    rsx! {
+        div { class: "status-card",
+            div { class: "status-card__metric",
+                span { class: "eyebrow", "Trade amount" }
+                div { class: "status-card__value",
+                    strong { "{sats_per_transaction} sats" }
+                    FieldHelpIcon { label: "Every purchase in this POC uses the configured demo amount.".to_string() }
+                }
+            }
+            div { class: "status-card__metric",
+                span { class: "eyebrow", "Block Height" }
+                div { class: "status-card__value",
+                    strong { "{block_height}" }
+                    FieldHelpIcon { label: "Current Bitcoin regtest block height reported by the connected Polar lab.".to_string() }
+                }
+            }
+        }
+    }
+}
 
 #[component]
 pub fn HistoryItems(entries: Vec<ActionLogEntry>) -> Element {

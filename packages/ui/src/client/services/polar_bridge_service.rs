@@ -8,6 +8,9 @@ use crate::client::models::{
 };
 
 const DEMO_NODE_FUNDING_SATS: u64 = 1_000_000;
+const DEMO_NODE_START_TIMEOUT_SECONDS: u16 = 180;
+const DEMO_NODE_START_ATTEMPTS: u16 = DEMO_NODE_START_TIMEOUT_SECONDS / 2;
+const DEMO_NODE_START_DELAY_MS: u32 = 2_000;
 const DEMO_NODE_READY_ATTEMPTS: u8 = 20;
 const DEMO_NODE_READY_DELAY_MS: u32 = 750;
 const LOG_SERVICE_CALLS_TO_TERMINAL: bool = true;
@@ -85,6 +88,12 @@ impl fmt::Display for PolarLabHealthIssue {
 pub struct PolarLabHealthReport {
     pub profile: PolarAutomationProfile,
     pub block_height: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DemoNodeFundingPlan {
+    AlreadyFunded,
+    NeedsFunding(u64),
 }
 
 pub async fn test_bridge(profile: &PolarAutomationProfile) -> Result<(), String> {
@@ -176,27 +185,35 @@ where
 
     for node_id in DemoNodeId::ALL {
         report_progress(format!("Preparing {} in Polar...", node_id.label()));
-        let recreated =
-            create_or_prepare_demo_node(&resolved_profile, &network_id, &backend_name, node_id)
-                .await?;
+        let funding_plan = create_or_prepare_demo_node(
+            &resolved_profile,
+            &network_id,
+            &backend_name,
+            node_id,
+            &mut report_progress,
+        )
+        .await?;
 
-        if recreated {
-            report_progress(format!(
-                "{} is running. Depositing regtest sats...",
-                node_id.label()
-            ));
-            deposit_demo_node_funds(&resolved_profile, &network_id, node_id).await?;
+        match funding_plan {
+            DemoNodeFundingPlan::AlreadyFunded => {
+                report_progress(format!(
+                    "{} already matches the step 03 goal. Checking readiness...",
+                    node_id.label()
+                ));
+            }
+            DemoNodeFundingPlan::NeedsFunding(sats) => {
+                report_progress(format!(
+                    "{} needs {sats} sats. Depositing only that amount...",
+                    node_id.label()
+                ));
+                deposit_demo_node_funds(&resolved_profile, &network_id, node_id, sats).await?;
 
-            report_progress(format!(
-                "Mining blocks for {} and checking wallet balance...",
-                node_id.label()
-            ));
-            mine_demo_blocks(&resolved_profile, &network_id, &backend_name).await?;
-        } else {
-            report_progress(format!(
-                "{} already has the exact app node name and balance. Checking readiness...",
-                node_id.label()
-            ));
+                report_progress(format!(
+                    "Mining blocks for {} and checking wallet balance...",
+                    node_id.label()
+                ));
+                mine_demo_blocks(&resolved_profile, &network_id, &backend_name).await?;
+            }
         }
 
         wait_for_demo_node_ready(&resolved_profile, required_balance_sats, node_id).await?;
@@ -217,13 +234,44 @@ pub async fn get_blockchain_height(profile: &PolarAutomationProfile) -> Result<u
     get_blockchain_height_from_resolved(&resolved_profile).await
 }
 
+pub async fn set_blockchain_height(
+    profile: &PolarAutomationProfile,
+    target_height: u64,
+) -> Result<u64, String> {
+    let resolved_profile = resolve_started_automation_profile(profile).await?;
+    let current_height = get_blockchain_height_from_resolved(&resolved_profile).await?;
+    let blocks_to_mine = blocks_to_mine_for_target_height(current_height, target_height)?;
+
+    if blocks_to_mine > 0 {
+        mine_blocks_from_resolved(&resolved_profile, blocks_to_mine).await?;
+    }
+
+    let actual_height = get_blockchain_height_from_resolved(&resolved_profile).await?;
+    if actual_height == target_height {
+        Ok(actual_height)
+    } else {
+        Err(format!(
+            "Polar reached block {actual_height}, but step 4 requested block {target_height}."
+        ))
+    }
+}
+
 pub async fn mine_blocks(profile: &PolarAutomationProfile, blocks: u64) -> Result<u64, String> {
     let resolved_profile = resolve_started_automation_profile(profile).await?;
+    mine_blocks_from_resolved(&resolved_profile, blocks).await?;
+
+    get_blockchain_height_from_resolved(&resolved_profile).await
+}
+
+async fn mine_blocks_from_resolved(
+    resolved_profile: &PolarAutomationProfile,
+    blocks: u64,
+) -> Result<(), String> {
     let network_id = clean_network_id(&resolved_profile);
     let backend_name = clean_backend_name(&resolved_profile);
 
     execute_tool(
-        &resolved_profile,
+        resolved_profile,
         "mine_blocks",
         json!({
             "networkId": network_id_argument(&network_id),
@@ -231,9 +279,8 @@ pub async fn mine_blocks(profile: &PolarAutomationProfile, blocks: u64) -> Resul
             "nodeName": backend_name,
         }),
     )
-    .await?;
-
-    get_blockchain_height_from_resolved(&resolved_profile).await
+    .await
+    .map(|_| ())
 }
 
 pub async fn destroy_demo_nodes(
@@ -405,40 +452,36 @@ async fn create_or_prepare_demo_node(
     network_id: &str,
     backend_name: &str,
     node_id: DemoNodeId,
-) -> Result<bool, String> {
+    report_progress: &mut impl FnMut(String),
+) -> Result<DemoNodeFundingPlan, String> {
     let desired_name = polar_node_name(node_id);
     let before_add = list_networks(profile).await?;
 
     if let Some(existing_name) = find_lightning_node_name(&before_add, network_id, desired_name) {
         if existing_name != desired_name {
-            remove_demo_node_by_name(profile, network_id, &existing_name).await?;
-        } else {
-            start_node_if_needed(profile, network_id, desired_name).await?;
-            let existing_balance = get_lightning_wallet_balance(profile, network_id, desired_name)
-                .await
-                .ok();
-            if existing_balance == Some(DEMO_NODE_FUNDING_SATS) {
-                return Ok(false);
-            }
-
-            remove_demo_node_by_name(profile, network_id, desired_name).await?;
+            report_progress(format!(
+                "Renaming {} to {}...",
+                existing_name,
+                node_id.label()
+            ));
+            rename_demo_node(profile, network_id, &existing_name, desired_name).await?;
         }
+
+        return prepare_existing_demo_node(
+            profile,
+            network_id,
+            desired_name,
+            node_id,
+            report_progress,
+        )
+        .await;
     }
 
     let before_add = list_networks(profile).await?;
     let created_name =
         create_lightning_node(profile, network_id, desired_name, &before_add).await?;
     if created_name != desired_name {
-        execute_tool(
-            profile,
-            "rename_node",
-            json!({
-                "networkId": network_id_argument(network_id),
-                "oldName": created_name,
-                "newName": desired_name,
-            }),
-        )
-        .await?;
+        rename_demo_node(profile, network_id, &created_name, desired_name).await?;
     }
 
     execute_tool(
@@ -452,9 +495,50 @@ async fn create_or_prepare_demo_node(
     )
     .await?;
 
+    report_progress(format!("Starting {} in Polar...", node_id.label()));
     start_node_if_needed(profile, network_id, desired_name).await?;
 
-    Ok(true)
+    Ok(DemoNodeFundingPlan::NeedsFunding(DEMO_NODE_FUNDING_SATS))
+}
+
+async fn prepare_existing_demo_node(
+    profile: &PolarAutomationProfile,
+    network_id: &str,
+    node_name: &str,
+    node_id: DemoNodeId,
+    report_progress: &mut impl FnMut(String),
+) -> Result<DemoNodeFundingPlan, String> {
+    report_progress(format!("Starting {} in Polar...", node_id.label()));
+    start_node_if_needed(profile, network_id, node_name).await?;
+
+    let balance =
+        wait_for_lightning_wallet_balance(profile, network_id, node_name, node_id).await?;
+    if balance == DEMO_NODE_FUNDING_SATS {
+        return Ok(DemoNodeFundingPlan::AlreadyFunded);
+    }
+
+    if balance < DEMO_NODE_FUNDING_SATS {
+        return Ok(DemoNodeFundingPlan::NeedsFunding(
+            DEMO_NODE_FUNDING_SATS - balance,
+        ));
+    }
+
+    report_progress(format!(
+        "{} has {balance} sats, above the step 03 goal. Rebuilding the node...",
+        node_id.label()
+    ));
+    remove_demo_node_by_name(profile, network_id, node_name).await?;
+
+    let before_add = list_networks(profile).await?;
+    let created_name = create_lightning_node(profile, network_id, node_name, &before_add).await?;
+    if created_name != node_name {
+        rename_demo_node(profile, network_id, &created_name, node_name).await?;
+    }
+
+    report_progress(format!("Starting {} in Polar...", node_id.label()));
+    start_node_if_needed(profile, network_id, node_name).await?;
+
+    Ok(DemoNodeFundingPlan::NeedsFunding(DEMO_NODE_FUNDING_SATS))
 }
 
 async fn create_lightning_node(
@@ -510,10 +594,31 @@ async fn remove_demo_node_by_name(
     Ok(())
 }
 
+async fn rename_demo_node(
+    profile: &PolarAutomationProfile,
+    network_id: &str,
+    old_name: &str,
+    new_name: &str,
+) -> Result<(), String> {
+    execute_tool(
+        profile,
+        "rename_node",
+        json!({
+            "networkId": network_id_argument(network_id),
+            "oldName": old_name,
+            "newName": new_name,
+        }),
+    )
+    .await?;
+
+    Ok(())
+}
+
 async fn deposit_demo_node_funds(
     profile: &PolarAutomationProfile,
     network_id: &str,
     node_id: DemoNodeId,
+    sats: u64,
 ) -> Result<(), String> {
     execute_tool(
         profile,
@@ -521,7 +626,7 @@ async fn deposit_demo_node_funds(
         json!({
             "networkId": network_id_argument(network_id),
             "nodeName": polar_node_name(node_id),
-            "sats": DEMO_NODE_FUNDING_SATS,
+            "sats": sats,
         }),
     )
     .await?;
@@ -567,17 +672,80 @@ async fn start_node_if_needed(
         return Ok(());
     }
 
-    execute_tool(
-        profile,
-        "start_node",
-        json!({
-            "networkId": network_id_argument(network_id),
-            "nodeName": node_name,
-        }),
-    )
-    .await?;
+    let status = lightning_node_status(&networks, network_id, node_name)
+        .unwrap_or_else(|| "not started".to_string());
+    if !status.eq_ignore_ascii_case("starting") {
+        execute_tool(
+            profile,
+            "start_node",
+            json!({
+                "networkId": network_id_argument(network_id),
+                "nodeName": node_name,
+            }),
+        )
+        .await?;
+    }
 
-    Ok(())
+    wait_for_lightning_node_started(profile, network_id, node_name).await
+}
+
+async fn wait_for_lightning_node_started(
+    profile: &PolarAutomationProfile,
+    network_id: &str,
+    node_name: &str,
+) -> Result<(), String> {
+    let mut last_status = None;
+
+    for attempt in 1..=DEMO_NODE_START_ATTEMPTS {
+        let networks = list_networks(profile).await?;
+        if lightning_node_is_started(&networks, network_id, node_name) {
+            log_to_terminal(&format!(
+                "[polar-service] node-start-ready node={node_name} attempt={attempt}"
+            ));
+            return Ok(());
+        }
+
+        last_status = lightning_node_status(&networks, network_id, node_name);
+        log_to_terminal(&format!(
+            "[polar-service] node-start-wait node={node_name} attempt={attempt}/{DEMO_NODE_START_ATTEMPTS} status={}",
+            last_status.as_deref().unwrap_or("unknown")
+        ));
+        if attempt < DEMO_NODE_START_ATTEMPTS {
+            wait_for_demo_node_start_delay().await;
+        }
+    }
+
+    Err(format!(
+        "Polar demo node {node_name} did not finish starting within {DEMO_NODE_START_TIMEOUT_SECONDS} seconds. Last status: {}.",
+        last_status.unwrap_or_else(|| "unknown".to_string())
+    ))
+}
+
+async fn wait_for_lightning_wallet_balance(
+    profile: &PolarAutomationProfile,
+    network_id: &str,
+    node_name: &str,
+    node_id: DemoNodeId,
+) -> Result<u64, String> {
+    let mut last_error = None;
+
+    for attempt in 1..=DEMO_NODE_READY_ATTEMPTS {
+        match get_lightning_wallet_balance(profile, network_id, node_name).await {
+            Ok(balance) => return Ok(balance),
+            Err(message) => {
+                last_error = Some(message);
+                if attempt < DEMO_NODE_READY_ATTEMPTS {
+                    wait_for_demo_node_ready_delay().await;
+                }
+            }
+        }
+    }
+
+    Err(format!(
+        "{} is not ready for wallet checks yet: {}",
+        node_id.label(),
+        last_error.unwrap_or_else(|| "wallet balance did not become available".to_string())
+    ))
 }
 
 async fn wait_for_demo_lab_ready(
@@ -1153,6 +1321,19 @@ fn clean_backend_name(profile: &PolarAutomationProfile) -> String {
     profile.bitcoin_backend_name.trim().to_string()
 }
 
+fn blocks_to_mine_for_target_height(
+    current_height: u64,
+    target_height: u64,
+) -> Result<u64, String> {
+    if target_height < current_height {
+        return Err(format!(
+            "Polar is already at block {current_height}. Step 4 cannot set the regtest chain backward to block {target_height}."
+        ));
+    }
+
+    Ok(target_height - current_height)
+}
+
 fn polar_node_name(node_id: DemoNodeId) -> &'static str {
     match node_id {
         DemoNodeId::Alice => "alice",
@@ -1539,6 +1720,19 @@ fn extract_sats_from_text(text: &str) -> Option<u64> {
 }
 
 #[cfg(target_arch = "wasm32")]
+async fn wait_for_demo_node_start_delay() {
+    gloo_timers::future::TimeoutFuture::new(DEMO_NODE_START_DELAY_MS).await;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn wait_for_demo_node_start_delay() {
+    futures_timer::Delay::new(std::time::Duration::from_millis(
+        DEMO_NODE_START_DELAY_MS.into(),
+    ))
+    .await;
+}
+
+#[cfg(target_arch = "wasm32")]
 async fn wait_for_demo_node_ready_delay() {
     gloo_timers::future::TimeoutFuture::new(DEMO_NODE_READY_DELAY_MS).await;
 }
@@ -1823,6 +2017,20 @@ mod tests {
         });
 
         assert_eq!(extract_block_height(&blockchain_info), Some(267));
+    }
+
+    #[test]
+    fn target_height_mines_forward_delta() {
+        assert_eq!(blocks_to_mine_for_target_height(267, 300), Ok(33));
+        assert_eq!(blocks_to_mine_for_target_height(300, 300), Ok(0));
+    }
+
+    #[test]
+    fn target_height_rejects_backward_chain_move() {
+        let error = blocks_to_mine_for_target_height(300, 267).expect_err("must reject rewind");
+
+        assert!(error.contains("already at block 300"));
+        assert!(error.contains("cannot set the regtest chain backward to block 267"));
     }
 
     #[test]

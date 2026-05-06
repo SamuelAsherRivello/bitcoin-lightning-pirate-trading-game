@@ -3,6 +3,7 @@ use dioxus_i18n::t;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 
+use crate::client::components::help::FieldHelpIcon;
 use crate::client::components::setup::WarningCallout;
 use crate::client::components::toast::{
     wait_for_prompt_message_minimum, OperationPrompt, Toast, ToastTone,
@@ -12,19 +13,27 @@ use crate::client::models::{
     DEFAULT_BITCOIN_BACKEND_NAME,
 };
 use crate::client::services::lightning_server_functions::{
-    complete_polar_setup, create_polar_demo_nodes_with_progress, destroy_polar_demo_nodes,
-    ensure_polar_server, reset_lab, test_setup, verify_polar_bridge, PolarServerEnsureStatus,
+    complete_polar_setup, confirm_polar_block_height, create_polar_demo_nodes_with_progress,
+    destroy_polar_demo_nodes, ensure_polar_server, reset_lab, test_setup, verify_polar_bridge,
+    PolarServerEnsureStatus,
 };
 use crate::client::services::storage_service;
 
 const DOCKER_DESKTOP_URL: &str = "https://www.docker.com/products/docker-desktop/";
+const LOCAL_APP_URL: &str = "http://localhost:8080";
 const POLAR_DOWNLOAD_URL: &str = "https://lightningpolar.com/";
+const POLAR_DEMO_NODES_SUBMIT_ID: &str = "polar-demo-nodes-submit";
+#[cfg(target_arch = "wasm32")]
+const FOCUS_RETRY_ATTEMPTS: u8 = 12;
+#[cfg(target_arch = "wasm32")]
+const FOCUS_RETRY_DELAY_MS: u32 = 16;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum PolarWizardStep {
     BridgeUrl,
     ServerName,
     DemoNodes,
+    BlockHeight,
     Complete,
     Done,
 }
@@ -35,7 +44,8 @@ impl PolarWizardStep {
             Self::BridgeUrl => 1,
             Self::ServerName => 2,
             Self::DemoNodes => 3,
-            Self::Complete | Self::Done => 4,
+            Self::BlockHeight => 4,
+            Self::Complete | Self::Done => 5,
         }
     }
 }
@@ -52,9 +62,15 @@ pub fn SetUp() -> Element {
     let mut setup_mode = use_signal(|| setup_profile().setup_mode);
     let mut polar_bridge_url = use_signal(|| setup_profile().polar_automation.bridge_url.clone());
     let mut polar_server_name = use_signal(|| setup_profile().network_name.clone());
+    let mut polar_block_height = use_signal(|| {
+        lab_state()
+            .map(|state| state.block_height)
+            .unwrap_or_default()
+            .to_string()
+    });
     let mut is_busy = use_signal(|| false);
+    let mut bridge_connection_error = use_signal(String::new);
     let mut show_complete_reset_confirm = use_signal(|| false);
-
     let current_profile = setup_profile();
     let current_lab_state = lab_state();
     let active_step = polar_wizard_step(&current_profile, current_lab_state.as_ref());
@@ -201,8 +217,8 @@ pub fn SetUp() -> Element {
                                     "Create the Bitcoin backend in Polar, then use the app setup steps to connect the local bridge and create Alice, Bob, and Carol."
                                 }
                                 WarningCallout {
-                                    title: "Polar regtest values only".to_string(),
-                                    body: "Use only a local Polar regtest network. Browser calls to Polar's bridge must be opened from localhost so the bridge CORS check accepts them.".to_string(),
+                                    title: "Testnet Only".to_string(),
+                                    body: "Use only a local Polar regtest network. This is a demo not meant for mainnet.".to_string(),
                                 }
 
                             section { class: "polar-setup-section",
@@ -256,7 +272,9 @@ pub fn SetUp() -> Element {
                                         Instruction {
                                             class: "wizard-step manual-step".to_string(),
                                             number: 4,
-                                            info: "Start Polar".to_string(),
+                                            info: format!(
+                                                "Start Polar, keep the app open at {LOCAL_APP_URL}, then submit step 1 again."
+                                            ),
                                             name: rsx! { "Run Polar" },
                                         }
                                     }
@@ -281,7 +299,10 @@ pub fn SetUp() -> Element {
                                                         placeholder: "http://localhost:37373",
                                                         value: polar_bridge_url(),
                                                         disabled: active_step != PolarWizardStep::BridgeUrl,
-                                                        oninput: move |event| polar_bridge_url.set(event.value()),
+                                                        oninput: move |event| {
+                                                            bridge_connection_error.set(String::new());
+                                                            polar_bridge_url.set(event.value());
+                                                        },
                                                     }
                                                 }
                                             }),
@@ -290,7 +311,18 @@ pub fn SetUp() -> Element {
                                                     p { class: "field-error", "Use a local bridge URL such as http://localhost:37373." }
                                                 }
                                                 if bridge_url_is_valid && !browser_origin_is_valid && active_step == PolarWizardStep::BridgeUrl {
-                                                    p { class: "field-error", "Open this app at http://localhost:8080 before connecting to Polar." }
+                                                    p { class: "field-error",
+                                                        "Open this app at "
+                                                        a {
+                                                            class: "setup-resource-link",
+                                                            href: LOCAL_APP_URL,
+                                                            "{LOCAL_APP_URL}"
+                                                        }
+                                                        " before connecting to Polar."
+                                                    }
+                                                }
+                                                if !bridge_connection_error().is_empty() && active_step == PolarWizardStep::BridgeUrl {
+                                                    p { class: "field-error", "{bridge_connection_error}" }
                                                 }
                                             }),
                                             actions: Some(rsx! {
@@ -301,7 +333,14 @@ pub fn SetUp() -> Element {
                                                     disabled: is_busy() || active_step != PolarWizardStep::BridgeUrl || !bridge_url_can_submit,
                                                     onclick: move |_| async move {
                                                         is_busy.set(true);
-                                                        push_toast(toast, toast_sequence, "Checking Polar bridge...", ToastTone::Info);
+                                                        let operation_id = begin_operation_prompt(
+                                                            operation_prompt,
+                                                            prompt_sequence,
+                                                            "Connect Polar bridge",
+                                                            "Checking bridge URL...",
+                                                            false,
+                                                        )
+                                                        .await;
 
                                                         match profile_from_inputs(
                                                             amount_text(),
@@ -311,22 +350,41 @@ pub fn SetUp() -> Element {
                                                                 polar_bridge_url(),
                                                                 setup_profile().polar_automation,
                                                             ),
-                                                            setup_profile(),
-                                                        ) {
-                                                            Ok(mut profile) => {
-                                                                profile.connection_status = ConnectionStatus::SavedOffline;
-                                                                profile.last_verified_at = None;
-                                                                profile.polar_automation.network_id.clear();
-                                                                match verify_polar_bridge(profile.clone()).await {
-                                                                    Ok(saved_profile) => {
-                                                                        setup_profile.set(saved_profile);
-                                                                        lab_state.set(None);
-                                                                        push_toast(toast, toast_sequence, "Connected to Polar bridge.", ToastTone::Success);
+                                                                setup_profile(),
+                                                            ) {
+                                                                Ok(mut profile) => {
+                                                                    update_operation_prompt(
+                                                                        operation_prompt,
+                                                                        operation_id,
+                                                                        "Contacting the Polar bridge...",
+                                                                        ToastTone::Info,
+                                                                        true,
+                                                                        false,
+                                                                    )
+                                                                    .await;
+                                                                    profile.connection_status = ConnectionStatus::SavedOffline;
+                                                                    profile.last_verified_at = None;
+                                                                    profile.polar_automation.network_id.clear();
+                                                                    match verify_polar_bridge(profile.clone()).await {
+                                                                        Ok(saved_profile) => {
+                                                                            bridge_connection_error.set(String::new());
+                                                                            setup_profile.set(saved_profile);
+                                                                            lab_state.set(None);
+                                                                            close_operation_prompt(operation_prompt, operation_id);
+                                                                            push_toast(toast, toast_sequence, "Connected to Polar bridge.", ToastTone::Success);
+                                                                        }
+                                                                        Err(message) => {
+                                                                            let message = bridge_step_error_message(message);
+                                                                            bridge_connection_error.set(message.clone());
+                                                                            close_operation_prompt(operation_prompt, operation_id);
+                                                                            push_toast(toast, toast_sequence, message, ToastTone::Error);
+                                                                        }
                                                                     }
-                                                                    Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
                                                                 }
+                                                            Err(message) => {
+                                                                close_operation_prompt(operation_prompt, operation_id);
+                                                                push_toast(toast, toast_sequence, message, ToastTone::Error);
                                                             }
-                                                            Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
                                                         }
 
                                                         is_busy.set(false);
@@ -366,7 +424,14 @@ pub fn SetUp() -> Element {
                                                     disabled: is_busy() || active_step != PolarWizardStep::ServerName || !server_name_is_valid,
                                                     onclick: move |_| async move {
                                                         is_busy.set(true);
-                                                        push_toast(toast, toast_sequence, "Checking Polar server...", ToastTone::Info);
+                                                        let operation_id = begin_operation_prompt(
+                                                            operation_prompt,
+                                                            prompt_sequence,
+                                                            "Prepare Polar server",
+                                                            "Checking server name...",
+                                                            false,
+                                                        )
+                                                        .await;
 
                                                         match profile_from_inputs(
                                                             amount_text(),
@@ -377,26 +442,67 @@ pub fn SetUp() -> Element {
                                                                 polar_server_name(),
                                                                 setup_profile().polar_automation,
                                                             ),
-                                                            setup_profile(),
-                                                        ) {
-                                                            Ok(profile) => match ensure_polar_server(profile.clone()).await {
-                                                                Ok(result) => {
-                                                                    let mut saved_profile = profile;
-                                                                    saved_profile.polar_automation = result.profile;
-                                                                    saved_profile.connection_status = ConnectionStatus::SavedOffline;
-                                                                    saved_profile.last_verified_at = None;
-                                                                    setup_profile.set(saved_profile);
-                                                                    lab_state.set(None);
+                                                                setup_profile(),
+                                                            ) {
+                                                                Ok(profile) => {
+                                                                    update_operation_prompt(
+                                                                        operation_prompt,
+                                                                        operation_id,
+                                                                        "Finding or creating the Polar server...",
+                                                                        ToastTone::Info,
+                                                                        true,
+                                                                        false,
+                                                                    )
+                                                                    .await;
+                                                                    match ensure_polar_server(profile.clone()).await {
+                                                                    Ok(result) => {
+                                                                        update_operation_prompt(
+                                                                            operation_prompt,
+                                                                            operation_id,
+                                                                            "Saving Polar server connection...",
+                                                                            ToastTone::Info,
+                                                                            true,
+                                                                            false,
+                                                                        )
+                                                                        .await;
+                                                                        bridge_connection_error.set(String::new());
+                                                                        let mut saved_profile = profile;
+                                                                        saved_profile.polar_automation = result.profile;
+                                                                        saved_profile.connection_status = ConnectionStatus::SavedOffline;
+                                                                        saved_profile.last_verified_at = None;
+                                                                        setup_profile.set(saved_profile);
+                                                                        lab_state.set(None);
 
-                                                                    let message = match result.status {
-                                                                        PolarServerEnsureStatus::Existed => "Polar server already exists.",
-                                                                        PolarServerEnsureStatus::Created => "Polar server created.",
-                                                                    };
-                                                                    push_toast(toast, toast_sequence, message, ToastTone::Success);
-                                                                }
-                                                                Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
-                                                            },
-                                                            Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
+                                                                        let message = match result.status {
+                                                                            PolarServerEnsureStatus::Existed => "Polar server already exists.",
+                                                                            PolarServerEnsureStatus::Created => "Polar server created.",
+                                                                        };
+                                                                        close_operation_prompt(operation_prompt, operation_id);
+                                                                        push_toast(toast, toast_sequence, message, ToastTone::Success);
+                                                                    }
+                                                                    Err(message) => {
+                                                                        if is_bridge_connection_error(&message) {
+                                                                            let saved_profile = reset_to_bridge_url_step(setup_profile());
+                                                                        setup_profile.set(saved_profile.clone());
+                                                                        lab_state.set(None);
+                                                                            polar_bridge_url.set(saved_profile.polar_automation.bridge_url.clone());
+                                                                            polar_server_name.set(saved_profile.network_name.clone());
+                                                                            let message = bridge_step_error_message(message);
+                                                                            bridge_connection_error.set(message.clone());
+                                                                            close_operation_prompt(operation_prompt, operation_id);
+                                                                            push_toast(toast, toast_sequence, message, ToastTone::Error);
+                                                                            focus_step_control("polar-bridge-url-input").await;
+                                                                        } else {
+                                                                            close_operation_prompt(operation_prompt, operation_id);
+                                                                            push_toast(toast, toast_sequence, message, ToastTone::Error);
+                                                                        }
+                                                                    },
+                                                                    }
+                                                                },
+                                                            Err(message) => {
+                                                                close_operation_prompt(operation_prompt, operation_id);
+                                                                push_toast(toast, toast_sequence, message, ToastTone::Error);
+                                                            }
                                                         }
 
                                                         is_busy.set(false);
@@ -443,7 +549,7 @@ pub fn SetUp() -> Element {
                                             }),
                                             actions: Some(rsx! {
                                                 button {
-                                                    id: "polar-demo-nodes-submit",
+                                                    id: POLAR_DEMO_NODES_SUBMIT_ID,
                                                     class: "primary-action",
                                                     r#type: "button",
                                                     disabled: is_busy() || active_step != PolarWizardStep::DemoNodes,
@@ -454,9 +560,13 @@ pub fn SetUp() -> Element {
                                                             lab_state,
                                                             operation_prompt,
                                                             prompt_sequence,
+                                                            toast,
+                                                            toast_sequence,
+                                                            bridge_connection_error,
                                                             amount_text(),
                                                             polar_server_name(),
                                                             polar_bridge_url(),
+                                                            polar_block_height,
                                                         ).await;
                                                     },
                                                     "SUBMIT"
@@ -498,9 +608,140 @@ pub fn SetUp() -> Element {
                                         }
 
                                         Instruction {
+                                            id: "polar-step-block-height".to_string(),
+                                            class: wizard_step_class(active_step, PolarWizardStep::BlockHeight).to_string(),
+                                            number: 4,
+                                            info: "Defaults to Polar's current block height; edit it for the app baseline".to_string(),
+                                            name: rsx! { "Block Height" },
+                                            value: Some(rsx! {
+                                                label { class: "setup-field-row",
+                                                    input {
+                                                        id: "polar-block-height-input",
+                                                        r#type: "number",
+                                                        min: "0",
+                                                        step: "1",
+                                                        value: polar_block_height(),
+                                                        disabled: active_step != PolarWizardStep::BlockHeight,
+                                                        oninput: move |event| polar_block_height.set(event.value()),
+                                                    }
+                                                }
+                                            }),
+                                            actions: Some(rsx! {
+                                                button {
+                                                    id: "polar-block-height-submit",
+                                                    class: "primary-action",
+                                                    r#type: "button",
+                                                    disabled: is_busy() || active_step != PolarWizardStep::BlockHeight,
+                                                    onclick: move |_| async move {
+                                                        is_busy.set(true);
+                                                        let operation_id = begin_operation_prompt(
+                                                            operation_prompt,
+                                                            prompt_sequence,
+                                                            "Set block height",
+                                                            "Checking requested block height...",
+                                                            false,
+                                                        )
+                                                        .await;
+
+                                                        match block_height_from_input(polar_block_height()) {
+                                                            Ok(block_height) => match profile_from_inputs(
+                                                                amount_text(),
+                                                                polar_server_name(),
+                                                                SetupMode::ServerConfig,
+                                                                polar_automation_from_input(
+                                                                    polar_bridge_url(),
+                                                                    setup_profile().polar_automation,
+                                                                ),
+                                                                setup_profile(),
+                                                            ) {
+                                                                Ok(profile) => {
+                                                                    update_operation_prompt(
+                                                                        operation_prompt,
+                                                                        operation_id,
+                                                                        format!("Asking Polar to reach block {block_height}..."),
+                                                                        ToastTone::Info,
+                                                                        true,
+                                                                        false,
+                                                                    )
+                                                                    .await;
+                                                                    match confirm_polar_block_height(profile, block_height).await {
+                                                                    Ok(state) => {
+                                                                        update_operation_prompt(
+                                                                            operation_prompt,
+                                                                            operation_id,
+                                                                            format!("Polar is set to block {}.", state.block_height),
+                                                                            ToastTone::Info,
+                                                                            true,
+                                                                            false,
+                                                                        )
+                                                                        .await;
+                                                                        setup_profile.set(state.profile.clone());
+                                                                        lab_state.set(Some(state));
+                                                                        close_operation_prompt(operation_prompt, operation_id);
+                                                                        push_toast(toast, toast_sequence, "Block Height sent", ToastTone::Success);
+                                                                        focus_step_control("polar-complete-submit").await;
+                                                                    }
+                                                                    Err(message) => {
+                                                                        close_operation_prompt(operation_prompt, operation_id);
+                                                                        push_toast(toast, toast_sequence, message, ToastTone::Error);
+                                                                    },
+                                                                    }
+                                                                },
+                                                                Err(message) => {
+                                                                    close_operation_prompt(operation_prompt, operation_id);
+                                                                    push_toast(toast, toast_sequence, message, ToastTone::Error);
+                                                                },
+                                                            },
+                                                            Err(message) => {
+                                                                close_operation_prompt(operation_prompt, operation_id);
+                                                                push_toast(toast, toast_sequence, message, ToastTone::Error);
+                                                            },
+                                                        }
+
+                                                        is_busy.set(false);
+                                                    },
+                                                    "SUBMIT"
+                                                }
+                                                button {
+                                                    id: "polar-block-height-reset",
+                                                    class: "secondary-action danger-action",
+                                                    r#type: "button",
+                                                    disabled: is_busy() || active_step != PolarWizardStep::BlockHeight,
+                                                    onclick: move |_| async move {
+                                                        is_busy.set(true);
+                                                        match profile_from_inputs(
+                                                            amount_text(),
+                                                            polar_server_name(),
+                                                            SetupMode::ServerConfig,
+                                                            polar_automation_from_input(
+                                                                polar_bridge_url(),
+                                                                setup_profile().polar_automation,
+                                                            ),
+                                                            setup_profile(),
+                                                        ) {
+                                                            Ok(profile) => {
+                                                                let saved_profile = reset_to_demo_nodes_step(profile);
+                                                                setup_profile.set(saved_profile.clone());
+                                                                lab_state.set(None);
+                                                                polar_bridge_url.set(saved_profile.polar_automation.bridge_url.clone());
+                                                                polar_server_name.set(saved_profile.network_name.clone());
+                                                                push_toast(toast, toast_sequence, "Returned to step 3.", ToastTone::Success);
+                                                                focus_step_control(POLAR_DEMO_NODES_SUBMIT_ID).await;
+                                                            }
+                                                            Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
+                                                        }
+
+                                                        is_busy.set(false);
+                                                    },
+                                                    "RESET"
+                                                }
+                                            }),
+                                        }
+
+                                        Instruction {
                                             id: "polar-step-complete".to_string(),
                                             class: wizard_step_class(active_step, PolarWizardStep::Complete).to_string(),
-                                            number: 4,
+                                            number: 5,
                                             info: "Saves setup as connected".to_string(),
                                             name: rsx! { "Unlock routes" },
                                             value: Some(rsx! {
@@ -521,7 +762,14 @@ pub fn SetUp() -> Element {
                                                     disabled: is_busy() || active_step != PolarWizardStep::Complete,
                                                     onclick: move |_| async move {
                                                         is_busy.set(true);
-                                                        push_toast(toast, toast_sequence, "Unlock routes sending...", ToastTone::Info);
+                                                        let operation_id = begin_operation_prompt(
+                                                            operation_prompt,
+                                                            prompt_sequence,
+                                                            "Unlock routes",
+                                                            "Checking final setup state...",
+                                                            false,
+                                                        )
+                                                        .await;
 
                                                         match profile_from_inputs(
                                                             amount_text(),
@@ -533,15 +781,47 @@ pub fn SetUp() -> Element {
                                                             ),
                                                             setup_profile(),
                                                         ) {
-                                                            Ok(profile) => match complete_polar_setup(profile).await {
+                                                            Ok(profile) => {
+                                                                update_operation_prompt(
+                                                                    operation_prompt,
+                                                                    operation_id,
+                                                                    "Saving connected setup and unlocking routes...",
+                                                                    ToastTone::Info,
+                                                                    true,
+                                                                    false,
+                                                                )
+                                                                .await;
+                                                                match complete_polar_setup(profile).await {
                                                                 Ok(state) => {
+                                                                    bridge_connection_error.set(String::new());
                                                                     setup_profile.set(state.profile.clone());
                                                                     lab_state.set(Some(state));
+                                                                    close_operation_prompt(operation_prompt, operation_id);
                                                                     push_toast(toast, toast_sequence, "Unlock routes sent", ToastTone::Success);
                                                                 }
-                                                                Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
+                                                                Err(message) => {
+                                                                    if is_bridge_connection_error(&message) {
+                                                                        let saved_profile = reset_to_bridge_url_step(setup_profile());
+                                                                        setup_profile.set(saved_profile.clone());
+                                                                        lab_state.set(None);
+                                                                        polar_bridge_url.set(saved_profile.polar_automation.bridge_url.clone());
+                                                                        polar_server_name.set(saved_profile.network_name.clone());
+                                                                        let message = bridge_step_error_message(message);
+                                                                        bridge_connection_error.set(message.clone());
+                                                                        close_operation_prompt(operation_prompt, operation_id);
+                                                                        push_toast(toast, toast_sequence, message, ToastTone::Error);
+                                                                        focus_step_control("polar-bridge-url-input").await;
+                                                                    } else {
+                                                                        close_operation_prompt(operation_prompt, operation_id);
+                                                                        push_toast(toast, toast_sequence, message, ToastTone::Error);
+                                                                    }
+                                                                },
+                                                                }
                                                             },
-                                                            Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
+                                                            Err(message) => {
+                                                                close_operation_prompt(operation_prompt, operation_id);
+                                                                push_toast(toast, toast_sequence, message, ToastTone::Error);
+                                                            }
                                                         }
 
                                                         is_busy.set(false);
@@ -571,6 +851,7 @@ pub fn SetUp() -> Element {
                     show_prompt: show_complete_reset_confirm,
                     setup_profile,
                     lab_state,
+                    operation_prompt,
                     toast,
                     toast_sequence,
                 }
@@ -585,6 +866,7 @@ fn CompleteResetConfirmationPrompt(
     mut show_prompt: Signal<bool>,
     setup_profile: Signal<SetupProfile>,
     lab_state: Signal<Option<LabState>>,
+    operation_prompt: Signal<Option<OperationPrompt>>,
     toast: Signal<Option<Toast>>,
     toast_sequence: Signal<u64>,
 ) -> Element {
@@ -621,6 +903,7 @@ fn CompleteResetConfirmationPrompt(
                                 is_busy,
                                 setup_profile,
                                 lab_state,
+                                operation_prompt,
                                 toast,
                                 toast_sequence,
                             ).await;
@@ -712,8 +995,8 @@ fn Instruction(
 
 #[cfg(target_arch = "wasm32")]
 async fn focus_step_control(id: &'static str) {
-    for _ in 0..4 {
-        gloo_timers::future::TimeoutFuture::new(0).await;
+    for _ in 0..FOCUS_RETRY_ATTEMPTS {
+        gloo_timers::future::TimeoutFuture::new(FOCUS_RETRY_DELAY_MS).await;
 
         let Some(window) = web_sys::window() else {
             return;
@@ -740,6 +1023,20 @@ async fn focus_step_control(id: &'static str) {
 
 #[cfg(not(target_arch = "wasm32"))]
 async fn focus_step_control(_id: &'static str) {}
+
+fn complete_reset_focus_target() -> &'static str {
+    "polar-block-height-input"
+}
+
+#[cfg(target_arch = "wasm32")]
+fn schedule_step_control_focus(id: &'static str) {
+    wasm_bindgen_futures::spawn_local(async move {
+        focus_step_control(id).await;
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn schedule_step_control_focus(_id: &'static str) {}
 
 fn profile_from_inputs(
     amount_text: String,
@@ -768,30 +1065,12 @@ fn profile_from_inputs(
     Ok(profile)
 }
 
-#[component]
-fn FieldHelpIcon(label: String) -> Element {
-    rsx! {
-        span {
-            class: "field-help",
-            aria_label: "{label}",
-            tabindex: "0",
-            "data-tooltip": "{label}",
-            svg {
-                "aria-hidden": "true",
-                width: "14",
-                height: "14",
-                view_box: "0 0 24 24",
-                fill: "none",
-                stroke: "currentColor",
-                stroke_width: "2",
-                stroke_linecap: "round",
-                stroke_linejoin: "round",
-                circle { cx: "12", cy: "12", r: "10" }
-                line { x1: "12", y1: "16", x2: "12", y2: "12" }
-                line { x1: "12", y1: "8", x2: "12.01", y2: "8" }
-            }
-        }
-    }
+fn block_height_from_input(block_height: String) -> Result<u64, String> {
+    block_height
+        .trim()
+        .replace(',', "")
+        .parse::<u64>()
+        .map_err(|_| "Block Height must be a whole number.".to_string())
 }
 
 fn polar_automation_from_input(
@@ -825,6 +1104,10 @@ fn polar_wizard_step(profile: &SetupProfile, lab_state: Option<&LabState>) -> Po
     if profile.connection_status == ConnectionStatus::PartiallyConnected
         || lab_state_has_status(lab_state, ConnectionStatus::PartiallyConnected)
     {
+        if !profile.polar_block_height_confirmed {
+            return PolarWizardStep::BlockHeight;
+        }
+
         return PolarWizardStep::Complete;
     }
 
@@ -875,6 +1158,16 @@ fn browser_origin_allows_polar_bridge() -> bool {
     true
 }
 
+fn is_bridge_connection_error(message: &str) -> bool {
+    message.contains("Cannot reach Polar bridge")
+        || message.contains("/health")
+        || message.contains("Failed to fetch")
+}
+
+fn bridge_step_error_message(_message: impl AsRef<str>) -> String {
+    "Error: Cannot connect to Polar, revisit OS step 04 for more info".to_string()
+}
+
 fn push_toast(
     mut toast: Signal<Option<Toast>>,
     mut sequence: Signal<u64>,
@@ -900,6 +1193,7 @@ fn restore_saved_setup(profile: &SetupProfile, lab_state: Option<&LabState>) {
 
 fn reset_to_bridge_url_step(mut profile: SetupProfile) -> SetupProfile {
     profile.connection_status = ConnectionStatus::NotConfigured;
+    profile.polar_block_height_confirmed = false;
     profile.last_verified_at = None;
     profile.polar_automation.network_id.clear();
     profile.polar_automation.bitcoin_backend_name = DEFAULT_BITCOIN_BACKEND_NAME.to_string();
@@ -910,6 +1204,7 @@ fn reset_to_bridge_url_step(mut profile: SetupProfile) -> SetupProfile {
 
 fn reset_to_server_name_step(mut profile: SetupProfile) -> SetupProfile {
     profile.connection_status = ConnectionStatus::SavedOffline;
+    profile.polar_block_height_confirmed = false;
     profile.last_verified_at = None;
     profile.polar_automation.network_id.clear();
     storage_service::save_setup_profile(&profile);
@@ -919,12 +1214,134 @@ fn reset_to_server_name_step(mut profile: SetupProfile) -> SetupProfile {
 
 fn reset_to_demo_nodes_step(mut profile: SetupProfile) -> SetupProfile {
     profile.connection_status = ConnectionStatus::SavedOffline;
+    profile.polar_block_height_confirmed = false;
     profile.last_verified_at = None;
+    if profile.polar_automation.network_id.trim().is_empty() {
+        profile.polar_automation.network_id = profile.network_name.trim().to_string();
+    }
 
     storage_service::save_setup_profile(&profile);
     storage_service::clear_lab_state_snapshot();
 
     profile
+}
+
+fn reset_to_block_height_step(mut profile: SetupProfile) -> SetupProfile {
+    profile.connection_status = ConnectionStatus::PartiallyConnected;
+    profile.polar_block_height_confirmed = false;
+    profile.last_verified_at = None;
+    storage_service::save_setup_profile(&profile);
+    profile
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::models::DEFAULT_NETWORK_NAME;
+
+    fn profile_with_status(status: ConnectionStatus, network_id: &str) -> SetupProfile {
+        let mut profile = SetupProfile::default();
+        profile.connection_status = status;
+        profile.network_name = DEFAULT_NETWORK_NAME.to_string();
+        profile.polar_automation.network_id = network_id.to_string();
+        profile
+    }
+
+    #[test]
+    fn polar_wizard_starts_at_bridge_url_until_bridge_connects() {
+        let profile = profile_with_status(ConnectionStatus::NotConfigured, "");
+
+        assert_eq!(
+            polar_wizard_step(&profile, None).order(),
+            PolarWizardStep::BridgeUrl.order()
+        );
+    }
+
+    #[test]
+    fn polar_wizard_advances_only_after_saved_bridge_state() {
+        let bridge_connected = profile_with_status(ConnectionStatus::SavedOffline, "");
+        let server_ready = profile_with_status(ConnectionStatus::SavedOffline, "network-1");
+        let mut demo_nodes_ready =
+            profile_with_status(ConnectionStatus::PartiallyConnected, "network-1");
+        let mut block_height_ready =
+            profile_with_status(ConnectionStatus::PartiallyConnected, "network-1");
+        block_height_ready.polar_block_height_confirmed = true;
+        let connected = profile_with_status(ConnectionStatus::Connected, "network-1");
+
+        assert_eq!(
+            polar_wizard_step(&bridge_connected, None).order(),
+            PolarWizardStep::ServerName.order()
+        );
+        assert_eq!(
+            polar_wizard_step(&server_ready, None).order(),
+            PolarWizardStep::DemoNodes.order()
+        );
+        assert_eq!(
+            polar_wizard_step(&demo_nodes_ready, None).order(),
+            PolarWizardStep::BlockHeight.order()
+        );
+        demo_nodes_ready.polar_block_height_confirmed = true;
+        assert_eq!(
+            polar_wizard_step(&demo_nodes_ready, None).order(),
+            PolarWizardStep::Complete.order()
+        );
+        assert_eq!(
+            polar_wizard_step(&block_height_ready, None).order(),
+            PolarWizardStep::Complete.order()
+        );
+        assert_eq!(
+            polar_wizard_step(&connected, None).order(),
+            PolarWizardStep::Done.order()
+        );
+    }
+
+    #[test]
+    fn complete_reset_returns_to_block_height() {
+        let mut profile = profile_with_status(ConnectionStatus::PartiallyConnected, "");
+        profile.polar_block_height_confirmed = true;
+        profile.network_name = DEFAULT_NETWORK_NAME.to_string();
+
+        let reset_profile = reset_to_block_height_step(profile);
+
+        assert_eq!(
+            polar_wizard_step(&reset_profile, None).order(),
+            PolarWizardStep::BlockHeight.order()
+        );
+        assert!(!reset_profile.polar_block_height_confirmed);
+    }
+
+    #[test]
+    fn complete_reset_focuses_step_four_primary_control() {
+        assert_eq!(complete_reset_focus_target(), "polar-block-height-input");
+    }
+
+    #[test]
+    fn block_height_accepts_zero() {
+        assert_eq!(block_height_from_input("0".to_string()), Ok(0));
+    }
+
+    #[test]
+    fn bridge_connection_errors_match_fetch_failures_from_later_steps() {
+        assert!(is_bridge_connection_error(
+            "error GET http://localhost:37373/health error=Cannot reach Polar bridge: TypeError: Failed to fetch"
+        ));
+        assert!(is_bridge_connection_error(
+            "Cannot reach Polar bridge: TypeError: Failed to fetch"
+        ));
+        assert!(!is_bridge_connection_error(
+            "Polar server bitcoin-network is not listed by that name."
+        ));
+    }
+
+    #[test]
+    fn bridge_step_error_points_back_to_localhost_step_one() {
+        let message = bridge_step_error_message("TypeError: Failed to fetch");
+
+        assert_eq!(
+            message,
+            "Error: Cannot connect to Polar, revisit OS step 04 for more info"
+        );
+    }
 }
 
 async fn create_demo_nodes_step(
@@ -933,9 +1350,13 @@ async fn create_demo_nodes_step(
     mut lab_state: Signal<Option<LabState>>,
     operation_prompt: Signal<Option<OperationPrompt>>,
     prompt_sequence: Signal<u64>,
+    toast: Signal<Option<Toast>>,
+    toast_sequence: Signal<u64>,
+    mut bridge_connection_error: Signal<String>,
     amount_text: String,
     polar_server_name: String,
     polar_bridge_url: String,
+    mut polar_block_height: Signal<String>,
 ) {
     is_busy.set(true);
     let previous_profile = setup_profile();
@@ -988,6 +1409,13 @@ async fn create_demo_nodes_step(
                                     false,
                                 )
                                 .await;
+                                close_operation_prompt(operation_prompt, operation_id);
+                                push_toast(
+                                    toast,
+                                    toast_sequence,
+                                    "Demo node creation canceled.",
+                                    ToastTone::Success,
+                                );
                             }
                             Err(message) => {
                                 setup_profile.set(state.profile.clone());
@@ -1003,32 +1431,56 @@ async fn create_demo_nodes_step(
                                     false,
                                 )
                                 .await;
+                                close_operation_prompt(operation_prompt, operation_id);
+                                push_toast(
+                                    toast,
+                                    toast_sequence,
+                                    "Cancel could not remove the created demo nodes.",
+                                    ToastTone::Error,
+                                );
                             }
                         }
                     } else {
                         setup_profile.set(state.profile.clone());
+                        polar_block_height.set(state.block_height.to_string());
                         lab_state.set(Some(state));
+                        close_operation_prompt(operation_prompt, operation_id);
+                        push_toast(toast, toast_sequence, "Demo nodes sent", ToastTone::Success);
+                        focus_step_control("polar-block-height-input").await;
+                    }
+                }
+                Err(message) => {
+                    if is_bridge_connection_error(&message) {
+                        let saved_profile = reset_to_bridge_url_step(setup_profile());
+                        setup_profile.set(saved_profile);
+                        lab_state.set(None);
+                        let message = bridge_step_error_message(message);
+                        bridge_connection_error.set(message.clone());
                         update_operation_prompt(
                             operation_prompt,
                             operation_id,
-                            "Server running. Alice, Bob, and Carol are running and funded.",
-                            ToastTone::Success,
+                            "Return to step 1 and connect to the Polar bridge before creating demo nodes.",
+                            ToastTone::Error,
                             false,
                             false,
                         )
                         .await;
+                        close_operation_prompt(operation_prompt, operation_id);
+                        push_toast(toast, toast_sequence, message, ToastTone::Error);
+                        focus_step_control("polar-bridge-url-input").await;
+                    } else {
+                        update_operation_prompt(
+                            operation_prompt,
+                            operation_id,
+                            message.clone(),
+                            ToastTone::Error,
+                            false,
+                            false,
+                        )
+                        .await;
+                        close_operation_prompt(operation_prompt, operation_id);
+                        push_toast(toast, toast_sequence, message, ToastTone::Error);
                     }
-                }
-                Err(message) => {
-                    update_operation_prompt(
-                        operation_prompt,
-                        operation_id,
-                        message,
-                        ToastTone::Error,
-                        false,
-                        false,
-                    )
-                    .await;
                 }
             }
         }
@@ -1036,12 +1488,14 @@ async fn create_demo_nodes_step(
             update_operation_prompt(
                 operation_prompt,
                 operation_id,
-                message,
+                message.clone(),
                 ToastTone::Error,
                 false,
                 false,
             )
             .await;
+            close_operation_prompt(operation_prompt, operation_id);
+            push_toast(toast, toast_sequence, message, ToastTone::Error);
         }
     }
 
@@ -1052,22 +1506,28 @@ async fn reset_complete_step(
     mut is_busy: Signal<bool>,
     mut setup_profile: Signal<SetupProfile>,
     mut lab_state: Signal<Option<LabState>>,
+    mut operation_prompt: Signal<Option<OperationPrompt>>,
     toast: Signal<Option<Toast>>,
     toast_sequence: Signal<u64>,
 ) {
     is_busy.set(true);
-    let saved_profile = reset_to_demo_nodes_step(setup_profile());
-    setup_profile.set(saved_profile);
-    lab_state.set(None);
+    operation_prompt.set(None);
+    let saved_profile = reset_to_block_height_step(setup_profile());
+    setup_profile.set(saved_profile.clone());
+    let current_lab_state = lab_state().or_else(storage_service::load_lab_state_snapshot);
+    if let Some(mut state) = current_lab_state {
+        state.profile = saved_profile;
+        storage_service::save_lab_state_snapshot(&state);
+        lab_state.set(Some(state));
+    }
     push_toast(
         toast,
         toast_sequence,
-        "Returned to step 3.",
+        "Returned to step 4.",
         ToastTone::Success,
     );
-    focus_step_control("polar-demo-nodes-submit").await;
-
     is_busy.set(false);
+    schedule_step_control_focus(complete_reset_focus_target());
 }
 
 async fn begin_operation_prompt(
@@ -1130,6 +1590,17 @@ fn update_operation_prompt_now(
             active_prompt.can_cancel = can_cancel;
             prompt.set(Some(active_prompt));
         }
+    }
+}
+
+fn close_operation_prompt(mut prompt: Signal<Option<OperationPrompt>>, operation_id: u64) {
+    if prompt
+        .peek()
+        .as_ref()
+        .map(|active_prompt| active_prompt.operation_id == operation_id)
+        .unwrap_or(false)
+    {
+        prompt.set(None);
     }
 }
 

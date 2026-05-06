@@ -2,11 +2,12 @@ use dioxus::prelude::dioxus_router::Navigator;
 use dioxus::prelude::*;
 use dioxus_i18n::t;
 
+use crate::client::components::game::LabStatusWidget;
 use crate::client::components::network::NetworkRouteVisual;
 use crate::client::components::toast::{OperationPrompt, Toast, ToastTone};
 use crate::client::models::{DemoNodeId, LabState, RouteStatus, SetupProfile};
 use crate::client::services::lightning_server_functions::{
-    create_invoice, create_invoice_and_maybe_autosend, get_lab_state_or_recover,
+    create_invoice, create_invoice_and_maybe_autosend, get_lab_state_or_recover, open_trade_route,
     pay_latest_invoice, recover_if_polar_lab_unhealthy, wait_for_next_block, PolarLabRecovery,
 };
 use crate::client::Route;
@@ -83,10 +84,9 @@ pub fn DebugNetwork() -> Element {
                         "Inspect nodes, trade routes, invoices, payments, balances, and which operations need Bitcoin blocks."
                     }
                 }
-                div { class: "status-card",
-                    span { class: "eyebrow", "Block height" }
-                    strong { "{state.block_height}" }
-                    p { "Regtest can mine the next block instantly when a pending channel needs confirmation." }
+                LabStatusWidget {
+                    sats_per_transaction: state.profile.sats_per_transaction,
+                    block_height: state.block_height,
                 }
             }
 
@@ -128,6 +128,37 @@ pub fn DebugNetwork() -> Element {
                             }
                             div { class: "button-row",
                                 button {
+                                    class: "primary-action",
+                                    r#type: "button",
+                                    disabled: is_busy() || route.status != RouteStatus::Missing,
+                                    onclick: move |_| {
+                                        let to_node = route.to_node;
+                                        async move {
+                                            is_busy.set(true);
+                                            match open_trade_route(setup_profile(), to_node).await {
+                                                Ok(next_state) => {
+                                                    lab_state.set(Some(next_state));
+                                                    push_toast(toast, toast_sequence, "Trade route is under construction.", ToastTone::Success);
+                                                }
+                                                Err(message) => handle_lab_action_error(
+                                                    setup_profile(),
+                                                    setup_profile,
+                                                    lab_state,
+                                                    toast,
+                                                    toast_sequence,
+                                                    operation_prompt,
+                                                    prompt_sequence,
+                                                    navigator,
+                                                    message,
+                                                )
+                                                .await,
+                                            }
+                                            is_busy.set(false);
+                                        }
+                                    },
+                                    "Open Trade Route"
+                                }
+                                button {
                                     class: "secondary-action",
                                     r#type: "button",
                                     disabled: is_busy() || !route.requires_next_block,
@@ -156,7 +187,7 @@ pub fn DebugNetwork() -> Element {
                                             is_busy.set(false);
                                         }
                                     },
-                                    "Wait for Next Block"
+                                    "Wait for Block {state.block_height.saturating_add(1)}"
                                 }
                                 button {
                                     class: "secondary-action",

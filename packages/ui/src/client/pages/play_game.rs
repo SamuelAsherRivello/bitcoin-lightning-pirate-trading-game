@@ -2,7 +2,7 @@ use dioxus::prelude::dioxus_router::Navigator;
 use dioxus::prelude::*;
 use dioxus_i18n::t;
 
-use crate::client::components::game::{HistoryItems, RouteSummary};
+use crate::client::components::game::{HistoryItems, LabStatusWidget, RouteSummary};
 use crate::client::components::toast::{OperationPrompt, Toast, ToastTone};
 use crate::client::models::{DemoNodeId, LabState, RouteStatus, SetupProfile};
 use crate::client::services::lightning_server_functions::{
@@ -72,6 +72,8 @@ pub fn PlayGame() -> Element {
         };
     };
 
+    let next_block_height = state.block_height.saturating_add(1);
+
     rsx! {
         main { class: "page-content lab-page play-page",
             section { class: "lab-hero",
@@ -79,13 +81,12 @@ pub fn PlayGame() -> Element {
                     span { class: "eyebrow", "Alice starts in Town" }
                     h1 { {t!("play-game-title")} }
                     p {
-                        "Open trade routes to Bob at the Beach and Carol at the Mountain. A route under construction needs Wait for Next Block; a purchase over an active route uses Lightning immediately."
+                        "Open trade routes to Bob at the Beach and Carol at the Mountain. A route under construction needs the next Bitcoin block; a purchase over an active route uses Lightning immediately."
                     }
                 }
-                div { class: "status-card",
-                    span { class: "eyebrow", "Trade amount" }
-                    strong { "{state.profile.sats_per_transaction} sats" }
-                    p { "Every purchase in this POC uses the configured demo amount." }
+                LabStatusWidget {
+                    sats_per_transaction: state.profile.sats_per_transaction,
+                    block_height: state.block_height,
                 }
             }
 
@@ -187,7 +188,7 @@ pub fn PlayGame() -> Element {
                                         is_busy.set(false);
                                     }
                                 },
-                                "Wait for Next Block"
+                                "Wait for Block {next_block_height}"
                             }
                             button {
                                 class: "secondary-action",

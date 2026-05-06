@@ -92,9 +92,35 @@ where
     )
     .await?;
 
-    let mut state = lightning_service::test_setup(profile).map_err(|error| error.to_string())?;
+    let state = lightning_service::test_setup(profile).map_err(|error| error.to_string())?;
+    let mut state = refresh_polar_block_height(state).await?;
     state.profile.connection_status = lightning_service::ConnectionStatus::PartiallyConnected;
-    let state = refresh_polar_block_height(state).await?;
+    state.profile.polar_block_height_confirmed = false;
+    storage_service::save_setup_profile(&state.profile);
+    storage_service::save_lab_state_snapshot(&state);
+    Ok(state)
+}
+
+pub async fn confirm_polar_block_height(
+    mut profile: SetupProfile,
+    block_height: u64,
+) -> Result<LabState, String> {
+    lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
+    let block_height = if should_read_polar(&profile) {
+        polar_bridge_service::set_blockchain_height(&profile.polar_automation, block_height).await?
+    } else {
+        block_height
+    };
+
+    profile.connection_status = lightning_service::ConnectionStatus::PartiallyConnected;
+    profile.polar_block_height_confirmed = true;
+    profile.last_verified_at = None;
+
+    let mut state = storage_service::load_lab_state_snapshot()
+        .unwrap_or_else(|| lightning_service::default_lab_state(profile.clone()));
+    state.profile = profile;
+    state.block_height = block_height;
+
     storage_service::save_setup_profile(&state.profile);
     storage_service::save_lab_state_snapshot(&state);
     Ok(state)
@@ -160,12 +186,12 @@ pub async fn lock_polar_setup_completion(mut profile: SetupProfile) -> Result<La
 pub async fn complete_polar_setup(mut profile: SetupProfile) -> Result<LabState, String> {
     lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
     profile.connection_status = lightning_service::ConnectionStatus::Connected;
+    profile.polar_block_height_confirmed = true;
     profile.last_verified_at = Some(chrono::Utc::now());
 
     let mut state = storage_service::load_lab_state_snapshot()
         .unwrap_or_else(|| lightning_service::default_lab_state(profile.clone()));
     state.profile = profile;
-    let state = refresh_polar_block_height(state).await?;
 
     storage_service::save_setup_profile(&state.profile);
     storage_service::save_lab_state_snapshot(&state);
@@ -224,6 +250,50 @@ pub async fn get_lab_state_or_recover(profile: SetupProfile) -> Result<LabState,
             PolarLabHealthIssue::BridgeUnavailable(message),
         )
         .await),
+    }
+}
+
+pub async fn resume_polar_setup_after_restart(
+    profile: SetupProfile,
+) -> Result<LabState, PolarLabRecovery> {
+    if profile.setup_mode != lightning_service::SetupMode::ServerConfig
+        || !profile.polar_automation.is_complete()
+    {
+        return Ok(lightning_service::default_lab_state(profile));
+    }
+
+    match polar_bridge_service::validate_lab_health(&profile.polar_automation).await {
+        Ok(report) => {
+            let mut saved_profile = profile;
+            saved_profile.polar_automation = report.profile;
+            saved_profile.connection_status = ConnectionStatus::Connected;
+            saved_profile.last_verified_at = Some(chrono::Utc::now());
+            let recovery_profile = saved_profile.clone();
+
+            let mut state = storage_service::load_lab_state_snapshot()
+                .unwrap_or_else(|| lightning_service::default_lab_state(saved_profile.clone()));
+            state.profile = saved_profile;
+            if let Some(block_height) = report.block_height {
+                state = if block_height > state.block_height {
+                    lightning_service::apply_external_block_height(state, block_height).map_err(
+                        |error| {
+                            recovery_for_issue(
+                                recovery_profile.clone(),
+                                PolarLabHealthIssue::BridgeUnavailable(error.to_string()),
+                            )
+                        },
+                    )?
+                } else {
+                    state.block_height = block_height;
+                    state
+                };
+            }
+
+            storage_service::save_setup_profile(&state.profile);
+            storage_service::save_lab_state_snapshot(&state);
+            Ok(state)
+        }
+        Err(issue) => Err(recover_from_polar_lab_issue(profile, issue).await),
     }
 }
 
