@@ -104,15 +104,15 @@ A learner opens `Home` to understand why the demo exists, Bitcoin, Lightning, th
 - **FR-007**: `Setup` MUST present a `Connection` section with `Polar Connection (Networked)` and `Mock Connection (Offline)` tabs, each with a short explanation and its relevant controls inside the selected tab panel.
 - **FR-008**: `Setup` MUST let the learner set `Sats per transaction`, defaulting to `1,000` sats.
 - **FR-009**: `Sats per transaction` MUST be a whole number between `1` and `100,000` sats for the demo.
-- **FR-010**: `Polar Connection (Networked)` MUST provide an `OS Setup` section with four numbered manual rows: install Docker, run Docker, install Polar, and run Polar. Only the words `Docker` and `Polar` in the install rows should be linked.
+- **FR-010**: `Polar Connection (Networked)` MUST provide a nested `1. Environment` tab with four numbered manual rows: install Docker, run Docker, install Polar, and run Polar. Only the words `Docker` and `Polar` in the install rows should be linked.
 - **FR-010a**: The Polar bridge URL field MUST include a visible `(i)` hover affordance with 5-10 words of field-specific help.
-- **FR-010b**: `Polar Setup` MUST render five numbered rows from the start: save Polar MCP bridge URL, ensure Polar server name, create 3 demo nodes, confirm or edit Block Height, and complete setup.
-- **FR-010c**: Each `Polar Setup` row MUST be a compact form row with label, `(i)` tooltip, prepopulated value field, and buttons.
-- **FR-010d**: `Polar Setup` MUST show `SUBMIT` for every row, enable only the current valid row, grey out future rows, show `RESET` next to steps 2, 3, 4, and 5, and return reset focus to the previous step.
+- **FR-010b**: The nested `2. Polar` tab MUST render five numbered rows from the start: save Polar MCP bridge URL, ensure Polar server name, create 3 demo nodes, confirm or edit Block Height, and complete setup.
+- **FR-010c**: Each `2. Polar` row MUST be a compact form row with label, `(i)` tooltip, prepopulated value field, and buttons.
+- **FR-010d**: `2. Polar` MUST show `SUBMIT` for every row, enable only the current valid row, grey out future rows, show `RESET` next to steps 2, 3, 4, and 5, and return reset focus to the previous step.
 - **FR-010e**: The Polar MCP bridge URL row MUST use the app-owned text field. The Polar server name row MUST use an app-owned text field and must ask the bridge to reuse the named server when it exists or create it when it does not.
-- **FR-010f**: The Block Height row MUST prepopulate from the current Polar block height after demo nodes are ready, allow the learner to enter a whole number including `0`, and save that value as the app's initial lab block height before unlock.
+- **FR-010f**: The Block Height row MUST prepopulate from the current Polar block height after demo nodes are ready, allow the learner to enter a whole number including `0`, and save that value as the app's initial lab block height before unlock without trying to lower Polar's actual chain height.
 - **FR-011**: The app MUST let the learner paste the Polar bridge URL in the UI instead of manually editing setup files.
-- **FR-012**: The setup guidance MUST only appear inside the selected `Polar Connection (Networked)` tab and should separate local `OS Setup` from app-driven `Polar Setup`.
+- **FR-012**: The setup guidance MUST only appear inside the selected `Polar Connection (Networked)` tab and should separate local `1. Environment` setup from app-driven `2. Polar` setup with nested tabs.
 - **FR-013**: The app MUST model Alice, Bob, and Carol as demo node personas, not production users.
 - **FR-014**: The app MUST treat Alice as the player, Bob as the Beach merchant, and Carol as the Mountain merchant.
 - **FR-015**: The game MUST use `Town`, `Beach`, `Mountain`, and optionally `Desert` as readable location labels.

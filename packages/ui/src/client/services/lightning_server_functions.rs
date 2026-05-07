@@ -1,5 +1,5 @@
 use crate::client::models::{
-    BlockWaitReason, ConnectionStatus, DemoNodeId, LabState, SetupProfile,
+    BlockWaitReason, ConnectionStatus, DemoNodeId, LabState, RouteStatus, SetupProfile,
     DEFAULT_BITCOIN_BACKEND_NAME, DEFAULT_ROUTE_CAPACITY_SATS,
 };
 use crate::client::services::{polar_bridge_service, storage_service};
@@ -73,6 +73,29 @@ pub async fn create_polar_demo_nodes(profile: SetupProfile) -> Result<LabState, 
     create_polar_demo_nodes_with_progress(profile, |_| {}).await
 }
 
+pub async fn close_polar_demo_channels(profile: SetupProfile) -> Result<SetupProfile, String> {
+    close_polar_demo_channels_with_progress(profile, |_| {}).await
+}
+
+pub async fn close_polar_demo_channels_with_progress<F>(
+    profile: SetupProfile,
+    report_progress: F,
+) -> Result<SetupProfile, String>
+where
+    F: FnMut(String),
+{
+    lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
+    let mut profile = profile;
+    profile.polar_automation = polar_bridge_service::close_demo_channels_with_progress(
+        &profile.polar_automation,
+        report_progress,
+    )
+    .await?;
+
+    storage_service::save_setup_profile(&profile);
+    Ok(profile)
+}
+
 pub async fn create_polar_demo_nodes_with_progress<F>(
     profile: SetupProfile,
     report_progress: F,
@@ -106,10 +129,10 @@ pub async fn confirm_polar_block_height(
     block_height: u64,
 ) -> Result<LabState, String> {
     lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
-    let block_height = if should_read_polar(&profile) {
-        polar_bridge_service::set_blockchain_height(&profile.polar_automation, block_height).await?
+    let polar_observed_block_height = if should_read_polar(&profile) {
+        Some(polar_bridge_service::get_blockchain_height(&profile.polar_automation).await?)
     } else {
-        block_height
+        None
     };
 
     profile.connection_status = lightning_service::ConnectionStatus::PartiallyConnected;
@@ -120,6 +143,7 @@ pub async fn confirm_polar_block_height(
         .unwrap_or_else(|| lightning_service::default_lab_state(profile.clone()));
     state.profile = profile;
     state.block_height = block_height;
+    state.polar_observed_block_height = polar_observed_block_height;
 
     storage_service::save_setup_profile(&state.profile);
     storage_service::save_lab_state_snapshot(&state);
@@ -225,7 +249,9 @@ pub async fn recover_if_polar_lab_unhealthy(profile: SetupProfile) -> Option<Pol
         return None;
     }
 
-    match polar_bridge_service::validate_lab_health(&profile.polar_automation).await {
+    match polar_bridge_service::validate_lab_health_verification_poll(&profile.polar_automation)
+        .await
+    {
         Ok(report) => {
             if report.profile != profile.polar_automation {
                 let mut saved_profile = profile;
@@ -265,28 +291,32 @@ pub async fn resume_polar_setup_after_restart(
     match polar_bridge_service::validate_lab_health(&profile.polar_automation).await {
         Ok(report) => {
             let mut saved_profile = profile;
+            let was_connected = saved_profile.connection_status == ConnectionStatus::Connected;
+            let block_height_was_confirmed = saved_profile.polar_block_height_confirmed;
             saved_profile.polar_automation = report.profile;
-            saved_profile.connection_status = ConnectionStatus::Connected;
-            saved_profile.last_verified_at = Some(chrono::Utc::now());
+            if was_connected {
+                saved_profile.connection_status = ConnectionStatus::Connected;
+                saved_profile.last_verified_at = Some(chrono::Utc::now());
+            } else {
+                saved_profile.last_verified_at = None;
+            }
             let recovery_profile = saved_profile.clone();
 
             let mut state = storage_service::load_lab_state_snapshot()
                 .unwrap_or_else(|| lightning_service::default_lab_state(saved_profile.clone()));
             state.profile = saved_profile;
-            if let Some(block_height) = report.block_height {
-                state = if block_height > state.block_height {
-                    lightning_service::apply_external_block_height(state, block_height).map_err(
-                        |error| {
-                            recovery_for_issue(
-                                recovery_profile.clone(),
-                                PolarLabHealthIssue::BridgeUnavailable(error.to_string()),
-                            )
-                        },
-                    )?
-                } else {
+            if let Some(block_height) = report.block_height.filter(|_| was_connected) {
+                state = reconcile_polar_block_height(state, block_height).map_err(|error| {
+                    recovery_for_issue(
+                        recovery_profile.clone(),
+                        PolarLabHealthIssue::BridgeUnavailable(error),
+                    )
+                })?;
+            } else if !block_height_was_confirmed {
+                if let Some(block_height) = report.block_height {
                     state.block_height = block_height;
-                    state
-                };
+                    state.polar_observed_block_height = Some(block_height);
+                }
             }
 
             storage_service::save_setup_profile(&state.profile);
@@ -302,13 +332,21 @@ pub async fn open_trade_route(
     to_node: DemoNodeId,
 ) -> Result<LabState, String> {
     let state = get_lab_state(profile).await?;
-    let state = lightning_service::open_trade_route(
-        state,
-        DemoNodeId::Alice,
-        to_node,
-        DEFAULT_ROUTE_CAPACITY_SATS,
-    )
-    .map_err(|error| error.to_string())?;
+    let route_capacity_sats = state.profile.sats_per_transaction.saturating_mul(3);
+    let state =
+        lightning_service::open_trade_route(state, DemoNodeId::Alice, to_node, route_capacity_sats)
+            .map_err(|error| error.to_string())?;
+    storage_service::save_lab_state_snapshot(&state);
+    Ok(state)
+}
+
+pub async fn close_trade_route(
+    profile: SetupProfile,
+    to_node: DemoNodeId,
+) -> Result<LabState, String> {
+    let state = get_lab_state(profile).await?;
+    let state = lightning_service::close_trade_route(state, DemoNodeId::Alice, to_node)
+        .map_err(|error| error.to_string())?;
     storage_service::save_lab_state_snapshot(&state);
     Ok(state)
 }
@@ -318,22 +356,34 @@ pub async fn wait_for_next_block(
     affected_route_id: Option<String>,
 ) -> Result<LabState, String> {
     let state = get_lab_state(profile).await?;
+    let reason = affected_route_id
+        .as_ref()
+        .and_then(|route_id| {
+            state
+                .trade_routes
+                .iter()
+                .find(|route| &route.route_id == route_id)
+        })
+        .map(|route| {
+            if route.status == RouteStatus::Closing {
+                BlockWaitReason::ChannelCloseConfirmation
+            } else {
+                BlockWaitReason::ChannelOpenConfirmation
+            }
+        })
+        .unwrap_or(BlockWaitReason::ChannelOpenConfirmation);
     let polar_height = if should_read_polar(&state.profile) {
         Some(polar_bridge_service::mine_blocks(&state.profile.polar_automation, 1).await?)
     } else {
         None
     };
-    let state = lightning_service::wait_for_next_block(
-        state,
-        BlockWaitReason::ChannelOpenConfirmation,
-        affected_route_id,
-    )
-    .map_err(|error| error.to_string())?;
+    let state = lightning_service::wait_for_next_block(state, reason, affected_route_id)
+        .map_err(|error| error.to_string())?;
     let mut state = state;
     if let Some(height) = polar_height {
-        state.block_height = height;
+        state.polar_observed_block_height = Some(height);
         if let Some(action) = state.block_actions.last_mut() {
-            action.resulting_height = Some(height);
+            action.resulting_height = Some(state.block_height);
         }
     }
     storage_service::save_lab_state_snapshot(&state);
@@ -549,22 +599,58 @@ mod tests {
         assert_eq!(recovery.profile.polar_automation.network_id, "1");
         assert!(recovery.lab_state.is_none());
     }
+
+    #[test]
+    fn polar_poll_preserves_user_block_height_baseline() {
+        let mut state = lightning_service::default_lab_state(connected_profile());
+        state.profile.polar_block_height_confirmed = true;
+        state.block_height = 0;
+        state.polar_observed_block_height = Some(300);
+
+        let state = reconcile_polar_block_height(state, 300).expect("same polar height");
+        assert_eq!(state.block_height, 0);
+        assert_eq!(state.polar_observed_block_height, Some(300));
+
+        let state = reconcile_polar_block_height(state, 301).expect("next polar height");
+        assert_eq!(state.block_height, 1);
+        assert_eq!(state.polar_observed_block_height, Some(301));
+    }
 }
 
 async fn refresh_polar_block_height(mut state: LabState) -> Result<LabState, String> {
     if should_read_polar(&state.profile) {
-        let previous_height = state.block_height;
-        let polar_height =
-            polar_bridge_service::get_blockchain_height(&state.profile.polar_automation).await?;
-        state = if polar_height > previous_height {
-            lightning_service::apply_external_block_height(state, polar_height)
-                .map_err(|error| error.to_string())?
+        let polar_height = polar_bridge_service::get_blockchain_height_verification_poll(
+            &state.profile.polar_automation,
+        )
+        .await?;
+        state = if state.profile.polar_block_height_confirmed {
+            reconcile_polar_block_height(state, polar_height)?
         } else {
             state.block_height = polar_height;
+            state.polar_observed_block_height = Some(polar_height);
             state
         };
     }
 
+    Ok(state)
+}
+
+fn reconcile_polar_block_height(
+    mut state: LabState,
+    polar_height: u64,
+) -> Result<LabState, String> {
+    let previous_observed_height = state
+        .polar_observed_block_height
+        .unwrap_or(state.block_height);
+
+    if polar_height > previous_observed_height {
+        let block_delta = polar_height - previous_observed_height;
+        let next_app_height = state.block_height.saturating_add(block_delta);
+        state = lightning_service::apply_external_block_height(state, next_app_height)
+            .map_err(|error| error.to_string())?;
+    }
+
+    state.polar_observed_block_height = Some(polar_height);
     Ok(state)
 }
 

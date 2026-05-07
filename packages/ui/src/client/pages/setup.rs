@@ -50,6 +50,39 @@ impl PolarWizardStep {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PolarConnectionTab {
+    Environment,
+    Polar,
+}
+
+impl PolarConnectionTab {
+    fn from_storage_value(value: impl AsRef<str>) -> Option<Self> {
+        match value.as_ref() {
+            "environment" => Some(Self::Environment),
+            "polar" => Some(Self::Polar),
+            _ => None,
+        }
+    }
+
+    fn load() -> Self {
+        storage_service::load_setup_polar_tab()
+            .and_then(Self::from_storage_value)
+            .unwrap_or(Self::Environment)
+    }
+
+    fn save(self) {
+        storage_service::save_setup_polar_tab(self.storage_value());
+    }
+
+    fn storage_value(self) -> &'static str {
+        match self {
+            Self::Environment => "environment",
+            Self::Polar => "polar",
+        }
+    }
+}
+
 #[component]
 pub fn SetUp() -> Element {
     let mut setup_profile = use_context::<Signal<SetupProfile>>();
@@ -60,6 +93,7 @@ pub fn SetUp() -> Element {
     let prompt_sequence = use_signal(|| 20_000_u64);
     let mut amount_text = use_signal(|| setup_profile().sats_per_transaction.to_string());
     let mut setup_mode = use_signal(|| setup_profile().setup_mode);
+    let mut polar_connection_tab = use_signal(PolarConnectionTab::load);
     let mut polar_bridge_url = use_signal(|| setup_profile().polar_automation.bridge_url.clone());
     let mut polar_server_name = use_signal(|| setup_profile().network_name.clone());
     let mut polar_block_height = use_signal(|| {
@@ -221,10 +255,40 @@ pub fn SetUp() -> Element {
                                     body: "Use only a local Polar regtest network. This is a demo not meant for mainnet.".to_string(),
                                 }
 
-                            section { class: "polar-setup-section",
-                                div { class: "section-heading",
-                                    h3 { "OS" }
+                                div { class: "polar-connection-tabs",
+                                    div { class: "segmented-control segmented-control--nested", role: "tablist", aria_label: "Polar setup",
+                                        button {
+                                            class: if polar_connection_tab() == PolarConnectionTab::Environment { "segment segment--active" } else { "segment" },
+                                            r#type: "button",
+                                            role: "tab",
+                                            aria_selected: if polar_connection_tab() == PolarConnectionTab::Environment { "true" } else { "false" },
+                                            onclick: move |_| {
+                                                let tab = PolarConnectionTab::Environment;
+                                                polar_connection_tab.set(tab);
+                                                tab.save();
+                                            },
+                                            "1. Environment"
+                                        }
+                                        button {
+                                            class: if polar_connection_tab() == PolarConnectionTab::Polar { "segment segment--active" } else { "segment" },
+                                            r#type: "button",
+                                            role: "tab",
+                                            aria_selected: if polar_connection_tab() == PolarConnectionTab::Polar { "true" } else { "false" },
+                                            onclick: move |_| {
+                                                let tab = PolarConnectionTab::Polar;
+                                                polar_connection_tab.set(tab);
+                                                tab.save();
+                                            },
+                                            "2. Polar"
+                                        }
+                                    }
                                 }
+
+                            if polar_connection_tab() == PolarConnectionTab::Environment {
+                            section {
+                                class: "polar-setup-section polar-connection-tab-panel",
+                                role: "tabpanel",
+                                aria_label: "1. Environment",
                                     p { class: "connection-tab-copy",
                                         "Prepare the local apps before continuing with App Setup."
                                     }
@@ -279,11 +343,13 @@ pub fn SetUp() -> Element {
                                         }
                                     }
                                 }
+                            }
 
-                            section { class: "app-setup-section",
-                                div { class: "section-heading",
-                                    h3 { "Polar" }
-                                }
+                            if polar_connection_tab() == PolarConnectionTab::Polar {
+                            section {
+                                class: "app-setup-section polar-connection-tab-panel",
+                                role: "tabpanel",
+                                aria_label: "2. Polar",
                                     InstructionList {
                                         Instruction {
                                             id: "polar-step-bridge-url".to_string(),
@@ -611,7 +677,7 @@ pub fn SetUp() -> Element {
                                             id: "polar-step-block-height".to_string(),
                                             class: wizard_step_class(active_step, PolarWizardStep::BlockHeight).to_string(),
                                             number: 4,
-                                            info: "Defaults to Polar's current block height; edit it for the app baseline".to_string(),
+                                            info: "Populated from the current Polar block height".to_string(),
                                             name: rsx! { "Block Height" },
                                             value: Some(rsx! {
                                                 label { class: "setup-field-row",
@@ -621,8 +687,8 @@ pub fn SetUp() -> Element {
                                                         min: "0",
                                                         step: "1",
                                                         value: polar_block_height(),
+                                                        readonly: true,
                                                         disabled: active_step != PolarWizardStep::BlockHeight,
-                                                        oninput: move |event| polar_block_height.set(event.value()),
                                                     }
                                                 }
                                             }),
@@ -658,7 +724,7 @@ pub fn SetUp() -> Element {
                                                                     update_operation_prompt(
                                                                         operation_prompt,
                                                                         operation_id,
-                                                                        format!("Asking Polar to reach block {block_height}..."),
+                                                                        format!("Saving app baseline block height {block_height}..."),
                                                                         ToastTone::Info,
                                                                         true,
                                                                         false,
@@ -669,12 +735,13 @@ pub fn SetUp() -> Element {
                                                                         update_operation_prompt(
                                                                             operation_prompt,
                                                                             operation_id,
-                                                                            format!("Polar is set to block {}.", state.block_height),
+                                                                            format!("Block Height saved as {block_height}."),
                                                                             ToastTone::Info,
                                                                             true,
                                                                             false,
                                                                         )
                                                                         .await;
+                                                                        polar_block_height.set(state.block_height.to_string());
                                                                         setup_profile.set(state.profile.clone());
                                                                         lab_state.set(Some(state));
                                                                         close_operation_prompt(operation_prompt, operation_id);
@@ -844,6 +911,7 @@ pub fn SetUp() -> Element {
                         }
                     }
                 }
+            }
             }
             if show_complete_reset_confirm() {
                 CompleteResetConfirmationPrompt {
@@ -1165,7 +1233,7 @@ fn is_bridge_connection_error(message: &str) -> bool {
 }
 
 fn bridge_step_error_message(_message: impl AsRef<str>) -> String {
-    "Error: Cannot connect to Polar, revisit OS step 04 for more info".to_string()
+    "Error: Cannot connect to Polar, revisit 1. Environment step 04 for more info".to_string()
 }
 
 fn push_toast(
@@ -1339,8 +1407,26 @@ mod tests {
 
         assert_eq!(
             message,
-            "Error: Cannot connect to Polar, revisit OS step 04 for more info"
+            "Error: Cannot connect to Polar, revisit 1. Environment step 04 for more info"
         );
+    }
+
+    #[test]
+    fn polar_connection_tab_storage_values_round_trip() {
+        assert_eq!(
+            PolarConnectionTab::from_storage_value("environment"),
+            Some(PolarConnectionTab::Environment)
+        );
+        assert_eq!(
+            PolarConnectionTab::from_storage_value("polar"),
+            Some(PolarConnectionTab::Polar)
+        );
+        assert_eq!(PolarConnectionTab::from_storage_value("unknown"), None);
+        assert_eq!(
+            PolarConnectionTab::Environment.storage_value(),
+            "environment"
+        );
+        assert_eq!(PolarConnectionTab::Polar.storage_value(), "polar");
     }
 }
 

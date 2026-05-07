@@ -84,6 +84,14 @@ pub fn clear_lab_state_snapshot() {
     platform::clear_lab_state_snapshot();
 }
 
+pub fn load_setup_polar_tab() -> Option<String> {
+    platform::load_setup_polar_tab()
+}
+
+pub fn save_setup_polar_tab(tab: &str) {
+    platform::save_setup_polar_tab(tab);
+}
+
 #[cfg(target_arch = "wasm32")]
 pub fn load_template_data_snapshot() -> Option<TemplateDataLoadResult> {
     platform::load_template_data_snapshot()
@@ -105,6 +113,7 @@ mod platform {
     const THEME_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:theme";
     const LANGUAGE_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:language";
     const SETUP_PROFILE_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:setup-profile";
+    const SETUP_POLAR_TAB_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:setup-polar-tab";
     const LAB_STATE_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:lab-state";
 
     pub fn load_theme() -> Option<Theme> {
@@ -197,6 +206,21 @@ mod platform {
         };
 
         let _ = storage.remove_item(LAB_STATE_STORAGE_KEY);
+    }
+
+    pub fn load_setup_polar_tab() -> Option<String> {
+        local_storage()?
+            .get_item(SETUP_POLAR_TAB_STORAGE_KEY)
+            .ok()
+            .flatten()
+    }
+
+    pub fn save_setup_polar_tab(tab: &str) {
+        let Some(storage) = local_storage() else {
+            return;
+        };
+
+        let _ = storage.set_item(SETUP_POLAR_TAB_STORAGE_KEY, tab);
     }
 
     pub fn load_template_data_snapshot() -> Option<TemplateDataLoadResult> {
@@ -296,6 +320,20 @@ mod platform {
         let _ = fs::remove_file(lab_state_path());
     }
 
+    pub fn load_setup_polar_tab() -> Option<String> {
+        fs::read_to_string(setup_polar_tab_path()).ok()
+    }
+
+    pub fn save_setup_polar_tab(tab: &str) {
+        let path = setup_polar_tab_path();
+
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        let _ = fs::write(path, tab);
+    }
+
     fn settings_path() -> PathBuf {
         std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
@@ -315,6 +353,13 @@ mod platform {
             .unwrap_or_else(|_| PathBuf::from("."))
             .join("data")
             .join("setup-profile.json")
+    }
+
+    fn setup_polar_tab_path() -> PathBuf {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("data")
+            .join("setup-polar-tab.txt")
     }
 
     fn lab_state_path() -> PathBuf {

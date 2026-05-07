@@ -82,6 +82,7 @@ pub fn default_lab_state(profile: SetupProfile) -> LabState {
         block_actions: Vec::new(),
         operation_faq: get_operation_faq(),
         block_height: 0,
+        polar_observed_block_height: None,
         warnings: Vec::new(),
         action_log: Vec::new(),
     }
@@ -97,7 +98,10 @@ pub fn open_trade_route(
 
     let next_height = state.block_height + 1;
     let route = route_mut(&mut state, from_node, to_node)?;
-    if route.status == RouteStatus::Active || route.status == RouteStatus::UnderConstruction {
+    if matches!(
+        route.status,
+        RouteStatus::Active | RouteStatus::UnderConstruction | RouteStatus::Closing
+    ) {
         return Err(LightningError::RouteAlreadyExists);
     }
 
@@ -115,9 +119,37 @@ pub fn open_trade_route(
 
     push_log(
         &mut state,
-        &format!("Opened {} trade route", to_node.label()),
-        "Channel open started. The route is under construction until block 234.",
+        &format!("Opened {} trade", to_node.label()),
+        "Channel open started. The trade is under construction until the next block.",
         &["Channel Open Request"],
+    );
+
+    Ok(state)
+}
+
+pub fn close_trade_route(
+    mut state: LabState,
+    from_node: DemoNodeId,
+    to_node: DemoNodeId,
+) -> Result<LabState, LightningError> {
+    ensure_connected(&state)?;
+
+    let route = route_mut(&mut state, from_node, to_node)?;
+    if route.status == RouteStatus::Closing || route.status == RouteStatus::Closed {
+        return Err(LightningError::RouteAlreadyClosing);
+    }
+    if route.status != RouteStatus::Active {
+        return Err(LightningError::RouteNotActive);
+    }
+
+    route.status = RouteStatus::Closing;
+    route.requires_next_block = true;
+
+    push_log(
+        &mut state,
+        &format!("Closed {} trade", to_node.label()),
+        "Channel close started. Mine the next block to finish closing the Lightning channel.",
+        &["Channel Close Request"],
     );
 
     Ok(state)
@@ -131,17 +163,26 @@ pub fn wait_for_next_block(
     ensure_connected(&state)?;
 
     state.block_height += 1;
-    let mut activated_routes = Vec::new();
+    let mut completed_trades = Vec::new();
     for route in &mut state.trade_routes {
         let affects_route = affected_route_id
             .as_ref()
             .map(|id| id == &route.route_id)
             .unwrap_or(true);
 
-        if affects_route && route.status == RouteStatus::UnderConstruction {
-            route.status = RouteStatus::Active;
-            route.requires_next_block = false;
-            activated_routes.push(route.game_label.clone());
+        if affects_route {
+            if route.status == RouteStatus::UnderConstruction {
+                route.status = RouteStatus::Active;
+                route.requires_next_block = false;
+                completed_trades.push(route.game_label.clone());
+            } else if route.status == RouteStatus::Closing {
+                route.status = RouteStatus::Closed;
+                route.requires_next_block = false;
+                route.lnd_channel_point = None;
+                route.local_balance_sats = 0;
+                route.remote_balance_sats = 0;
+                completed_trades.push(route.game_label.clone());
+            }
         }
     }
 
@@ -155,16 +196,22 @@ pub fn wait_for_next_block(
     };
     state.block_actions.push(action);
 
-    let detail = if activated_routes.is_empty() {
-        "Regtest mined one block instantly. No pending route changed state.".to_string()
+    let detail = if completed_trades.is_empty() {
+        "Regtest mined one block instantly. No pending channel changed state.".to_string()
     } else {
         format!(
-            "Regtest mined one block instantly. Active routes: {}.",
-            activated_routes.join(", ")
+            "Regtest mined one block instantly. Completed channel updates: {}.",
+            completed_trades.join(", ")
         )
     };
-    let details = if activated_routes.is_empty() {
+    let details = if completed_trades.is_empty() {
         vec!["Block Mined"]
+    } else if reason == BlockWaitReason::ChannelCloseConfirmation {
+        vec![
+            "Channel Close Request",
+            "Block Mined",
+            "Channel Close Complete",
+        ]
     } else {
         vec![
             "Channel Open Request",
@@ -191,16 +238,16 @@ pub fn apply_external_block_height(
     let previous_height = state.block_height;
     state.block_height = observed_height;
 
-    let mut activated_routes = Vec::new();
+    let mut activated_trades = Vec::new();
     for route in &mut state.trade_routes {
         if route.status == RouteStatus::UnderConstruction && route.requires_next_block {
             route.status = RouteStatus::Active;
             route.requires_next_block = false;
-            activated_routes.push(route.game_label.clone());
+            activated_trades.push(route.game_label.clone());
         }
     }
 
-    if activated_routes.is_empty() {
+    if activated_trades.is_empty() {
         return Ok(state);
     }
 
@@ -215,8 +262,8 @@ pub fn apply_external_block_height(
     state.block_actions.push(action);
 
     let detail = format!(
-        "Polar reached block {observed_height}. Active routes: {}.",
-        activated_routes.join(", ")
+        "Polar reached block {observed_height}. Active trades: {}.",
+        activated_trades.join(", ")
     );
     push_log(
         &mut state,
@@ -310,7 +357,7 @@ pub fn pay_invoice(
     push_log(
         &mut state,
         &format!("{} paid {}", payer_node.label(), payee_node.label()),
-        &format!("Paid {amount_sats} sats over an active Lightning route. No new Bitcoin block was required."),
+        &format!("Paid {amount_sats} sats over an active Lightning channel. No new Bitcoin block was required."),
         &["Invoice Sent", "Invoice Paid"],
     );
 
@@ -353,14 +400,14 @@ pub fn get_operation_faq() -> Vec<OperationFaqRow> {
             needs_bitcoin_node: true,
             needs_mined_block: false,
             plain_explanation: "The receiving LND node creates a Lightning payment request.".to_string(),
-            game_example: Some("Bob asks Alice to pay for a beach item.".to_string()),
+            game_example: Some("The NPC asks the player to pay for a book.".to_string()),
         },
         OperationFaqRow {
             operation: "Pay invoice".to_string(),
             needs_bitcoin_node: true,
             needs_mined_block: false,
             plain_explanation: "Payment uses an active Lightning channel and settles without waiting for a new block.".to_string(),
-            game_example: Some("Alice pays Bob after the route is active.".to_string()),
+            game_example: Some("The player pays the NPC after the trade is active.".to_string()),
         },
         OperationFaqRow {
             operation: "Fund wallet".to_string(),
@@ -374,14 +421,14 @@ pub fn get_operation_faq() -> Vec<OperationFaqRow> {
             needs_bitcoin_node: true,
             needs_mined_block: true,
             plain_explanation: "The channel opening transaction must confirm before Lightning payments can use it.".to_string(),
-            game_example: Some("Open Trade Route starts construction.".to_string()),
+            game_example: Some("Open Trade starts channel construction.".to_string()),
         },
         OperationFaqRow {
             operation: "Close channel".to_string(),
             needs_bitcoin_node: true,
             needs_mined_block: true,
             plain_explanation: "Closing returns funds on chain and needs a Bitcoin confirmation for finality.".to_string(),
-            game_example: Some("A finished route exits back to the chain.".to_string()),
+            game_example: Some("Close Trade exits the channel back to the chain.".to_string()),
         },
         OperationFaqRow {
             operation: "Check payment status".to_string(),
@@ -395,7 +442,7 @@ pub fn get_operation_faq() -> Vec<OperationFaqRow> {
             needs_bitcoin_node: true,
             needs_mined_block: true,
             plain_explanation: "Mainnet blocks arrive about every 10 minutes on average; regtest can mine one instantly.".to_string(),
-            game_example: Some("A route under construction becomes active.".to_string()),
+            game_example: Some("A trade under construction becomes active.".to_string()),
         },
     ]
 }
@@ -457,7 +504,7 @@ fn missing_route(from_node: DemoNodeId, to_node: DemoNodeId) -> TradeRoute {
         route_id: route_id(from_node, to_node),
         from_node,
         to_node,
-        game_label: format!("{} to {} trade route", from_node.label(), to_node.label()),
+        game_label: format!("{} to {} trade", from_node.label(), to_node.label()),
         lnd_channel_point: None,
         capacity_sats: DEFAULT_ROUTE_CAPACITY_SATS,
         local_balance_sats: 0,
@@ -576,5 +623,40 @@ mod tests {
         assert!(!state.trade_routes[0].requires_next_block);
         assert_eq!(state.block_actions[0].resulting_height, Some(234));
         assert_eq!(state.action_log[0].summary, "Detected Polar block");
+    }
+
+    #[test]
+    fn next_block_closes_closing_trade_route() {
+        let state = default_lab_state(connected_profile());
+        let state = open_trade_route(
+            state,
+            DemoNodeId::Alice,
+            DemoNodeId::Bob,
+            DEFAULT_ROUTE_CAPACITY_SATS,
+        )
+        .expect("open route");
+        let state = wait_for_next_block(
+            state,
+            BlockWaitReason::ChannelOpenConfirmation,
+            Some("alice-bob".to_string()),
+        )
+        .expect("activate route");
+        let state =
+            close_trade_route(state, DemoNodeId::Alice, DemoNodeId::Bob).expect("close route");
+
+        assert_eq!(state.trade_routes[0].status, RouteStatus::Closing);
+        assert!(state.trade_routes[0].requires_next_block);
+
+        let state = wait_for_next_block(
+            state,
+            BlockWaitReason::ChannelCloseConfirmation,
+            Some("alice-bob".to_string()),
+        )
+        .expect("finish close");
+
+        assert_eq!(state.trade_routes[0].status, RouteStatus::Closed);
+        assert!(!state.trade_routes[0].requires_next_block);
+        assert_eq!(state.trade_routes[0].local_balance_sats, 0);
+        assert_eq!(state.trade_routes[0].remote_balance_sats, 0);
     }
 }

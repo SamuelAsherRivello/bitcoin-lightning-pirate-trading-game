@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420" role="img" aria-label="Ocean background">
+  <defs>
+    <linearGradient id="sea" x1="1" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#bae6fd" stop-opacity=".84"/>
+      <stop offset=".42" stop-color="#0ea5e9" stop-opacity=".45"/>
+      <stop offset="1" stop-color="#0f172a" stop-opacity=".25"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="420" fill="url(#sea)" opacity=".9"/>
+  <path d="M800 226 C690 186 604 214 502 176 C402 138 300 168 198 130 L198 420 L800 420Z" fill="#0369a1" opacity=".4"/>
+  <path d="M800 292 C692 254 586 282 476 246 C364 208 262 238 160 204 L160 420 L800 420Z" fill="#075985" opacity=".5"/>
+  <path d="M800 326 L0 292 L0 420 L800 420Z" fill="#0c4a6e" opacity=".4"/>
+  <path d="M338 210 C400 190 462 230 524 210 C588 190 650 232 716 208" fill="none" stroke="#e0f2fe" stroke-width="8" stroke-linecap="round" opacity=".7"/>
+  <path d="M430 264 C488 246 546 282 606 262 C662 244 712 278 770 260" fill="none" stroke="#bae6fd" stroke-width="6" stroke-linecap="round" opacity=".65"/>
+</svg>

@@ -26,11 +26,14 @@ pub enum LightningError {
     #[error("Setup must be connected before this action can run.")]
     SetupIncomplete,
 
-    #[error("The selected trade route is already active or under construction.")]
+    #[error("The selected trade is already active, closing, or under construction.")]
     RouteAlreadyExists,
 
-    #[error("The selected trade route is not active yet. Use Wait for Next Block first.")]
+    #[error("The selected trade is not active yet. Use Wait for Next Block first.")]
     RouteNotActive,
+
+    #[error("The selected trade is already closed or closing.")]
+    RouteAlreadyClosing,
 
     #[error(
         "The selected trade route does not have enough outbound liquidity for this demo payment."

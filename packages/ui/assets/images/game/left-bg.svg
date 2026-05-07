@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420" role="img" aria-label="Left canyon market background">
+  <defs>
+    <linearGradient id="sky" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#7c2d12" stop-opacity=".82"/>
+      <stop offset=".48" stop-color="#f6ad55" stop-opacity=".46"/>
+      <stop offset="1" stop-color="#1f2937" stop-opacity=".15"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="420" fill="url(#sky)" opacity=".82"/>
+  <path d="M0 270 C120 190 205 220 320 136 C420 66 534 98 620 38 L620 420 L0 420Z" fill="#9a3412" opacity=".56"/>
+  <path d="M0 322 C100 260 208 290 322 220 C430 154 528 190 632 128 L632 420 L0 420Z" fill="#7c2d12" opacity=".48"/>
+  <path d="M0 40 L220 0 L196 92 L0 104Z" fill="#7f1d1d" opacity=".64"/>
+  <path d="M0 300 L800 250 L800 420 L0 420Z" fill="#451a03" opacity=".25"/>
+</svg>

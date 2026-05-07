@@ -51,7 +51,7 @@ This quickstart describes the target workflow for validating the feature after i
 7. Open `Set Up`.
 8. In `Setup`, enter or confirm:
    - `Sats per transaction`: `1,000`.
-   - `Polar Connection (Networked)`: selected by default, with `OS Setup` showing install/run steps for Docker and Polar and `Polar Setup` showing compact form rows; the app saves the bridge URL, reuses or creates the named Polar server, discovers the backend for demo-node creation, and prepopulates an editable Block Height row from Polar.
+   - `Polar Connection (Networked)`: selected by default, with nested `1. Environment` and `2. Polar` tabs. `1. Environment` shows install/run steps for Docker and Polar, and `2. Polar` shows compact form rows; the app saves the bridge URL, reuses or creates the named Polar server, discovers the backend for demo-node creation, and prepopulates an editable Block Height row from Polar.
    - `Mock Connection (Offline)`: the fake-data callout is visible after switching tabs.
 9. Click the enabled `SUBMIT` buttons in order: save Polar MCP bridge URL, ensure Polar server name, create 3 demo nodes, confirm or edit Block Height, and complete setup. `RESET` returns to the previous step.
 10. Confirm Alice, Bob, and Carol are created, started, funded, and gameplay unlocks only after `Complete Setup`.

@@ -3,12 +3,19 @@ use dioxus::prelude::*;
 use crate::client::components::help::FieldHelpIcon;
 use crate::client::models::{ActionLogEntry, TradeRoute};
 
+mod game_view;
+
+pub use game_view::{
+    GameAnimation, GameChannelAnimation, GameChannelVisual, GameInventorySlot, GameSide, GameView,
+    GameViewConfig,
+};
+
 #[component]
 pub fn LabStatusWidget(sats_per_transaction: u64, block_height: u64) -> Element {
     rsx! {
         div { class: "status-card",
             div { class: "status-card__metric",
-                span { class: "eyebrow", "Trade amount" }
+                span { class: "eyebrow", "Trade Route amount" }
                 div { class: "status-card__value",
                     strong { "{sats_per_transaction} sats" }
                     FieldHelpIcon { label: "Every purchase in this POC uses the configured demo amount.".to_string() }
@@ -37,7 +44,7 @@ pub fn HistoryItems(entries: Vec<ActionLogEntry>) -> Element {
                 span { class: "history-details-heading", "Details" }
             }
             if entries.is_empty() {
-                p { class: "muted-copy", "Game actions will appear here after setup, route building, invoice creation, and payments." }
+                p { class: "muted-copy", "Game actions will appear here after setup, trade opening, block waits, invoice creation, payments, and trade closing." }
             } else {
                 div { class: "history-items",
                     for entry in entries {
@@ -108,8 +115,8 @@ pub fn RouteSummary(route: TradeRoute) -> Element {
     rsx! {
         div { class: "route-summary",
             div {
-                span { class: "eyebrow", "{route.to_node.location().label()}" }
-                strong { "{route.game_label}" }
+                span { class: "eyebrow", "Lightning trade" }
+                strong { "Player to {route.to_node.label()}" }
             }
             span { class: "status-pill", "{route.status.label()}" }
         }

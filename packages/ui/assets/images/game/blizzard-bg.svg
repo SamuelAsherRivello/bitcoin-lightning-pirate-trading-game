@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420" role="img" aria-label="Blizzard background">
+  <defs>
+    <linearGradient id="sky" x1="1" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#e0f2fe" stop-opacity=".86"/>
+      <stop offset=".48" stop-color="#93c5fd" stop-opacity=".5"/>
+      <stop offset="1" stop-color="#1e3a8a" stop-opacity=".24"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="420" fill="url(#sky)" opacity=".9"/>
+  <path d="M800 252 C670 148 586 196 474 104 C378 26 286 74 190 18 L190 420 L800 420Z" fill="#bfdbfe" opacity=".58"/>
+  <path d="M800 326 C690 266 588 290 472 226 C360 166 282 196 184 142 L184 420 L800 420Z" fill="#60a5fa" opacity=".32"/>
+  <path d="M800 304 L0 256 L0 420 L800 420Z" fill="#dbeafe" opacity=".52"/>
+  <g fill="#eff6ff" opacity=".7">
+    <circle cx="640" cy="72" r="5"/><circle cx="704" cy="128" r="4"/><circle cx="544" cy="160" r="3"/><circle cx="396" cy="88" r="4"/>
+  </g>
+</svg>

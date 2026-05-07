@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 220" role="img" aria-label="Pending Lightning channel">
+  <defs>
+    <filter id="glow" x="-10%" y="-80%" width="120%" height="260%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <path d="M60 132 L940 132" fill="none" stroke="#f97316" stroke-width="12" stroke-linecap="round" stroke-dasharray="2 34" opacity=".58" filter="url(#glow)"/>
+  <path d="M60 132 L940 132" fill="none" stroke="#fff7ed" stroke-width="4" stroke-linecap="round" stroke-dasharray="2 30"/>
+  <circle cx="60" cy="132" r="18" fill="#facc15"/>
+  <circle cx="940" cy="132" r="18" fill="#facc15"/>
+</svg>

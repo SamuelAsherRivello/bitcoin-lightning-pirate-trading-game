@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 110" role="img" aria-label="Wallet">
+  <path d="M36 34c2-18 14-29 28-29s26 11 28 29" fill="none" stroke="#92400e" stroke-width="10" stroke-linecap="round"/>
+  <path d="M18 34h84l-8 62H26Z" fill="#92400e"/>
+  <path d="M28 46h64v38H28Z" fill="#b45309"/>
+  <path d="M58 54h10v18H58Z" fill="#facc15"/>
+  <path d="M36 34h56" stroke="#451a03" stroke-width="6" stroke-linecap="round"/>
+</svg>

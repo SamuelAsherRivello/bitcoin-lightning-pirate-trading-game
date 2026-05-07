@@ -457,6 +457,8 @@ pub struct LabState {
     pub block_actions: Vec<BlockWaitAction>,
     pub operation_faq: Vec<OperationFaqRow>,
     pub block_height: u64,
+    #[serde(default)]
+    pub polar_observed_block_height: Option<u64>,
     pub warnings: Vec<String>,
     pub action_log: Vec<ActionLogEntry>,
 }

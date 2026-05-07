@@ -13,7 +13,20 @@ const DEMO_NODE_START_ATTEMPTS: u16 = DEMO_NODE_START_TIMEOUT_SECONDS / 2;
 const DEMO_NODE_START_DELAY_MS: u32 = 2_000;
 const DEMO_NODE_READY_ATTEMPTS: u8 = 20;
 const DEMO_NODE_READY_DELAY_MS: u32 = 750;
-const LOG_SERVICE_CALLS_TO_TERMINAL: bool = true;
+const DEMO_SERVICE_LOG_LEVEL: DemoLogLevel = DemoLogLevel::On;
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum DemoLogLevel {
+    Off,
+    On,
+    Verbose,
+}
+
+impl DemoLogLevel {
+    fn allows(self, required: Self) -> bool {
+        self >= required && self != Self::Off
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PolarServerEnsureStatus {
@@ -97,7 +110,14 @@ enum DemoNodeFundingPlan {
 }
 
 pub async fn test_bridge(profile: &PolarAutomationProfile) -> Result<(), String> {
-    let response = get_json(profile, "/health").await?;
+    test_bridge_with_log_level(profile, DemoLogLevel::On).await
+}
+
+async fn test_bridge_with_log_level(
+    profile: &PolarAutomationProfile,
+    log_level: DemoLogLevel,
+) -> Result<(), String> {
+    let response = get_json(profile, "/health", log_level).await?;
     let status = response
         .get("status")
         .and_then(Value::as_str)
@@ -183,6 +203,8 @@ where
     let network_id = clean_network_id(&resolved_profile);
     let backend_name = clean_backend_name(&resolved_profile);
 
+    close_demo_channels_with_progress(&resolved_profile, &mut report_progress).await?;
+
     for node_id in DemoNodeId::ALL {
         report_progress(format!("Preparing {} in Polar...", node_id.label()));
         let funding_plan = create_or_prepare_demo_node(
@@ -229,35 +251,72 @@ where
     Ok(resolved_profile)
 }
 
-pub async fn get_blockchain_height(profile: &PolarAutomationProfile) -> Result<u64, String> {
+pub async fn close_demo_channels(
+    profile: &PolarAutomationProfile,
+) -> Result<PolarAutomationProfile, String> {
+    close_demo_channels_with_progress(profile, |_| {}).await
+}
+
+pub async fn close_demo_channels_with_progress<F>(
+    profile: &PolarAutomationProfile,
+    mut report_progress: F,
+) -> Result<PolarAutomationProfile, String>
+where
+    F: FnMut(String),
+{
     let resolved_profile = resolve_started_automation_profile(profile).await?;
+    let network_id = clean_network_id(&resolved_profile);
+    let mut closed_channel_points = HashSet::new();
+
+    report_progress("Checking demo player channels...".to_string());
+
+    for node_id in DemoNodeId::ALL {
+        let node_name = polar_node_name(node_id);
+        let channels = list_node_channels(&resolved_profile, &network_id, node_name).await?;
+
+        for channel_point in extract_channel_points(&channels) {
+            if !closed_channel_points.insert(channel_point.clone()) {
+                continue;
+            }
+
+            report_progress(format!(
+                "Closing channel {channel_point} from {}...",
+                node_id.label()
+            ));
+            close_node_channel(&resolved_profile, &network_id, node_name, &channel_point).await?;
+        }
+    }
+
+    if closed_channel_points.is_empty() {
+        report_progress("No demo player channels needed closing.".to_string());
+    } else {
+        report_progress(format!(
+            "Closed {} demo player channel(s).",
+            closed_channel_points.len()
+        ));
+    }
+
+    Ok(resolved_profile)
+}
+
+pub async fn get_blockchain_height(profile: &PolarAutomationProfile) -> Result<u64, String> {
+    let resolved_profile =
+        resolve_started_automation_profile_with_log_level(profile, DemoLogLevel::On).await?;
     get_blockchain_height_from_resolved(&resolved_profile).await
 }
 
-pub async fn set_blockchain_height(
+pub async fn get_blockchain_height_verification_poll(
     profile: &PolarAutomationProfile,
-    target_height: u64,
 ) -> Result<u64, String> {
-    let resolved_profile = resolve_started_automation_profile(profile).await?;
-    let current_height = get_blockchain_height_from_resolved(&resolved_profile).await?;
-    let blocks_to_mine = blocks_to_mine_for_target_height(current_height, target_height)?;
-
-    if blocks_to_mine > 0 {
-        mine_blocks_from_resolved(&resolved_profile, blocks_to_mine).await?;
-    }
-
-    let actual_height = get_blockchain_height_from_resolved(&resolved_profile).await?;
-    if actual_height == target_height {
-        Ok(actual_height)
-    } else {
-        Err(format!(
-            "Polar reached block {actual_height}, but step 4 requested block {target_height}."
-        ))
-    }
+    let resolved_profile =
+        resolve_started_automation_profile_with_log_level(profile, DemoLogLevel::Verbose).await?;
+    get_blockchain_height_from_resolved_with_log_level(&resolved_profile, DemoLogLevel::Verbose)
+        .await
 }
 
 pub async fn mine_blocks(profile: &PolarAutomationProfile, blocks: u64) -> Result<u64, String> {
-    let resolved_profile = resolve_started_automation_profile(profile).await?;
+    let resolved_profile =
+        resolve_started_automation_profile_with_log_level(profile, DemoLogLevel::On).await?;
     mine_blocks_from_resolved(&resolved_profile, blocks).await?;
 
     get_blockchain_height_from_resolved(&resolved_profile).await
@@ -354,17 +413,31 @@ pub async fn delete_polar_network(profile: &PolarAutomationProfile) -> Result<()
 pub async fn validate_lab_health(
     profile: &PolarAutomationProfile,
 ) -> Result<PolarLabHealthReport, PolarLabHealthIssue> {
-    test_bridge(profile)
+    validate_lab_health_with_log_level(profile, DemoLogLevel::On).await
+}
+
+pub async fn validate_lab_health_verification_poll(
+    profile: &PolarAutomationProfile,
+) -> Result<PolarLabHealthReport, PolarLabHealthIssue> {
+    validate_lab_health_with_log_level(profile, DemoLogLevel::Verbose).await
+}
+
+async fn validate_lab_health_with_log_level(
+    profile: &PolarAutomationProfile,
+    log_level: DemoLogLevel,
+) -> Result<PolarLabHealthReport, PolarLabHealthIssue> {
+    test_bridge_with_log_level(profile, log_level)
         .await
         .map_err(PolarLabHealthIssue::BridgeUnavailable)?;
 
-    let networks = list_networks(profile)
+    let networks = list_networks_with_log_level(profile, log_level)
         .await
         .map_err(PolarLabHealthIssue::BridgeUnavailable)?;
     let resolved_profile = inspect_lab_health(profile, &networks)?;
-    let block_height = get_blockchain_height_from_resolved(&resolved_profile)
-        .await
-        .ok();
+    let block_height =
+        get_blockchain_height_from_resolved_with_log_level(&resolved_profile, log_level)
+            .await
+            .ok();
 
     Ok(PolarLabHealthReport {
         profile: resolved_profile,
@@ -375,8 +448,15 @@ pub async fn validate_lab_health(
 async fn resolve_started_automation_profile(
     profile: &PolarAutomationProfile,
 ) -> Result<PolarAutomationProfile, String> {
-    test_bridge(profile).await?;
-    let networks = list_networks(profile).await?;
+    resolve_started_automation_profile_with_log_level(profile, DemoLogLevel::On).await
+}
+
+async fn resolve_started_automation_profile_with_log_level(
+    profile: &PolarAutomationProfile,
+    log_level: DemoLogLevel,
+) -> Result<PolarAutomationProfile, String> {
+    test_bridge_with_log_level(profile, log_level).await?;
+    let networks = list_networks_with_log_level(profile, log_level).await?;
     let network_id = resolve_network_id(profile, &networks)?;
     ensure_network_started(&networks, &network_id)?;
     let bitcoin_backend_name = resolve_backend_name(profile, &networks, &network_id);
@@ -894,6 +974,41 @@ async fn get_lightning_wallet_balance(
         .ok_or_else(|| format!("Polar returned wallet balance for {node_name} without sats."))
 }
 
+async fn list_node_channels(
+    profile: &PolarAutomationProfile,
+    network_id: &str,
+    node_name: &str,
+) -> Result<Value, String> {
+    execute_tool(
+        profile,
+        "list_channels",
+        json!({
+            "networkId": network_id_argument(network_id),
+            "nodeName": node_name,
+        }),
+    )
+    .await
+}
+
+async fn close_node_channel(
+    profile: &PolarAutomationProfile,
+    network_id: &str,
+    node_name: &str,
+    channel_point: &str,
+) -> Result<(), String> {
+    execute_tool(
+        profile,
+        "close_channel",
+        json!({
+            "networkId": network_id_argument(network_id),
+            "nodeName": node_name,
+            "channelPoint": channel_point,
+        }),
+    )
+    .await
+    .map(|_| ())
+}
+
 fn network_id_argument(network_id: &str) -> Value {
     network_id
         .parse::<u64>()
@@ -903,6 +1018,59 @@ fn network_id_argument(network_id: &str) -> Value {
 
 fn wallet_balance_matches_app_rules(balance: u64, required_balance_sats: u64) -> bool {
     balance == DEMO_NODE_FUNDING_SATS && balance >= required_balance_sats
+}
+
+fn extract_channel_points(value: &Value) -> Vec<String> {
+    let mut channel_points = Vec::new();
+    collect_channel_points(value, &mut channel_points);
+    channel_points.sort();
+    channel_points.dedup();
+    channel_points
+}
+
+fn collect_channel_points(value: &Value, channel_points: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for key in [
+                "channelPoint",
+                "channel_point",
+                "fundingTxid",
+                "funding_txid",
+            ] {
+                if let Some(channel_point) = map
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    channel_points.push(channel_point.to_string());
+                    break;
+                }
+            }
+
+            if let (Some(txid), Some(output_index)) = (
+                map.get("txid").and_then(Value::as_str),
+                map.get("output_index")
+                    .or_else(|| map.get("outputIndex"))
+                    .and_then(value_as_id_string),
+            ) {
+                let txid = txid.trim();
+                if !txid.is_empty() {
+                    channel_points.push(format!("{txid}:{output_index}"));
+                }
+            }
+
+            for nested in map.values() {
+                collect_channel_points(nested, channel_points);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_channel_points(item, channel_points);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn lightning_node_exists(value: &Value, network_id: &str, node_name: &str) -> bool {
@@ -1119,7 +1287,14 @@ fn looks_like_lightning_node(value: &Value) -> bool {
 }
 
 async fn list_networks(profile: &PolarAutomationProfile) -> Result<Value, String> {
-    execute_tool(profile, "list_networks", json!({})).await
+    list_networks_with_log_level(profile, DemoLogLevel::On).await
+}
+
+async fn list_networks_with_log_level(
+    profile: &PolarAutomationProfile,
+    log_level: DemoLogLevel,
+) -> Result<Value, String> {
+    execute_tool_with_log_level(profile, "list_networks", json!({}), log_level).await
 }
 
 async fn create_network(
@@ -1150,15 +1325,23 @@ async fn create_network(
 async fn get_blockchain_height_from_resolved(
     profile: &PolarAutomationProfile,
 ) -> Result<u64, String> {
+    get_blockchain_height_from_resolved_with_log_level(profile, DemoLogLevel::On).await
+}
+
+async fn get_blockchain_height_from_resolved_with_log_level(
+    profile: &PolarAutomationProfile,
+    log_level: DemoLogLevel,
+) -> Result<u64, String> {
     let network_id = clean_network_id(profile);
     let backend_name = clean_backend_name(profile);
-    let response = execute_tool(
+    let response = execute_tool_with_log_level(
         profile,
         "get_blockchain_info",
         json!({
             "networkId": network_id_argument(&network_id),
             "nodeName": backend_name,
         }),
+        log_level,
     )
     .await?;
 
@@ -1302,6 +1485,15 @@ async fn execute_tool(
     tool: &str,
     arguments: Value,
 ) -> Result<Value, String> {
+    execute_tool_with_log_level(profile, tool, arguments, DemoLogLevel::On).await
+}
+
+async fn execute_tool_with_log_level(
+    profile: &PolarAutomationProfile,
+    tool: &str,
+    arguments: Value,
+    log_level: DemoLogLevel,
+) -> Result<Value, String> {
     post_json(
         profile,
         "/api/mcp/execute",
@@ -1309,6 +1501,7 @@ async fn execute_tool(
             "tool": tool,
             "arguments": arguments,
         }),
+        log_level,
     )
     .await
 }
@@ -1319,19 +1512,6 @@ fn clean_network_id(profile: &PolarAutomationProfile) -> String {
 
 fn clean_backend_name(profile: &PolarAutomationProfile) -> String {
     profile.bitcoin_backend_name.trim().to_string()
-}
-
-fn blocks_to_mine_for_target_height(
-    current_height: u64,
-    target_height: u64,
-) -> Result<u64, String> {
-    if target_height < current_height {
-        return Err(format!(
-            "Polar is already at block {current_height}. Step 4 cannot set the regtest chain backward to block {target_height}."
-        ));
-    }
-
-    Ok(target_height - current_height)
 }
 
 fn polar_node_name(node_id: DemoNodeId) -> &'static str {
@@ -1350,8 +1530,8 @@ fn bridge_url(profile: &PolarAutomationProfile, path: &str) -> String {
     )
 }
 
-fn log_service_request(method: &str, url: &str, body: Option<&Value>) {
-    if !LOG_SERVICE_CALLS_TO_TERMINAL {
+fn log_service_request(method: &str, url: &str, body: Option<&Value>, log_level: DemoLogLevel) {
+    if !DEMO_SERVICE_LOG_LEVEL.allows(log_level) {
         return;
     }
 
@@ -1362,8 +1542,13 @@ fn log_service_request(method: &str, url: &str, body: Option<&Value>) {
     log_to_terminal(&message);
 }
 
-fn log_service_response(method: &str, url: &str, result: &Result<Value, String>) {
-    if !LOG_SERVICE_CALLS_TO_TERMINAL {
+fn log_service_response(
+    method: &str,
+    url: &str,
+    result: &Result<Value, String>,
+    log_level: DemoLogLevel,
+) {
+    if !DEMO_SERVICE_LOG_LEVEL.allows(log_level) {
         return;
     }
 
@@ -2020,20 +2205,6 @@ mod tests {
     }
 
     #[test]
-    fn target_height_mines_forward_delta() {
-        assert_eq!(blocks_to_mine_for_target_height(267, 300), Ok(33));
-        assert_eq!(blocks_to_mine_for_target_height(300, 300), Ok(0));
-    }
-
-    #[test]
-    fn target_height_rejects_backward_chain_move() {
-        let error = blocks_to_mine_for_target_height(300, 267).expect_err("must reject rewind");
-
-        assert!(error.contains("already at block 300"));
-        assert!(error.contains("cannot set the regtest chain backward to block 267"));
-    }
-
-    #[test]
     fn extracts_wallet_balance_from_lnd_wallet_info() {
         let wallet_info = json!({
             "success": true,
@@ -2189,9 +2360,13 @@ mod tests {
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn get_json(profile: &PolarAutomationProfile, path: &str) -> Result<Value, String> {
+async fn get_json(
+    profile: &PolarAutomationProfile,
+    path: &str,
+    log_level: DemoLogLevel,
+) -> Result<Value, String> {
     let url = bridge_url(profile, path);
-    log_service_request("GET", &url, None);
+    log_service_request("GET", &url, None, log_level);
     let result = match gloo_net::http::Request::get(&url).send().await {
         Ok(response) => response
             .json::<Value>()
@@ -2199,7 +2374,7 @@ async fn get_json(profile: &PolarAutomationProfile, path: &str) -> Result<Value,
             .map_err(|error| format!("Polar bridge returned invalid JSON: {error}")),
         Err(error) => Err(format!("Cannot reach Polar bridge: {error}")),
     };
-    log_service_response("GET", &url, &result);
+    log_service_response("GET", &url, &result, log_level);
     result
 }
 
@@ -2208,9 +2383,10 @@ async fn post_json(
     profile: &PolarAutomationProfile,
     path: &str,
     body: Value,
+    log_level: DemoLogLevel,
 ) -> Result<Value, String> {
     let url = bridge_url(profile, path);
-    log_service_request("POST", &url, Some(&body));
+    log_service_request("POST", &url, Some(&body), log_level);
     let result = match gloo_net::http::Request::post(&url).json(&body) {
         Ok(request) => match request.send().await {
             Ok(response) => response
@@ -2221,21 +2397,25 @@ async fn post_json(
         },
         Err(error) => Err(format!("Cannot encode Polar bridge request: {error}")),
     };
-    log_service_response("POST", &url, &result);
+    log_service_response("POST", &url, &result, log_level);
     result
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn get_json(profile: &PolarAutomationProfile, path: &str) -> Result<Value, String> {
+async fn get_json(
+    profile: &PolarAutomationProfile,
+    path: &str,
+    log_level: DemoLogLevel,
+) -> Result<Value, String> {
     let url = bridge_url(profile, path);
-    log_service_request("GET", &url, None);
+    log_service_request("GET", &url, None, log_level);
     let result = match ureq::get(&url).call() {
         Ok(response) => response
             .into_json::<Value>()
             .map_err(|error| format!("Polar bridge returned invalid JSON: {error}")),
         Err(error) => Err(format!("Cannot reach Polar bridge: {error}")),
     };
-    log_service_response("GET", &url, &result);
+    log_service_response("GET", &url, &result, log_level);
     result
 }
 
@@ -2244,9 +2424,10 @@ async fn post_json(
     profile: &PolarAutomationProfile,
     path: &str,
     body: Value,
+    log_level: DemoLogLevel,
 ) -> Result<Value, String> {
     let url = bridge_url(profile, path);
-    log_service_request("POST", &url, Some(&body));
+    log_service_request("POST", &url, Some(&body), log_level);
     let result = match ureq::post(&url)
         .set("Content-Type", "application/json")
         .send_json(body)
@@ -2256,6 +2437,6 @@ async fn post_json(
             .map_err(|error| format!("Polar bridge returned invalid JSON: {error}")),
         Err(error) => Err(format!("Polar bridge request failed: {error}")),
     };
-    log_service_response("POST", &url, &result);
+    log_service_response("POST", &url, &result, log_level);
     result
 }

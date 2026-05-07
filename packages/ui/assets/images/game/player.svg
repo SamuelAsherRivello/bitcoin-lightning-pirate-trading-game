@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 320" role="img" aria-label="Player">
+  <path d="M109 36c27 0 47 21 47 48s-20 48-47 48-47-21-47-48 20-48 47-48Z" fill="#f8c9a3"/>
+  <path d="M66 76c5-38 34-55 69-42 22 8 34 28 32 52-18-18-42-18-62-10-14 6-25 6-39 0Z" fill="#3f1f14"/>
+  <path d="M68 136h86l26 150H42Z" fill="#fef3c7"/>
+  <path d="M54 174h112l12 44H42Z" fill="#991b1b"/>
+  <path d="M84 218h30l-6 72H72Z" fill="#b91c1c"/>
+  <path d="M124 218h34l8 72h-36Z" fill="#7f1d1d"/>
+  <path d="M44 288h132v18H44Z" fill="#292524"/>
+  <path d="M54 154 24 224" stroke="#f8c9a3" stroke-width="18" stroke-linecap="round"/>
+  <path d="M164 154 194 216" stroke="#f8c9a3" stroke-width="18" stroke-linecap="round"/>
+</svg>

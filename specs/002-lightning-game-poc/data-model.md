@@ -18,7 +18,7 @@ Represents learner-facing setup state.
 
 - Transaction amount must be a positive whole number within the demo range.
 - Setup is complete only when the app has created Alice, Bob, and Carol or mock mode is connected.
-- Polar Connection setup requires the learner to confirm a whole-number Block Height before final unlock; `0` is valid.
+- Polar Connection setup requires the learner to confirm a whole-number Block Height before final unlock; `0` is valid and sets the app's initial lab baseline without rewinding Polar's actual chain.
 - Mock Connection mode must show fake offline-data messaging and must not require credential acknowledgement.
 - Polar Connection mode must include a local bridge URL. The app ensures the named Polar server exists through the bridge, discovers the Bitcoin backend when possible, and falls back to the `backend1` backend convention.
 
@@ -35,6 +35,13 @@ Represents the non-wallet-secret values needed to ask Polar to create the demo L
 - Bridge URL must be local `localhost` or `127.0.0.1`.
 - Network id/name and Bitcoin backend node name may be blank before bridge discovery.
 - The bridge must be reachable before the app creates or destroys demo nodes.
+
+## LabState
+
+Represents the active game and network-learning snapshot after setup starts.
+
+- `block_height`: App-visible block height used by Play Game and Network Dashboard.
+- `polar_observed_block_height`: Last real Polar chain height observed after the learner confirmed the app baseline. External Polar mining advances the app height by the observed delta instead of overwriting the learner-entered baseline.
 
 ## ServerNodeProfile
 
