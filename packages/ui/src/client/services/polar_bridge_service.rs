@@ -11,8 +11,10 @@ const DEMO_NODE_FUNDING_SATS: u64 = 1_000_000;
 const DEMO_NODE_START_TIMEOUT_SECONDS: u16 = 180;
 const DEMO_NODE_START_ATTEMPTS: u16 = DEMO_NODE_START_TIMEOUT_SECONDS / 2;
 const DEMO_NODE_START_DELAY_MS: u32 = 2_000;
-const DEMO_NODE_READY_ATTEMPTS: u8 = 20;
-const DEMO_NODE_READY_DELAY_MS: u32 = 750;
+const DEMO_NODE_READY_TIMEOUT_SECONDS: u16 = 90;
+const DEMO_NODE_READY_DELAY_MS: u32 = 1_500;
+const DEMO_NODE_READY_ATTEMPTS: u16 =
+    ((DEMO_NODE_READY_TIMEOUT_SECONDS as u32 * 1_000) / DEMO_NODE_READY_DELAY_MS) as u16;
 const DEMO_SERVICE_LOG_LEVEL: DemoLogLevel = DemoLogLevel::On;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -266,12 +268,21 @@ where
 {
     let resolved_profile = resolve_started_automation_profile(profile).await?;
     let network_id = clean_network_id(&resolved_profile);
+    let networks = list_networks(&resolved_profile).await?;
     let mut closed_channel_points = HashSet::new();
 
     report_progress("Checking demo player channels...".to_string());
 
     for node_id in DemoNodeId::ALL {
         let node_name = polar_node_name(node_id);
+        if !lightning_node_exists(&networks, &network_id, node_name) {
+            report_progress(format!(
+                "{} is not in Polar yet. Skipping channel cleanup...",
+                node_id.label()
+            ));
+            continue;
+        }
+
         let channels = list_node_channels(&resolved_profile, &network_id, node_name).await?;
 
         for channel_point in extract_channel_points(&channels) {
@@ -1494,7 +1505,7 @@ async fn execute_tool_with_log_level(
     arguments: Value,
     log_level: DemoLogLevel,
 ) -> Result<Value, String> {
-    post_json(
+    let response = post_json(
         profile,
         "/api/mcp/execute",
         json!({
@@ -1503,7 +1514,12 @@ async fn execute_tool_with_log_level(
         }),
         log_level,
     )
-    .await
+    .await?;
+
+    match extract_mcp_error(&response) {
+        Some(error) => Err(format!("Polar MCP tool {tool} failed: {error}")),
+        None => Ok(response),
+    }
 }
 
 fn clean_network_id(profile: &PolarAutomationProfile) -> String {
@@ -1589,6 +1605,37 @@ fn extract_node_name(value: &Value) -> Option<String> {
             None
         }
         Value::Array(items) => items.iter().find_map(extract_node_name),
+        _ => None,
+    }
+}
+
+fn extract_mcp_error(value: &Value) -> Option<String> {
+    let Value::Object(map) = value else {
+        return None;
+    };
+
+    let success_is_false = map
+        .get("success")
+        .and_then(Value::as_bool)
+        .map(|success| !success)
+        .unwrap_or(false);
+
+    match map.get("error") {
+        Some(Value::String(error)) if !error.trim().is_empty() => Some(error.trim().to_string()),
+        Some(Value::Object(error)) => error
+            .get("message")
+            .and_then(Value::as_str)
+            .filter(|message| !message.trim().is_empty())
+            .map(|message| message.trim().to_string())
+            .or_else(|| {
+                if success_is_false {
+                    Some(Value::Object(error.clone()).to_string())
+                } else {
+                    None
+                }
+            }),
+        Some(error) if success_is_false => Some(error.to_string()),
+        _ if success_is_false => Some("Polar MCP tool returned success=false.".to_string()),
         _ => None,
     }
 }
@@ -2224,6 +2271,36 @@ mod tests {
         });
 
         assert_eq!(extract_wallet_balance_sats(&wallet_info), Some(1_000_000));
+    }
+
+    #[test]
+    fn extracts_top_level_mcp_error_response() {
+        let response = json!({
+            "error": "14 UNAVAILABLE: No connection established. Last error: connect ECONNREFUSED 127.0.0.1:10001"
+        });
+
+        assert_eq!(
+            extract_mcp_error(&response),
+            Some(
+                "14 UNAVAILABLE: No connection established. Last error: connect ECONNREFUSED 127.0.0.1:10001"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn extracts_structured_mcp_error_message_when_success_is_false() {
+        let response = json!({
+            "success": false,
+            "error": {
+                "message": "LND is still starting"
+            }
+        });
+
+        assert_eq!(
+            extract_mcp_error(&response),
+            Some("LND is still starting".to_string())
+        );
     }
 
     #[test]
