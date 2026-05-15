@@ -8,5 +8,6 @@ pub use client::lab_service::{
     pay_invoice, test_setup, validate_setup_profile, wait_for_next_block,
 };
 pub use client::models::*;
-pub use client::{error, lab_service, models};
-pub use server::{config, lnd_client};
+pub use client::tra_service::TraService;
+pub use client::{error, lab_service, models, tra_service};
+pub use server::{config, lnd_client, tra_client};

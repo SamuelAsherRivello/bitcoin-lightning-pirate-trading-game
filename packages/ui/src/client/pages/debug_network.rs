@@ -81,12 +81,47 @@ pub fn DebugNetwork() -> Element {
                     span { class: "eyebrow", "Network mechanics" }
                     h1 { {t!("debug-network-title")} }
                     p {
-                        "Inspect nodes, trade routes, invoices, payments, balances, and which operations need Bitcoin blocks."
+                        "Inspect nodes, trade routes, TRA ownership, invoices, payments, balances, and which operations need Bitcoin blocks."
                     }
                 }
                 LabStatusWidget {
                     sats_per_transaction: state.profile.sats_per_transaction,
                     block_height: state.block_height,
+                }
+            }
+
+            section { class: "lab-panel",
+                div { class: "section-heading",
+                    span { class: "eyebrow", "Tap Root Assets" }
+                    h2 { "Game TRA rows" }
+                }
+                if state.tra_items.is_empty() {
+                    p { class: "muted-copy", "TRA items created by the Add Tap Root Assets setup step will appear here." }
+                } else {
+                    div { class: "tra-table", role: "table", aria_label: "Tap Root Assets inventory rows",
+                        div { class: "tra-table__row tra-table__row--head", role: "row",
+                            span { role: "columnheader", "TRA ID" }
+                            span { role: "columnheader", "Asset ID" }
+                            span { role: "columnheader", "Name" }
+                            span { role: "columnheader", "Item ID" }
+                            span { role: "columnheader", "Catalog" }
+                            span { role: "columnheader", "Owner" }
+                            span { role: "columnheader", "Ownership" }
+                            span { role: "columnheader", "Transfer" }
+                        }
+                        for item in state.tra_items.clone() {
+                            div { class: "tra-table__row", role: "row",
+                                span { role: "cell", title: "{item.tra_id}", "{item.tra_id}" }
+                                span { role: "cell", title: "{item.asset_id}", "{item.asset_id}" }
+                                span { role: "cell", title: "{item.unique_name}", "{item.unique_name}" }
+                                span { role: "cell", "{item.item_id}" }
+                                span { role: "cell", "{tra_catalog_detail(item.item_id)}" }
+                                span { role: "cell", "{item.owner_node.label()}" }
+                                span { role: "cell", "{item.ownership_status.label()}" }
+                                span { role: "cell", "{item.transfer_status.label()}" }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -374,6 +409,17 @@ fn yes_no(value: bool) -> &'static str {
     } else {
         "no"
     }
+}
+
+fn tra_catalog_detail(item_id: u32) -> String {
+    lightning_service::TraService::catalog_item(item_id)
+        .map(|item| {
+            format!(
+                "{} / {} / {} sats",
+                item.display_name, item.item_type, item.cost_sats
+            )
+        })
+        .unwrap_or_else(|| "Unsupported item_id".to_string())
 }
 
 fn push_toast(

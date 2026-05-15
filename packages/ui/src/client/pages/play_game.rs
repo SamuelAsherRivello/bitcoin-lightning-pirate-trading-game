@@ -10,14 +10,16 @@ use crate::client::components::toast::{
     wait_for_prompt_message_minimum, OperationPrompt, Toast, ToastTone,
 };
 use crate::client::models::{
-    ConnectionStatus, DemoNode, DemoNodeId, LabState, PaymentStatus, RouteStatus, SetupMode,
-    SetupProfile, TradeRoute, DEFAULT_ROUTE_CAPACITY_SATS,
+    ConnectionStatus, DemoNode, DemoNodeId, GameItemDefinition, LabState, RouteStatus, SetupMode,
+    SetupProfile, TraItem, TraOwnershipStatus, TraTransferStatus, TradeRoute, TransferTraRequest,
+    DEFAULT_ROUTE_CAPACITY_SATS, DEFAULT_SATS_PER_TRANSACTION, MAX_TRA_ITEMS_PER_NODE,
 };
 use crate::client::services::lightning_server_functions::{
     close_polar_demo_channels_with_progress, close_trade_route, complete_polar_setup,
-    create_invoice_and_maybe_autosend, create_polar_demo_nodes_with_progress,
-    destroy_polar_demo_nodes, ensure_polar_server, get_lab_state_or_recover, open_trade_route,
-    recover_if_polar_lab_unhealthy, verify_polar_bridge, wait_for_next_block, PolarLabRecovery,
+    create_invoice_and_maybe_autosend_for_amount, create_polar_demo_nodes_with_progress,
+    destroy_polar_demo_nodes, ensure_polar_server, initial_tra_setup_items, mint_tra,
+    open_trade_route, recover_if_polar_lab_unhealthy, reset_tra_inventory, transfer_tra,
+    verify_polar_bridge, verify_tra_setup, wait_for_next_block, PolarLabRecovery,
 };
 use crate::client::Route;
 
@@ -32,6 +34,26 @@ const GAME_NPC_ALT: Asset = asset!("/assets/images/game/npc-alt.svg");
 const GAME_PURSE: Asset = asset!("/assets/images/game/purse.svg");
 const GAME_CHANNEL: Asset = asset!("/assets/images/game/channel.svg");
 const GAME_CHANNEL_DOTTED: Asset = asset!("/assets/images/game/channel-dotted.svg");
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum PlayGameRefreshStatus {
+    #[default]
+    Idle,
+    Refreshing,
+    Refreshed,
+    Failed,
+}
+
+impl PlayGameRefreshStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "Waiting to refresh sats and inventory",
+            Self::Refreshing => "Refreshing sats and TRA inventory...",
+            Self::Refreshed => "Sats and TRA inventory refreshed",
+            Self::Failed => "Refresh needs attention",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GameLocation {
@@ -95,27 +117,39 @@ pub fn PlayGame() -> Element {
     let mut game_animation = use_signal(GameAnimation::default);
     let mut channel_animation = use_signal(GameChannelAnimation::default);
     let mut location_index = use_signal(|| 0_usize);
+    let mut play_game_refresh_status = use_signal(PlayGameRefreshStatus::default);
     let navigator = navigator();
 
     use_effect(move || {
         let profile = setup_profile();
         if active_route == (Route::PlayGame {}) && profile.is_connected() {
+            play_game_refresh_status.set(PlayGameRefreshStatus::Refreshing);
             spawn(async move {
-                match get_lab_state_or_recover(profile).await {
+                match verify_tra_setup(profile.clone()).await {
                     Ok(state) => {
-                        if lab_state.peek().is_none() || lab_state.peek().as_ref() != Some(&state) {
-                            lab_state.set(Some(state));
-                        }
+                        lab_state.set(Some(state));
+                        play_game_refresh_status.set(PlayGameRefreshStatus::Refreshed);
+                        push_toast(
+                            toast,
+                            toast_sequence,
+                            "Refreshed sat balances and TRA inventory.",
+                            ToastTone::Success,
+                        );
                     }
-                    Err(recovery) => {
-                        apply_lab_recovery(
+                    Err(message) => {
+                        play_game_refresh_status.set(PlayGameRefreshStatus::Failed);
+                        handle_lab_action_error(
+                            profile,
                             setup_profile,
                             lab_state,
+                            toast,
+                            toast_sequence,
                             operation_prompt,
                             prompt_sequence,
                             navigator,
-                            recovery,
-                        );
+                            message,
+                        )
+                        .await;
                     }
                 }
             });
@@ -139,7 +173,7 @@ pub fn PlayGame() -> Element {
                     div {
                         span { class: "eyebrow", "Loading" }
                         h1 { {t!("play-game-title")} }
-                        p { "Loading the local Lightning lab state..." }
+                        p { "Refreshing sat balances and TRA inventory from the local Lightning lab..." }
                     }
                 }
             }
@@ -154,14 +188,16 @@ pub fn PlayGame() -> Element {
         .iter()
         .find(|route| route.to_node == merchant)
         .cloned();
-    let player_books = player_books_for(&state);
-    let npc_books = npc_books_for(&state, merchant);
-    let left_inventory = inventory_slots(player_books);
-    let right_inventory = inventory_slots(npc_books);
+    let catalog = item_catalog();
+    let player_items = tradable_items_for(&state, DemoNodeId::Alice, &catalog);
+    let npc_items = tradable_items_for(&state, merchant, &catalog);
+    let selected_npc_item = rightmost_transferable_item(&npc_items);
+    let selected_player_item = rightmost_transferable_item(&player_items);
+    let left_inventory = inventory_slots_for(&state, DemoNodeId::Alice, &catalog);
+    let right_inventory = inventory_slots_for(&state, merchant, &catalog);
     let player_name = node_display_name(&state, DemoNodeId::Alice);
     let npc_name = node_display_name(&state, merchant);
-    let (player_sats, npc_sats) =
-        game_sats_for_route(focused_route.as_ref(), state.profile.sats_per_transaction);
+    let (player_sats, npc_sats) = game_sats_for_nodes(&state, merchant);
     let channel_visual = focused_route
         .as_ref()
         .map(|route| match route.status {
@@ -208,25 +244,24 @@ pub fn PlayGame() -> Element {
         .as_ref()
         .map(|route| route.requires_next_block)
         .unwrap_or(false);
-    let can_buy_item = focused_route
-        .as_ref()
-        .map(|route| {
-            route.status == RouteStatus::Active
-                && npc_books > 0
-                && player_books < 3
-                && route.local_balance_sats >= state.profile.sats_per_transaction
-        })
-        .unwrap_or(false);
-    let can_sell_item = focused_route
-        .as_ref()
-        .map(|route| {
-            route.status == RouteStatus::Active
-                && player_books > 0
-                && route.remote_balance_sats >= state.profile.sats_per_transaction
-        })
-        .unwrap_or(false);
+    let can_buy_item = can_buy_item_from_current_npc(
+        &state,
+        focused_route.as_ref(),
+        merchant,
+        selected_npc_item.as_ref(),
+    );
+    let can_sell_item = can_sell_item_to_current_npc(
+        &state,
+        focused_route.as_ref(),
+        merchant,
+        selected_player_item.as_ref(),
+    );
     let focused_route_for_wait = focused_route.clone();
     let focused_route_for_panel = focused_route.clone();
+    let selected_npc_item_for_buy = selected_npc_item.clone();
+    let selected_player_item_for_sell = selected_player_item.clone();
+    let refresh_status = play_game_refresh_status();
+    let is_route_refreshing = refresh_status == PlayGameRefreshStatus::Refreshing;
 
     rsx! {
         main { class: "page-content lab-page play-page",
@@ -237,6 +272,7 @@ pub fn PlayGame() -> Element {
                     p {
                         "Open a Lightning trade with the NPC, wait for the next block when the channel needs confirmation, then buy books over the active channel."
                     }
+                    span { class: "status-pill", "{refresh_status.label()}" }
                 }
                 LabStatusWidget {
                     sats_per_transaction: state.profile.sats_per_transaction,
@@ -246,12 +282,12 @@ pub fn PlayGame() -> Element {
 
             GameView {
                 config: game_view_config,
-                is_busy: is_busy(),
-                can_open_trade,
-                can_close_trade,
-                can_wait_for_block,
-                can_buy_item,
-                can_sell_item,
+                is_busy: is_busy() || is_route_refreshing,
+                can_open_trade: can_open_trade && !is_route_refreshing,
+                can_close_trade: can_close_trade && !is_route_refreshing,
+                can_wait_for_block: can_wait_for_block && !is_route_refreshing,
+                can_buy_item: can_buy_item && !is_route_refreshing,
+                can_sell_item: can_sell_item && !is_route_refreshing,
                 next_block_height,
                 on_restart_game: move |_| {
                     spawn(async move {
@@ -370,26 +406,82 @@ pub fn PlayGame() -> Element {
                     location_index.set(next_location);
                 },
                 on_buy_item: move |_| {
+                    if !can_buy_item {
+                        push_toast(
+                            toast,
+                            toast_sequence,
+                            "Open an active trade route before buying an item.",
+                            ToastTone::Error,
+                        );
+                        return;
+                    }
+                    let selected_item = selected_npc_item_for_buy.clone();
                     spawn(async move {
+                        let Some(selected_item) = selected_item.clone() else {
+                            push_toast(
+                                toast,
+                                toast_sequence,
+                                "No verified TRA item is available to buy.",
+                                ToastTone::Error,
+                            );
+                            return;
+                        };
                         is_busy.set(true);
                         game_animation.set(GameAnimation::PaymentLeftToRight);
                         wait_for_game_animation().await;
-                        let memo = "Player buys a book from the NPC".to_string();
-                        match create_invoice_and_maybe_autosend(
+                        let memo = format!(
+                            "Player buys TRA item {} ({}) from {}",
+                            selected_item.unique_name,
+                            selected_item.tra_id,
+                            merchant.label()
+                        );
+                        match create_invoice_and_maybe_autosend_for_amount(
                             setup_profile(),
                             merchant,
                             DemoNodeId::Alice,
+                            selected_item.cost_sats,
                             true,
                             memo,
                         )
                         .await
                         {
-                            Ok(next_state) => {
+                            Ok(_) => {
                                 wait_between_trade_animations().await;
                                 game_animation.set(GameAnimation::ItemRightToLeft);
                                 wait_for_game_animation().await;
-                                lab_state.set(Some(next_state));
-                                push_toast(toast, toast_sequence, "Invoice created and paid.", ToastTone::Success);
+                                match transfer_tra(
+                                    setup_profile(),
+                                    TransferTraRequest {
+                                        tra_id: selected_item.tra_id.clone(),
+                                        from_node: merchant,
+                                        to_node: DemoNodeId::Alice,
+                                    },
+                                )
+                                .await
+                                {
+                                    Ok(next_state) => {
+                                        lab_state.set(Some(next_state));
+                                        push_toast(
+                                            toast,
+                                            toast_sequence,
+                                            format!(
+                                                "Bought {} and verified TRA ownership.",
+                                                selected_item.unique_name
+                                            ),
+                                            ToastTone::Success,
+                                        );
+                                    }
+                                    Err(message) => {
+                                        push_toast(
+                                            toast,
+                                            toast_sequence,
+                                            format!(
+                                                "Payment succeeded, but TRA transfer needs recovery: {message}"
+                                            ),
+                                            ToastTone::Error,
+                                        );
+                                    }
+                                }
                             }
                             Err(message) => handle_lab_action_error(
                                 setup_profile(),
@@ -409,25 +501,81 @@ pub fn PlayGame() -> Element {
                     });
                 },
                 on_sell_item: move |_| {
+                    if !can_sell_item {
+                        push_toast(
+                            toast,
+                            toast_sequence,
+                            "Open an active trade route before selling an item.",
+                            ToastTone::Error,
+                        );
+                        return;
+                    }
+                    let selected_item = selected_player_item_for_sell.clone();
                     spawn(async move {
+                        let Some(selected_item) = selected_item.clone() else {
+                            push_toast(
+                                toast,
+                                toast_sequence,
+                                "No verified player-owned TRA item is available to sell.",
+                                ToastTone::Error,
+                            );
+                            return;
+                        };
                         is_busy.set(true);
                         game_animation.set(GameAnimation::ItemLeftToRight);
                         wait_for_game_animation().await;
-                        let memo = "Player sells a book to the NPC".to_string();
-                        match create_invoice_and_maybe_autosend(
+                        let memo = format!(
+                            "Player sells TRA item {} ({}) to {}",
+                            selected_item.unique_name,
+                            selected_item.tra_id,
+                            merchant.label()
+                        );
+                        match create_invoice_and_maybe_autosend_for_amount(
                             setup_profile(),
                             DemoNodeId::Alice,
                             merchant,
+                            selected_item.cost_sats,
                             true,
                             memo,
                         )
                         .await
                         {
-                            Ok(next_state) => {
+                            Ok(_) => {
                                 game_animation.set(GameAnimation::PaymentRightToLeft);
                                 wait_for_game_animation().await;
-                                lab_state.set(Some(next_state));
-                                push_toast(toast, toast_sequence, "Item sold and invoice paid.", ToastTone::Success);
+                                match transfer_tra(
+                                    setup_profile(),
+                                    TransferTraRequest {
+                                        tra_id: selected_item.tra_id.clone(),
+                                        from_node: DemoNodeId::Alice,
+                                        to_node: merchant,
+                                    },
+                                )
+                                .await
+                                {
+                                    Ok(next_state) => {
+                                        lab_state.set(Some(next_state));
+                                        push_toast(
+                                            toast,
+                                            toast_sequence,
+                                            format!(
+                                                "Sold {} and verified TRA ownership.",
+                                                selected_item.unique_name
+                                            ),
+                                            ToastTone::Success,
+                                        );
+                                    }
+                                    Err(message) => {
+                                        push_toast(
+                                            toast,
+                                            toast_sequence,
+                                            format!(
+                                                "Payment succeeded, but TRA transfer needs recovery: {message}"
+                                            ),
+                                            ToastTone::Error,
+                                        );
+                                    }
+                                }
                             }
                             Err(message) => handle_lab_action_error(
                                 setup_profile(),
@@ -468,65 +616,64 @@ pub fn PlayGame() -> Element {
     }
 }
 
-fn player_books_for(state: &LabState) -> usize {
-    let bought = state
-        .recent_payments
-        .iter()
-        .filter(|payment| {
-            payment.payer_node == DemoNodeId::Alice
-                && payment.payee_node != DemoNodeId::Alice
-                && payment.status == PaymentStatus::Succeeded
-        })
-        .count();
-    let sold = state
-        .recent_payments
-        .iter()
-        .filter(|payment| {
-            payment.payer_node != DemoNodeId::Alice
-                && payment.payee_node == DemoNodeId::Alice
-                && payment.status == PaymentStatus::Succeeded
-        })
-        .count();
-
-    bought.saturating_sub(sold).min(3)
+fn game_sats_for_nodes(state: &LabState, merchant: DemoNodeId) -> (u64, u64) {
+    (
+        available_node_sats(state, DemoNodeId::Alice),
+        available_node_sats(state, merchant),
+    )
 }
 
-fn npc_books_for(state: &LabState, merchant: DemoNodeId) -> usize {
-    let sold_to_player = state
-        .recent_payments
+fn available_node_sats(state: &LabState, node_id: DemoNodeId) -> u64 {
+    state
+        .nodes
         .iter()
-        .filter(|payment| {
-            payment.payer_node == DemoNodeId::Alice
-                && payment.payee_node == merchant
-                && payment.status == PaymentStatus::Succeeded
+        .find(|node| node.node_id == node_id)
+        .map(|node| {
+            node.wallet_balance_sats
+                .saturating_add(node.channel_balance_sats)
         })
-        .count();
-    let bought_from_player = state
-        .recent_payments
-        .iter()
-        .filter(|payment| {
-            payment.payer_node == merchant
-                && payment.payee_node == DemoNodeId::Alice
-                && payment.status == PaymentStatus::Succeeded
-        })
-        .count();
-
-    3_usize
-        .saturating_sub(sold_to_player)
-        .saturating_add(bought_from_player)
-        .min(3)
+        .unwrap_or(0)
 }
 
-fn game_sats_for_route(route: Option<&TradeRoute>, item_cost_sats: u64) -> (u64, u64) {
-    route
-        .filter(|route| {
-            matches!(
-                route.status,
-                RouteStatus::UnderConstruction | RouteStatus::Active | RouteStatus::Closing
-            )
+fn can_sell_item_to_current_npc(
+    state: &LabState,
+    focused_route: Option<&TradeRoute>,
+    merchant: DemoNodeId,
+    selected_player_item: Option<&TransferableItem>,
+) -> bool {
+    if !focused_route
+        .map(|route| route.to_node == merchant && route.status == RouteStatus::Active)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+
+    selected_player_item
+        .map(|item| {
+            owner_item_count(state, merchant) < MAX_TRA_ITEMS_PER_NODE
+                && available_node_sats(state, merchant) >= item.cost_sats
         })
-        .map(|route| (route.local_balance_sats, route.remote_balance_sats))
-        .unwrap_or((item_cost_sats.saturating_mul(3), 0))
+        .unwrap_or(false)
+}
+
+fn can_buy_item_from_current_npc(
+    state: &LabState,
+    focused_route: Option<&TradeRoute>,
+    merchant: DemoNodeId,
+    selected_npc_item: Option<&TransferableItem>,
+) -> bool {
+    focused_route
+        .map(|route| {
+            route.to_node == merchant
+                && route.status == RouteStatus::Active
+                && selected_npc_item.is_some()
+                && owner_item_count(state, DemoNodeId::Alice) < MAX_TRA_ITEMS_PER_NODE
+                && route.local_balance_sats
+                    >= selected_npc_item
+                        .map(|item| item.cost_sats)
+                        .unwrap_or(DEFAULT_SATS_PER_TRANSACTION)
+        })
+        .unwrap_or(false)
 }
 
 fn node_display_name(state: &LabState, node_id: DemoNodeId) -> String {
@@ -556,18 +703,6 @@ fn title_case_first(value: &str) -> String {
     first.to_uppercase().collect::<String>() + chars.as_str()
 }
 
-fn inventory_slots(book_count: usize) -> Vec<GameInventorySlot> {
-    (0..3)
-        .map(|index| {
-            if index < book_count {
-                GameInventorySlot::Book
-            } else {
-                GameInventorySlot::Empty
-            }
-        })
-        .collect()
-}
-
 fn trade_status_copy(route: &TradeRoute) -> &'static str {
     match route.status {
         RouteStatus::Missing => {
@@ -588,6 +723,107 @@ fn trade_status_copy(route: &TradeRoute) -> &'static str {
         RouteStatus::Error => {
             "The Lightning channel needs attention before this trade can continue."
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct TransferableItem {
+    tra_id: String,
+    unique_name: String,
+    item_id: u32,
+    owner_node: DemoNodeId,
+    cost_sats: u64,
+}
+
+fn item_catalog() -> Vec<GameItemDefinition> {
+    lightning_service::TraService::item_catalog()
+}
+
+fn catalog_item<'a>(
+    catalog: &'a [GameItemDefinition],
+    item_id: u32,
+) -> Option<&'a GameItemDefinition> {
+    catalog.iter().find(|item| item.item_id == item_id)
+}
+
+fn owner_item_count(state: &LabState, owner_node: DemoNodeId) -> usize {
+    state
+        .tra_items
+        .iter()
+        .filter(|item| item.owner_node == owner_node)
+        .count()
+}
+
+fn tradable_items_for(
+    state: &LabState,
+    owner_node: DemoNodeId,
+    catalog: &[GameItemDefinition],
+) -> Vec<TransferableItem> {
+    state
+        .tra_items
+        .iter()
+        .filter(|item| item.owner_node == owner_node)
+        .filter(|item| {
+            item.ownership_status == TraOwnershipStatus::Verified
+                && matches!(
+                    item.transfer_status,
+                    TraTransferStatus::None | TraTransferStatus::Succeeded
+                )
+        })
+        .filter_map(|item| {
+            catalog_item(catalog, item.item_id).map(|definition| TransferableItem {
+                tra_id: item.tra_id.clone(),
+                unique_name: item.unique_name.clone(),
+                item_id: item.item_id,
+                owner_node: item.owner_node,
+                cost_sats: definition.cost_sats,
+            })
+        })
+        .collect()
+}
+
+fn rightmost_transferable_item(items: &[TransferableItem]) -> Option<TransferableItem> {
+    items.last().cloned()
+}
+
+fn inventory_slots_for(
+    state: &LabState,
+    owner_node: DemoNodeId,
+    catalog: &[GameItemDefinition],
+) -> Vec<GameInventorySlot> {
+    let mut slots: Vec<GameInventorySlot> = state
+        .tra_items
+        .iter()
+        .filter(|item| item.owner_node == owner_node)
+        .take(MAX_TRA_ITEMS_PER_NODE)
+        .map(|item| inventory_slot_for(item, catalog))
+        .collect();
+
+    while slots.len() < MAX_TRA_ITEMS_PER_NODE {
+        slots.push(GameInventorySlot::Empty);
+    }
+
+    slots
+}
+
+fn inventory_slot_for(item: &TraItem, catalog: &[GameItemDefinition]) -> GameInventorySlot {
+    let (display_name, visual_key) = catalog_item(catalog, item.item_id)
+        .map(|definition| {
+            (
+                definition.display_name.clone(),
+                definition.visual_key.clone(),
+            )
+        })
+        .unwrap_or_else(|| ("Unsupported".to_string(), "unsupported".to_string()));
+
+    GameInventorySlot::Item {
+        tra_id: item.tra_id.clone(),
+        unique_name: item.unique_name.clone(),
+        item_id: item.item_id,
+        display_name,
+        visual_key,
+        ownership_status: item.ownership_status,
+        transfer_status: item.transfer_status,
     }
 }
 
@@ -777,7 +1013,23 @@ async fn restart_game_from_polar_setup_inner(
     update_operation_prompt(
         operation_prompt,
         operation_id,
-        "Step 5 of 5: Unlocking Play Game and Network Dashboard...",
+        "Step 5 of 6: Adding Tap Root Assets...",
+        ToastTone::Info,
+        true,
+        false,
+    )
+    .await;
+    let mut state = reset_tra_inventory(state.profile.clone()).await?;
+    state = verify_tra_setup(state.profile.clone()).await?;
+    for request in initial_tra_setup_items() {
+        state = mint_tra(state.profile.clone(), request).await?;
+    }
+    state = verify_tra_setup(state.profile.clone()).await?;
+
+    update_operation_prompt(
+        operation_prompt,
+        operation_id,
+        "Step 6 of 6: Unlocking Play Game and Network Dashboard...",
         ToastTone::Info,
         true,
         false,
@@ -961,4 +1213,203 @@ fn apply_lab_recovery(
         cancel_requested: false,
     }));
     let _ = navigator.replace(Route::Home {});
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::models::{ConnectionStatus, SetupProfile, APPLE_ITEM_ID, BOOK_ITEM_ID};
+
+    fn state_with_items(items: Vec<TraItem>) -> LabState {
+        let mut profile = SetupProfile::default();
+        profile.connection_status = ConnectionStatus::Connected;
+        let mut state = lightning_service::default_lab_state(profile);
+        state.tra_items = items;
+        state
+    }
+
+    fn activate_route_to(state: &mut LabState, merchant: DemoNodeId) {
+        let route = state
+            .trade_routes
+            .iter_mut()
+            .find(|route| route.to_node == merchant)
+            .expect("route to merchant");
+        route.status = RouteStatus::Active;
+        route.local_balance_sats = DEFAULT_ROUTE_CAPACITY_SATS;
+        route.remote_balance_sats = DEFAULT_ROUTE_CAPACITY_SATS;
+    }
+
+    fn item(owner_node: DemoNodeId, unique_name: &str, status: TraOwnershipStatus) -> TraItem {
+        TraItem {
+            tra_id: format!("tra-{unique_name}"),
+            asset_id: format!("asset-{unique_name}"),
+            unique_name: unique_name.to_string(),
+            item_id: BOOK_ITEM_ID,
+            owner_node,
+            ownership_status: status,
+            transfer_status: TraTransferStatus::None,
+        }
+    }
+
+    #[test]
+    fn inventory_slots_derive_from_lab_state_tra_items() {
+        let catalog = item_catalog();
+        let state = state_with_items(vec![item(
+            DemoNodeId::Bob,
+            "Book",
+            TraOwnershipStatus::Verified,
+        )]);
+
+        let slots = inventory_slots_for(&state, DemoNodeId::Bob, &catalog);
+
+        assert!(matches!(
+            &slots[0],
+            GameInventorySlot::Item { tra_id, unique_name, .. }
+                if tra_id == "tra-Book" && unique_name == "Book"
+        ));
+        assert!(matches!(slots[1], GameInventorySlot::Empty));
+    }
+
+    #[test]
+    fn apple_inventory_slot_uses_catalog_display_name_and_visual_key() {
+        let catalog = item_catalog();
+        let mut apple = item(DemoNodeId::Carol, "Apple", TraOwnershipStatus::Verified);
+        apple.item_id = APPLE_ITEM_ID;
+        let state = state_with_items(vec![apple]);
+
+        let slots = inventory_slots_for(&state, DemoNodeId::Carol, &catalog);
+
+        assert!(matches!(
+            &slots[0],
+            GameInventorySlot::Item {
+                display_name,
+                visual_key,
+                ..
+            } if display_name == "Apple" && visual_key == "apple"
+        ));
+    }
+
+    #[test]
+    fn unsupported_items_are_not_transferable() {
+        let catalog = item_catalog();
+        let state = state_with_items(vec![item(
+            DemoNodeId::Bob,
+            "Broken Book",
+            TraOwnershipStatus::Unsupported,
+        )]);
+
+        assert!(rightmost_transferable_item(&tradable_items_for(
+            &state,
+            DemoNodeId::Bob,
+            &catalog
+        ))
+        .is_none());
+    }
+
+    #[test]
+    fn selected_transfer_target_uses_rightmost_concrete_tra_id_and_catalog_price() {
+        let catalog = item_catalog();
+        let state = state_with_items(vec![
+            item(DemoNodeId::Bob, "Book", TraOwnershipStatus::Verified),
+            item(DemoNodeId::Bob, "Book 2", TraOwnershipStatus::Verified),
+        ]);
+
+        let selected =
+            rightmost_transferable_item(&tradable_items_for(&state, DemoNodeId::Bob, &catalog))
+                .expect("selected TRA item");
+
+        assert_eq!(selected.tra_id, "tra-Book 2");
+        assert_eq!(selected.item_id, BOOK_ITEM_ID);
+        assert_eq!(selected.cost_sats, DEFAULT_SATS_PER_TRANSACTION);
+        assert_eq!(selected.owner_node, DemoNodeId::Bob);
+    }
+
+    #[test]
+    fn sell_is_available_to_current_npc_with_sats_and_empty_inventory_slot() {
+        let catalog = item_catalog();
+        let mut apple = item(DemoNodeId::Alice, "Apple", TraOwnershipStatus::Verified);
+        apple.item_id = APPLE_ITEM_ID;
+        let mut state = state_with_items(vec![
+            apple,
+            item(DemoNodeId::Bob, "Book", TraOwnershipStatus::Verified),
+            item(DemoNodeId::Bob, "Book 2", TraOwnershipStatus::Verified),
+        ]);
+        activate_route_to(&mut state, DemoNodeId::Bob);
+        let selected =
+            rightmost_transferable_item(&tradable_items_for(&state, DemoNodeId::Alice, &catalog))
+                .expect("player item");
+        let focused_route = state
+            .trade_routes
+            .iter()
+            .find(|route| route.to_node == DemoNodeId::Bob);
+
+        assert!(can_sell_item_to_current_npc(
+            &state,
+            focused_route,
+            DemoNodeId::Bob,
+            Some(&selected)
+        ));
+    }
+
+    #[test]
+    fn sell_is_unavailable_when_current_npc_inventory_is_full() {
+        let catalog = item_catalog();
+        let mut apple = item(DemoNodeId::Alice, "Apple", TraOwnershipStatus::Verified);
+        apple.item_id = APPLE_ITEM_ID;
+        let mut state = state_with_items(vec![
+            apple,
+            item(DemoNodeId::Bob, "Book", TraOwnershipStatus::Verified),
+            item(DemoNodeId::Bob, "Book 2", TraOwnershipStatus::Verified),
+            item(DemoNodeId::Bob, "Book 3", TraOwnershipStatus::Verified),
+        ]);
+        activate_route_to(&mut state, DemoNodeId::Bob);
+        let selected =
+            rightmost_transferable_item(&tradable_items_for(&state, DemoNodeId::Alice, &catalog))
+                .expect("player item");
+        let focused_route = state
+            .trade_routes
+            .iter()
+            .find(|route| route.to_node == DemoNodeId::Bob);
+
+        assert!(!can_sell_item_to_current_npc(
+            &state,
+            focused_route,
+            DemoNodeId::Bob,
+            Some(&selected)
+        ));
+    }
+
+    #[test]
+    fn buy_and_sell_are_unavailable_without_active_trade_route() {
+        let catalog = item_catalog();
+        let mut apple = item(DemoNodeId::Alice, "Apple", TraOwnershipStatus::Verified);
+        apple.item_id = APPLE_ITEM_ID;
+        let state = state_with_items(vec![
+            apple,
+            item(DemoNodeId::Bob, "Book", TraOwnershipStatus::Verified),
+        ]);
+        let selected_npc_item =
+            rightmost_transferable_item(&tradable_items_for(&state, DemoNodeId::Bob, &catalog))
+                .expect("npc item");
+        let selected_player_item =
+            rightmost_transferable_item(&tradable_items_for(&state, DemoNodeId::Alice, &catalog))
+                .expect("player item");
+        let focused_route = state
+            .trade_routes
+            .iter()
+            .find(|route| route.to_node == DemoNodeId::Bob);
+
+        assert!(!can_buy_item_from_current_npc(
+            &state,
+            focused_route,
+            DemoNodeId::Bob,
+            Some(&selected_npc_item)
+        ));
+        assert!(!can_sell_item_to_current_npc(
+            &state,
+            focused_route,
+            DemoNodeId::Bob,
+            Some(&selected_player_item)
+        ));
+    }
 }

@@ -1,11 +1,13 @@
 use chrono::{DateTime, Utc};
 pub use lightning_service::{
     ActionLogEntry, BlockWaitAction, BlockWaitReason, BlockWaitStatus, ConnectionStatus, DemoNode,
-    DemoNodeId, InvoiceRequest, InvoiceStatus, LabState, Location, NodeRole, NodeStatus,
-    OperationFaqRow, PaymentAttempt, PaymentStatus, PolarAutomationProfile, PolarConnectionProfile,
-    PolarNodeConnection, RouteStatus, SetupMode, SetupProfile, TradeRoute,
-    DEFAULT_BITCOIN_BACKEND_NAME, DEFAULT_NETWORK_NAME, DEFAULT_ROUTE_CAPACITY_SATS,
-    DEFAULT_SATS_PER_TRANSACTION, MAX_SATS_PER_TRANSACTION,
+    DemoNodeId, GameItemDefinition, InvoiceRequest, InvoiceStatus, LabState, Location,
+    MintTraRequest, NodeRole, NodeStatus, OperationFaqRow, PaymentAttempt, PaymentStatus,
+    PolarAutomationProfile, PolarConnectionProfile, PolarNodeConnection, RouteStatus, SetupMode,
+    SetupProfile, TraItem, TraOwnershipStatus, TraTransferStatus, TradeRoute, TransferTraRequest,
+    APPLE_ITEM_ID, BOOK_ITEM_ID, DEFAULT_BITCOIN_BACKEND_NAME, DEFAULT_NETWORK_NAME,
+    DEFAULT_ROUTE_CAPACITY_SATS, DEFAULT_SATS_PER_TRANSACTION, MAX_SATS_PER_TRANSACTION,
+    MAX_TRA_ITEMS_PER_NODE,
 };
 use serde::{Deserialize, Serialize};
 

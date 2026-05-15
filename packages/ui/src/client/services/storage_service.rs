@@ -77,11 +77,32 @@ pub fn load_lab_state_snapshot() -> Option<LabState> {
 }
 
 pub fn save_lab_state_snapshot(state: &LabState) {
+    debug_assert_tra_snapshot_is_non_sensitive(state);
     platform::save_lab_state_snapshot(state);
 }
 
 pub fn clear_lab_state_snapshot() {
     platform::clear_lab_state_snapshot();
+}
+
+fn debug_assert_tra_snapshot_is_non_sensitive(state: &LabState) {
+    for item in &state.tra_items {
+        debug_assert!(
+            !looks_sensitive(&item.tra_id)
+                && !looks_sensitive(&item.asset_id)
+                && !looks_sensitive(&item.unique_name),
+            "TRA inventory snapshots may store only non-sensitive identity, item_id, owner, and status fields"
+        );
+    }
+}
+
+fn looks_sensitive(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    [
+        "macaroon", "seed", "private", "xprv", "proof", "password", "secret",
+    ]
+    .iter()
+    .any(|marker| value.contains(marker))
 }
 
 pub fn load_setup_polar_tab() -> Option<String> {

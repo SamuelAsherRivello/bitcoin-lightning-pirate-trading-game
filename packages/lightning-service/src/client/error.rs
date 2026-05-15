@@ -43,6 +43,24 @@ pub enum LightningError {
     #[error("The selected invoice is missing or cannot be paid.")]
     InvoiceUnavailable,
 
+    #[error("The selected TRA item is missing or cannot be transferred.")]
+    TraItemUnavailable,
+
+    #[error("The selected node already has the maximum of 3 TRA inventory items.")]
+    TraInventoryFull,
+
+    #[error("The selected TRA item type is not supported by the game catalog.")]
+    UnsupportedTraItemType,
+
+    #[error("TRA item names must be unique in the local lab.")]
+    DuplicateTraItemName,
+
+    #[error("The selected TRA item is owned by a different node.")]
+    TraOwnerMismatch,
+
+    #[error("The local Taproot Assets adapter is unavailable.")]
+    TraAdapterUnavailable,
+
     #[error("Cannot load the local server profile: {0}")]
     ConfigLoadFailed(String),
 

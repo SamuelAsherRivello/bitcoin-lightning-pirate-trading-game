@@ -9,12 +9,13 @@ use crate::client::components::toast::{
     wait_for_prompt_message_minimum, OperationPrompt, Toast, ToastTone,
 };
 use crate::client::models::{
-    ConnectionStatus, LabState, PolarAutomationProfile, SetupMode, SetupProfile,
-    DEFAULT_BITCOIN_BACKEND_NAME,
+    ConnectionStatus, DemoNodeId, LabState, PolarAutomationProfile, SetupMode, SetupProfile,
+    APPLE_ITEM_ID, BOOK_ITEM_ID, DEFAULT_BITCOIN_BACKEND_NAME,
 };
 use crate::client::services::lightning_server_functions::{
     complete_polar_setup, confirm_polar_block_height, create_polar_demo_nodes_with_progress,
-    destroy_polar_demo_nodes, ensure_polar_server, reset_lab, test_setup, verify_polar_bridge,
+    destroy_polar_demo_nodes, ensure_polar_server, initial_tra_setup_items, mint_tra, reset_lab,
+    reset_tra_inventory, test_setup, verify_polar_bridge, verify_tra_setup,
     PolarServerEnsureStatus,
 };
 use crate::client::services::storage_service;
@@ -34,6 +35,7 @@ enum PolarWizardStep {
     ServerName,
     DemoNodes,
     BlockHeight,
+    TraInventory,
     Complete,
     Done,
 }
@@ -45,7 +47,8 @@ impl PolarWizardStep {
             Self::ServerName => 2,
             Self::DemoNodes => 3,
             Self::BlockHeight => 4,
-            Self::Complete | Self::Done => 5,
+            Self::TraInventory => 5,
+            Self::Complete | Self::Done => 6,
         }
     }
 }
@@ -746,7 +749,7 @@ pub fn SetUp() -> Element {
                                                                         lab_state.set(Some(state));
                                                                         close_operation_prompt(operation_prompt, operation_id);
                                                                         push_toast(toast, toast_sequence, "Block Height sent", ToastTone::Success);
-                                                                        focus_step_control("polar-complete-submit").await;
+                                                                        focus_step_control("polar-tra-assets-submit").await;
                                                                     }
                                                                     Err(message) => {
                                                                         close_operation_prompt(operation_prompt, operation_id);
@@ -806,9 +809,70 @@ pub fn SetUp() -> Element {
                                         }
 
                                         Instruction {
+                                            id: "polar-step-tra-assets".to_string(),
+                                            class: wizard_step_class(active_step, PolarWizardStep::TraInventory).to_string(),
+                                            number: 5,
+                                            info: "Creates mock inventory items as local Tap Root Assets".to_string(),
+                                            name: rsx! { "Add Tap Root Assets" },
+                                            value: Some(rsx! {
+                                                label { class: "setup-field-row",
+                                                    input {
+                                                        id: "polar-tra-assets-input",
+                                                        r#type: "text",
+                                                        value: tra_inventory_summary(current_lab_state.as_ref()),
+                                                        readonly: true,
+                                                        disabled: active_step != PolarWizardStep::TraInventory,
+                                                    }
+                                                }
+                                            }),
+                                            actions: Some(rsx! {
+                                                button {
+                                                    id: "polar-tra-assets-submit",
+                                                    class: "primary-action",
+                                                    r#type: "button",
+                                                    disabled: is_busy() || active_step != PolarWizardStep::TraInventory,
+                                                    onclick: move |_| async move {
+                                                        prepare_tra_inventory_step(
+                                                            is_busy,
+                                                            setup_profile,
+                                                            lab_state,
+                                                            operation_prompt,
+                                                            prompt_sequence,
+                                                            toast,
+                                                            toast_sequence,
+                                                        )
+                                                        .await;
+                                                    },
+                                                    "SUBMIT"
+                                                }
+                                                button {
+                                                    id: "polar-tra-assets-reset",
+                                                    class: "secondary-action danger-action",
+                                                    r#type: "button",
+                                                    disabled: is_busy() || active_step != PolarWizardStep::TraInventory,
+                                                    onclick: move |_| async move {
+                                                        is_busy.set(true);
+                                                        let saved_profile = reset_to_block_height_step(setup_profile());
+                                                        setup_profile.set(saved_profile.clone());
+                                                        if let Some(mut state) = lab_state().or_else(storage_service::load_lab_state_snapshot) {
+                                                            state.profile = saved_profile;
+                                                            state.tra_items.clear();
+                                                            storage_service::save_lab_state_snapshot(&state);
+                                                            lab_state.set(Some(state));
+                                                        }
+                                                        push_toast(toast, toast_sequence, "Returned to step 4. Tap Root Assets will be recreated on submit.", ToastTone::Success);
+                                                        focus_step_control("polar-block-height-input").await;
+                                                        is_busy.set(false);
+                                                    },
+                                                    "RESET"
+                                                }
+                                            }),
+                                        }
+
+                                        Instruction {
                                             id: "polar-step-complete".to_string(),
                                             class: wizard_step_class(active_step, PolarWizardStep::Complete).to_string(),
-                                            number: 5,
+                                            number: 6,
                                             info: "Saves setup as connected".to_string(),
                                             name: rsx! { "Unlock routes" },
                                             value: Some(rsx! {
@@ -1093,7 +1157,7 @@ async fn focus_step_control(id: &'static str) {
 async fn focus_step_control(_id: &'static str) {}
 
 fn complete_reset_focus_target() -> &'static str {
-    "polar-block-height-input"
+    "polar-tra-assets-submit"
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1176,6 +1240,10 @@ fn polar_wizard_step(profile: &SetupProfile, lab_state: Option<&LabState>) -> Po
             return PolarWizardStep::BlockHeight;
         }
 
+        if !tra_inventory_ready(lab_state) {
+            return PolarWizardStep::TraInventory;
+        }
+
         return PolarWizardStep::Complete;
     }
 
@@ -1196,6 +1264,40 @@ fn lab_state_has_status(lab_state: Option<&LabState>, status: ConnectionStatus) 
     match lab_state {
         Some(state) => state.profile.connection_status == status,
         None => false,
+    }
+}
+
+fn tra_inventory_ready(lab_state: Option<&LabState>) -> bool {
+    lab_state
+        .map(|state| {
+            let bob_books = verified_tra_count(state, DemoNodeId::Bob, BOOK_ITEM_ID);
+            let carol_apples = verified_tra_count(state, DemoNodeId::Carol, APPLE_ITEM_ID);
+            bob_books >= 2 && carol_apples >= 2
+        })
+        .unwrap_or(false)
+}
+
+fn verified_tra_count(state: &LabState, owner_node: DemoNodeId, item_id: u32) -> usize {
+    state
+        .tra_items
+        .iter()
+        .filter(|item| {
+            item.owner_node == owner_node
+                && item.item_id == item_id
+                && item.ownership_status == crate::client::models::TraOwnershipStatus::Verified
+        })
+        .count()
+}
+
+fn tra_inventory_summary(lab_state: Option<&LabState>) -> String {
+    let item_count = lab_state
+        .map(|state| state.tra_items.len())
+        .unwrap_or_default();
+
+    if item_count == 0 {
+        "No Tap Root Assets added yet".to_string()
+    } else {
+        format!("{item_count} Tap Root Assets ready")
     }
 }
 
@@ -1302,6 +1404,14 @@ fn reset_to_block_height_step(mut profile: SetupProfile) -> SetupProfile {
     profile
 }
 
+fn reset_to_tra_inventory_step(mut profile: SetupProfile) -> SetupProfile {
+    profile.connection_status = ConnectionStatus::PartiallyConnected;
+    profile.polar_block_height_confirmed = true;
+    profile.last_verified_at = None;
+    storage_service::save_setup_profile(&profile);
+    profile
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1351,10 +1461,21 @@ mod tests {
         demo_nodes_ready.polar_block_height_confirmed = true;
         assert_eq!(
             polar_wizard_step(&demo_nodes_ready, None).order(),
-            PolarWizardStep::Complete.order()
+            PolarWizardStep::TraInventory.order()
         );
         assert_eq!(
             polar_wizard_step(&block_height_ready, None).order(),
+            PolarWizardStep::TraInventory.order()
+        );
+        let mut tra_ready_state = lightning_service::default_lab_state(block_height_ready.clone());
+        tra_ready_state.tra_items = vec![
+            verified_item(DemoNodeId::Bob, "Book", BOOK_ITEM_ID),
+            verified_item(DemoNodeId::Bob, "Book 2", BOOK_ITEM_ID),
+            verified_item(DemoNodeId::Carol, "Apple", APPLE_ITEM_ID),
+            verified_item(DemoNodeId::Carol, "Apple 2", APPLE_ITEM_ID),
+        ];
+        assert_eq!(
+            polar_wizard_step(&block_height_ready, Some(&tra_ready_state)).order(),
             PolarWizardStep::Complete.order()
         );
         assert_eq!(
@@ -1363,8 +1484,24 @@ mod tests {
         );
     }
 
+    fn verified_item(
+        owner_node: DemoNodeId,
+        unique_name: &str,
+        item_id: u32,
+    ) -> crate::client::models::TraItem {
+        crate::client::models::TraItem {
+            tra_id: unique_name.to_ascii_lowercase().replace(' ', "-"),
+            asset_id: format!("asset-{unique_name}"),
+            unique_name: unique_name.to_string(),
+            item_id,
+            owner_node,
+            ownership_status: crate::client::models::TraOwnershipStatus::Verified,
+            transfer_status: crate::client::models::TraTransferStatus::None,
+        }
+    }
+
     #[test]
-    fn complete_reset_returns_to_block_height() {
+    fn tra_inventory_reset_returns_to_block_height() {
         let mut profile = profile_with_status(ConnectionStatus::PartiallyConnected, "");
         profile.polar_block_height_confirmed = true;
         profile.network_name = DEFAULT_NETWORK_NAME.to_string();
@@ -1379,8 +1516,52 @@ mod tests {
     }
 
     #[test]
-    fn complete_reset_focuses_step_four_primary_control() {
-        assert_eq!(complete_reset_focus_target(), "polar-block-height-input");
+    fn tra_inventory_ready_requires_two_books_and_two_apples() {
+        let mut profile = profile_with_status(ConnectionStatus::PartiallyConnected, "network-1");
+        profile.polar_block_height_confirmed = true;
+        let mut state = lightning_service::default_lab_state(profile);
+        state.tra_items = vec![
+            verified_item(DemoNodeId::Bob, "Book", BOOK_ITEM_ID),
+            verified_item(DemoNodeId::Bob, "Book 2", BOOK_ITEM_ID),
+            verified_item(DemoNodeId::Carol, "Apple", APPLE_ITEM_ID),
+        ];
+
+        assert!(!tra_inventory_ready(Some(&state)));
+
+        state
+            .tra_items
+            .push(verified_item(DemoNodeId::Carol, "Apple 2", APPLE_ITEM_ID));
+
+        assert!(tra_inventory_ready(Some(&state)));
+    }
+
+    #[test]
+    fn complete_reset_returns_to_tra_inventory() {
+        let mut profile = profile_with_status(ConnectionStatus::Connected, "network-1");
+        profile.polar_block_height_confirmed = true;
+        profile.network_name = DEFAULT_NETWORK_NAME.to_string();
+        let mut state = lightning_service::default_lab_state(profile.clone());
+        state.tra_items = vec![
+            verified_item(DemoNodeId::Bob, "Book", BOOK_ITEM_ID),
+            verified_item(DemoNodeId::Bob, "Book 2", BOOK_ITEM_ID),
+            verified_item(DemoNodeId::Carol, "Apple", APPLE_ITEM_ID),
+            verified_item(DemoNodeId::Carol, "Apple 2", APPLE_ITEM_ID),
+        ];
+
+        let reset_profile = reset_to_tra_inventory_step(profile);
+        state.profile = reset_profile.clone();
+        state.tra_items.clear();
+
+        assert_eq!(
+            polar_wizard_step(&reset_profile, Some(&state)).order(),
+            PolarWizardStep::TraInventory.order()
+        );
+        assert!(reset_profile.polar_block_height_confirmed);
+    }
+
+    #[test]
+    fn complete_reset_focuses_step_five_primary_control() {
+        assert_eq!(complete_reset_focus_target(), "polar-tra-assets-submit");
     }
 
     #[test]
@@ -1598,22 +1779,112 @@ async fn reset_complete_step(
 ) {
     is_busy.set(true);
     operation_prompt.set(None);
-    let saved_profile = reset_to_block_height_step(setup_profile());
+    let saved_profile = reset_to_tra_inventory_step(setup_profile());
     setup_profile.set(saved_profile.clone());
     let current_lab_state = lab_state().or_else(storage_service::load_lab_state_snapshot);
     if let Some(mut state) = current_lab_state {
         state.profile = saved_profile;
+        state.tra_items.clear();
         storage_service::save_lab_state_snapshot(&state);
         lab_state.set(Some(state));
     }
     push_toast(
         toast,
         toast_sequence,
-        "Returned to step 4.",
+        "Returned to step 5. Tap Root Assets will be recreated on submit.",
         ToastTone::Success,
     );
     is_busy.set(false);
     schedule_step_control_focus(complete_reset_focus_target());
+}
+
+async fn prepare_tra_inventory_step(
+    mut is_busy: Signal<bool>,
+    mut setup_profile: Signal<SetupProfile>,
+    mut lab_state: Signal<Option<LabState>>,
+    operation_prompt: Signal<Option<OperationPrompt>>,
+    prompt_sequence: Signal<u64>,
+    toast: Signal<Option<Toast>>,
+    toast_sequence: Signal<u64>,
+) {
+    is_busy.set(true);
+    let operation_id = begin_operation_prompt(
+        operation_prompt,
+        prompt_sequence,
+        "Add Tap Root Assets",
+        "Recreating Tap Root Assets from scratch...",
+        false,
+    )
+    .await;
+
+    let result = async {
+        let mut state = reset_tra_inventory(setup_profile()).await?;
+        update_operation_prompt(
+            operation_prompt,
+            operation_id,
+            "Checking Tap Root Assets setup...",
+            ToastTone::Info,
+            true,
+            false,
+        )
+        .await;
+
+        state = verify_tra_setup(state.profile.clone()).await?;
+
+        let initial_items = initial_tra_setup_items();
+        let initial_item_count = initial_items.len();
+
+        for (index, request) in initial_items.into_iter().enumerate() {
+            update_operation_prompt(
+                operation_prompt,
+                operation_id,
+                format!(
+                    "Creating Tap Root Asset {} of {}...",
+                    index + 1,
+                    initial_item_count
+                ),
+                ToastTone::Info,
+                true,
+                false,
+            )
+            .await;
+
+            state = mint_tra(state.profile.clone(), request).await?;
+        }
+
+        Ok::<LabState, String>(state)
+    }
+    .await;
+
+    match result {
+        Ok(state) => {
+            setup_profile.set(state.profile.clone());
+            lab_state.set(Some(state));
+            close_operation_prompt(operation_prompt, operation_id);
+            push_toast(
+                toast,
+                toast_sequence,
+                "Tap Root Assets added.",
+                ToastTone::Success,
+            );
+            focus_step_control("polar-complete-submit").await;
+        }
+        Err(message) => {
+            update_operation_prompt(
+                operation_prompt,
+                operation_id,
+                message.clone(),
+                ToastTone::Error,
+                false,
+                false,
+            )
+            .await;
+            close_operation_prompt(operation_prompt, operation_id);
+            push_toast(toast, toast_sequence, message, ToastTone::Error);
+        }
+    }
+
+    is_busy.set(false);
 }
 
 async fn begin_operation_prompt(

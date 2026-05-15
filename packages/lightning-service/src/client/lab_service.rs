@@ -80,6 +80,7 @@ pub fn default_lab_state(profile: SetupProfile) -> LabState {
         recent_invoices: Vec::new(),
         recent_payments: Vec::new(),
         block_actions: Vec::new(),
+        tra_items: Vec::new(),
         operation_faq: get_operation_faq(),
         block_height: 0,
         polar_observed_block_height: None,
@@ -336,7 +337,8 @@ pub fn pay_invoice(
     let payee_node = state.recent_invoices[invoice_index].creator_node;
     let amount_sats = state.recent_invoices[invoice_index].amount_sats;
 
-    apply_payment_to_route(&mut state, payer_node, payee_node, amount_sats)?;
+    let settled_over_route =
+        apply_payment_to_route(&mut state, payer_node, payee_node, amount_sats)?;
 
     state.recent_invoices[invoice_index].status = InvoiceStatus::Settled;
     state.recent_invoices[invoice_index].settled_at = Some(Utc::now());
@@ -357,7 +359,7 @@ pub fn pay_invoice(
     push_log(
         &mut state,
         &format!("{} paid {}", payer_node.label(), payee_node.label()),
-        &format!("Paid {amount_sats} sats over an active Lightning channel. No new Bitcoin block was required."),
+        &payment_detail(amount_sats, settled_over_route),
         &["Invoice Sent", "Invoice Paid"],
     );
 
@@ -540,42 +542,95 @@ fn apply_payment_to_route(
     payer_node: DemoNodeId,
     payee_node: DemoNodeId,
     amount_sats: u64,
-) -> Result<(), LightningError> {
-    let route = state
+) -> Result<bool, LightningError> {
+    let route_payment_result = state
         .trade_routes
         .iter_mut()
         .find(|route| route.connects(payer_node, payee_node))
+        .ok_or(LightningError::RouteNotActive)
+        .and_then(|route| {
+            if route.status != RouteStatus::Active {
+                return Err(LightningError::RouteNotActive);
+            }
+
+            if payer_node == route.from_node {
+                if route.local_balance_sats < amount_sats {
+                    return Err(LightningError::InsufficientLiquidity);
+                }
+
+                route.local_balance_sats -= amount_sats;
+                route.remote_balance_sats += amount_sats;
+            } else {
+                if route.remote_balance_sats < amount_sats {
+                    return Err(LightningError::InsufficientLiquidity);
+                }
+
+                route.remote_balance_sats -= amount_sats;
+                route.local_balance_sats += amount_sats;
+            }
+
+            Ok(())
+        });
+
+    if route_payment_result.is_ok() {
+        for node in &mut state.nodes {
+            if node.node_id == payer_node {
+                node.channel_balance_sats = node.channel_balance_sats.saturating_sub(amount_sats);
+            } else if node.node_id == payee_node {
+                node.channel_balance_sats = node.channel_balance_sats.saturating_add(amount_sats);
+            }
+        }
+
+        return Ok(true);
+    }
+
+    if payer_node == DemoNodeId::Alice {
+        return route_payment_result.map(|_| true);
+    }
+
+    apply_wallet_payment(state, payer_node, payee_node, amount_sats)?;
+    Ok(false)
+}
+
+fn apply_wallet_payment(
+    state: &mut LabState,
+    payer_node: DemoNodeId,
+    payee_node: DemoNodeId,
+    amount_sats: u64,
+) -> Result<(), LightningError> {
+    let payer_index = state
+        .nodes
+        .iter()
+        .position(|node| node.node_id == payer_node)
+        .ok_or(LightningError::RouteNotActive)?;
+    let payee_index = state
+        .nodes
+        .iter()
+        .position(|node| node.node_id == payee_node)
         .ok_or(LightningError::RouteNotActive)?;
 
-    if route.status != RouteStatus::Active {
-        return Err(LightningError::RouteNotActive);
+    if state.nodes[payer_index].wallet_balance_sats < amount_sats {
+        return Err(LightningError::InsufficientLiquidity);
     }
 
-    if payer_node == route.from_node {
-        if route.local_balance_sats < amount_sats {
-            return Err(LightningError::InsufficientLiquidity);
-        }
-
-        route.local_balance_sats -= amount_sats;
-        route.remote_balance_sats += amount_sats;
-    } else {
-        if route.remote_balance_sats < amount_sats {
-            return Err(LightningError::InsufficientLiquidity);
-        }
-
-        route.remote_balance_sats -= amount_sats;
-        route.local_balance_sats += amount_sats;
-    }
-
-    for node in &mut state.nodes {
-        if node.node_id == payer_node {
-            node.channel_balance_sats = node.channel_balance_sats.saturating_sub(amount_sats);
-        } else if node.node_id == payee_node {
-            node.channel_balance_sats = node.channel_balance_sats.saturating_add(amount_sats);
-        }
-    }
+    state.nodes[payer_index].wallet_balance_sats -= amount_sats;
+    state.nodes[payee_index].wallet_balance_sats = state.nodes[payee_index]
+        .wallet_balance_sats
+        .saturating_add(amount_sats);
 
     Ok(())
+}
+
+fn payment_detail(amount_sats: u64, settled_over_route: bool) -> String {
+    if settled_over_route {
+        format!(
+            "Paid {amount_sats} sats over an active Lightning channel. No new Bitcoin block was required."
+        )
+    } else {
+        format!(
+            "Paid {amount_sats} sats from the NPC wallet balance because the current sell action did not need channel-side liquidity."
+        )
+    }
 }
 
 fn push_log(state: &mut LabState, summary: &str, network_detail: &str, details: &[&str]) {
@@ -658,5 +713,50 @@ mod tests {
         assert!(!state.trade_routes[0].requires_next_block);
         assert_eq!(state.trade_routes[0].local_balance_sats, 0);
         assert_eq!(state.trade_routes[0].remote_balance_sats, 0);
+    }
+
+    #[test]
+    fn npc_can_pay_player_from_wallet_when_route_has_no_remote_liquidity() {
+        let state = default_lab_state(connected_profile());
+        let bob_wallet_before = state
+            .nodes
+            .iter()
+            .find(|node| node.node_id == DemoNodeId::Bob)
+            .expect("Bob node")
+            .wallet_balance_sats;
+        let alice_wallet_before = state
+            .nodes
+            .iter()
+            .find(|node| node.node_id == DemoNodeId::Alice)
+            .expect("Alice node")
+            .wallet_balance_sats;
+
+        let state = create_invoice_and_maybe_autosend(
+            state,
+            DemoNodeId::Alice,
+            DemoNodeId::Bob,
+            1_000,
+            "Player sells an item to Bob".to_string(),
+            true,
+        )
+        .expect("Bob wallet payment should settle");
+
+        let bob_wallet_after = state
+            .nodes
+            .iter()
+            .find(|node| node.node_id == DemoNodeId::Bob)
+            .expect("Bob node")
+            .wallet_balance_sats;
+        let alice_wallet_after = state
+            .nodes
+            .iter()
+            .find(|node| node.node_id == DemoNodeId::Alice)
+            .expect("Alice node")
+            .wallet_balance_sats;
+
+        assert_eq!(bob_wallet_after, bob_wallet_before - 1_000);
+        assert_eq!(alice_wallet_after, alice_wallet_before + 1_000);
+        assert_eq!(state.recent_payments[0].payer_node, DemoNodeId::Bob);
+        assert_eq!(state.recent_payments[0].payee_node, DemoNodeId::Alice);
     }
 }

@@ -1203,10 +1203,14 @@ textarea {
     display: grid;
     place-items: center;
     width: 54px;
-    height: 42px;
+    min-height: 78px;
+    height: 78px;
     border: 1px solid color-mix(in srgb, var(--app-border) 78%, transparent);
     border-radius: 7px;
     background: color-mix(in srgb, var(--app-surface) 76%, transparent);
+    padding: 5px;
+    text-align: center;
+    overflow: hidden;
 }
 
 .game-view__slot--empty {
@@ -1221,9 +1225,65 @@ textarea {
 }
 
 .game-view__book {
-    width: 34px;
-    height: 34px;
+    width: 28px;
+    height: 28px;
     object-fit: contain;
+}
+
+.game-view__item-name,
+.game-view__item-meta,
+.game-view__item-status {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.game-view__item-name {
+    color: var(--app-text);
+    font-size: 10px;
+    font-weight: 800;
+}
+
+.game-view__item-meta {
+    color: var(--app-text-subtle);
+    font-size: 8px;
+    font-weight: 700;
+}
+
+.game-view__item-status {
+    border-radius: 999px;
+    padding: 1px 5px;
+    font-size: 8px;
+    font-weight: 900;
+    text-transform: uppercase;
+}
+
+.game-view__item-status--verified {
+    background: color-mix(in srgb, #2dbf78 22%, transparent);
+    color: #bdf8d8;
+}
+
+.game-view__item-status--pending {
+    background: color-mix(in srgb, #d9a441 24%, transparent);
+    color: #ffe4a5;
+}
+
+.game-view__item-status--blocked {
+    background: color-mix(in srgb, #f15b5b 22%, transparent);
+    color: #ffd0d0;
+}
+
+.tra-setup-status {
+    display: grid;
+    gap: 4px;
+    color: var(--app-text-subtle);
+    font-size: 12px;
+}
+
+.tra-setup-status strong {
+    color: var(--app-text);
+    font-size: 13px;
 }
 
 .game-view__animation {
@@ -1692,6 +1752,50 @@ textarea {
 }
 
 .faq-table__row--head span {
+    color: var(--app-text);
+    font-weight: 850;
+}
+
+.tra-table {
+    display: grid;
+    overflow-x: auto;
+    border: 1px solid var(--app-border);
+    border-radius: 8px;
+}
+
+.tra-table__row {
+    display: grid;
+    grid-template-columns:
+        minmax(110px, 1.1fr)
+        minmax(150px, 1.4fr)
+        minmax(100px, 1fr)
+        minmax(72px, 0.65fr)
+        minmax(150px, 1.35fr)
+        minmax(90px, 0.8fr)
+        minmax(105px, 0.9fr)
+        minmax(95px, 0.9fr);
+    min-width: 900px;
+    border-top: 1px solid var(--app-border);
+}
+
+.tra-table__row:first-child {
+    border-top: 0;
+}
+
+.tra-table__row span {
+    overflow: hidden;
+    padding: 10px;
+    color: var(--app-text-muted);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tra-table__row--head {
+    background: var(--app-subtle);
+}
+
+.tra-table__row--head span {
     color: var(--app-text);
     font-weight: 850;
 }

@@ -1,5 +1,7 @@
 use dioxus::prelude::*;
 
+use crate::client::models::{TraOwnershipStatus, TraTransferStatus};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GameSide {
     Left,
@@ -52,7 +54,15 @@ impl Default for GameChannelVisual {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GameInventorySlot {
     Empty,
-    Book,
+    Item {
+        tra_id: String,
+        unique_name: String,
+        item_id: u32,
+        display_name: String,
+        visual_key: String,
+        ownership_status: TraOwnershipStatus,
+        transfer_status: TraTransferStatus,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -387,15 +397,29 @@ fn GameActor(
 
 #[component]
 fn InventorySlot(slot: GameInventorySlot) -> Element {
+    let slot_class = inventory_slot_class(&slot).to_string();
+
     rsx! {
-        div { class: inventory_slot_class(&slot),
+        div { class: slot_class,
             match slot {
                 GameInventorySlot::Empty => rsx! { span { class: "game-view__empty-slot", "Empty" } },
-                GameInventorySlot::Book => rsx! {
-                    img {
-                        class: "game-view__book",
-                        src: GAME_BOOK,
-                        alt: "Book"
+                GameInventorySlot::Item {
+                    tra_id: _,
+                    unique_name: _,
+                    item_id: _,
+                    display_name,
+                    visual_key,
+                    ownership_status: _,
+                    transfer_status: _,
+                } => {
+                    let image_src = inventory_item_asset(&visual_key);
+                    rsx! {
+                        img {
+                            class: "game-view__book",
+                            src: image_src,
+                            alt: "{display_name}"
+                        }
+                        span { class: "game-view__item-name", "{display_name}" }
                     }
                 },
             }
@@ -409,8 +433,7 @@ fn CrossFadeImage(src: Option<Asset>, class: String, image_class: String, alt: S
     let mut previous_src = use_signal(|| None::<Asset>);
     let mut is_transitioning = use_signal(|| false);
 
-    use_effect(move || {
-        let next_src = src.clone();
+    use_effect(use_reactive((&src,), move |(next_src,)| {
         let current = current_src.peek().clone();
 
         if next_src != current {
@@ -424,7 +447,7 @@ fn CrossFadeImage(src: Option<Asset>, class: String, image_class: String, alt: S
                 is_transitioning.set(false);
             });
         }
-    });
+    }));
 
     let previous = previous_src();
     let current = current_src();
@@ -468,11 +491,20 @@ fn normalized_inventory(mut inventory: Vec<GameInventorySlot>) -> Vec<GameInvent
 fn inventory_slot_class(slot: &GameInventorySlot) -> &'static str {
     match slot {
         GameInventorySlot::Empty => "game-view__slot game-view__slot--empty",
-        GameInventorySlot::Book => "game-view__slot game-view__slot--book",
+        GameInventorySlot::Item { .. } => "game-view__slot game-view__slot--book",
     }
 }
 
 const GAME_BOOK: Asset = asset!("/assets/images/game/book.svg");
+const GAME_APPLE: Asset = asset!("/assets/images/game/apple.svg");
+
+fn inventory_item_asset(visual_key: &str) -> Asset {
+    match visual_key {
+        "book" => GAME_BOOK,
+        "apple" => GAME_APPLE,
+        _ => GAME_BOOK,
+    }
+}
 
 #[cfg(target_arch = "wasm32")]
 async fn wait_for_crossfade() {

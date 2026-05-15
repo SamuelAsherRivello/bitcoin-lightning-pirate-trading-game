@@ -37,3 +37,13 @@ pub fn WarningCallout(title: String, body: String) -> Element {
         }
     }
 }
+
+#[component]
+pub fn TraSetupStatus(summary: String, detail: String) -> Element {
+    rsx! {
+        div { class: "tra-setup-status", role: "status",
+            strong { "{summary}" }
+            span { "{detail}" }
+        }
+    }
+}

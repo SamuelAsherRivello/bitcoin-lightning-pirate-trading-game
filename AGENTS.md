@@ -299,5 +299,5 @@ The initial UI rendered by the component on the client must be identical to the 
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/002-lightning-game-poc/plan.md`
+`specs/005-tra-inventory-assets/plan.md`
 <!-- SPECKIT END -->

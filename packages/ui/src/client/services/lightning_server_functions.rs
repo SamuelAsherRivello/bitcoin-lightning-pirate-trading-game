@@ -1,6 +1,7 @@
 use crate::client::models::{
-    BlockWaitReason, ConnectionStatus, DemoNodeId, LabState, RouteStatus, SetupProfile,
-    DEFAULT_BITCOIN_BACKEND_NAME, DEFAULT_ROUTE_CAPACITY_SATS,
+    BlockWaitReason, ConnectionStatus, DemoNodeId, GameItemDefinition, LabState, MintTraRequest,
+    RouteStatus, SetupProfile, TransferTraRequest, DEFAULT_BITCOIN_BACKEND_NAME,
+    DEFAULT_ROUTE_CAPACITY_SATS,
 };
 use crate::client::services::{polar_bridge_service, storage_service};
 
@@ -223,12 +224,19 @@ pub async fn complete_polar_setup(mut profile: SetupProfile) -> Result<LabState,
 }
 
 pub async fn get_lab_state(profile: SetupProfile) -> Result<LabState, String> {
-    if !profile.is_connected() {
+    let can_load_snapshot = profile.is_connected()
+        || profile.connection_status == lightning_service::ConnectionStatus::PartiallyConnected;
+
+    if !can_load_snapshot {
         return Ok(lightning_service::default_lab_state(profile));
     }
 
     let state = storage_service::load_lab_state_snapshot()
-        .filter(|state| state.profile.is_connected())
+        .filter(|state| {
+            state.profile.is_connected()
+                || state.profile.connection_status
+                    == lightning_service::ConnectionStatus::PartiallyConnected
+        })
         .unwrap_or_else(|| lightning_service::default_lab_state(profile.clone()));
 
     let state = if state.profile.sats_per_transaction == profile.sats_per_transaction
@@ -239,7 +247,11 @@ pub async fn get_lab_state(profile: SetupProfile) -> Result<LabState, String> {
         lightning_service::default_lab_state(profile)
     };
 
-    let refreshed_state = refresh_polar_block_height(state).await?;
+    let mut refreshed_state = refresh_polar_block_height(state).await?;
+    if refreshed_state.profile.is_connected() && !refreshed_state.tra_items.is_empty() {
+        refreshed_state = lightning_service::TraService::verify_tra_setup(refreshed_state)
+            .map_err(|error| error.to_string())?;
+    }
     storage_service::save_lab_state_snapshot(&refreshed_state);
     Ok(refreshed_state)
 }
@@ -317,6 +329,16 @@ pub async fn resume_polar_setup_after_restart(
                     state.block_height = block_height;
                     state.polar_observed_block_height = Some(block_height);
                 }
+            }
+
+            if state.profile.is_connected() && !state.tra_items.is_empty() {
+                state =
+                    lightning_service::TraService::verify_tra_setup(state).map_err(|error| {
+                        recovery_for_issue(
+                            recovery_profile.clone(),
+                            PolarLabHealthIssue::BridgeUnavailable(error.to_string()),
+                        )
+                    })?;
             }
 
             storage_service::save_setup_profile(&state.profile);
@@ -444,6 +466,71 @@ pub async fn create_invoice_and_maybe_autosend(
         autosend_enabled,
     )
     .map_err(|error| error.to_string())?;
+    storage_service::save_lab_state_snapshot(&state);
+    Ok(state)
+}
+
+pub async fn create_invoice_and_maybe_autosend_for_amount(
+    profile: SetupProfile,
+    creator_node: DemoNodeId,
+    candidate_payer_node: DemoNodeId,
+    amount_sats: u64,
+    autosend_enabled: bool,
+    memo: String,
+) -> Result<LabState, String> {
+    let state = get_lab_state(profile).await?;
+    let state = lightning_service::create_invoice_and_maybe_autosend(
+        state,
+        creator_node,
+        candidate_payer_node,
+        amount_sats,
+        memo,
+        autosend_enabled,
+    )
+    .map_err(|error| error.to_string())?;
+    storage_service::save_lab_state_snapshot(&state);
+    Ok(state)
+}
+
+pub async fn get_tra_item_catalog() -> Result<Vec<GameItemDefinition>, String> {
+    Ok(lightning_service::TraService::item_catalog())
+}
+
+pub fn initial_tra_setup_items() -> Vec<MintTraRequest> {
+    lightning_service::TraService::initial_setup_items()
+}
+
+pub async fn verify_tra_setup(profile: SetupProfile) -> Result<LabState, String> {
+    let state = get_lab_state(profile).await?;
+    let state = lightning_service::TraService::verify_tra_setup(state)
+        .map_err(|error| error.to_string())?;
+    storage_service::save_lab_state_snapshot(&state);
+    Ok(state)
+}
+
+pub async fn reset_tra_inventory(profile: SetupProfile) -> Result<LabState, String> {
+    let state = get_lab_state(profile).await?;
+    let state = lightning_service::TraService::reset_tra_inventory(state)
+        .map_err(|error| error.to_string())?;
+    storage_service::save_lab_state_snapshot(&state);
+    Ok(state)
+}
+
+pub async fn mint_tra(profile: SetupProfile, request: MintTraRequest) -> Result<LabState, String> {
+    let state = get_lab_state(profile).await?;
+    let state = lightning_service::TraService::mint_tra(state, request)
+        .map_err(|error| error.to_string())?;
+    storage_service::save_lab_state_snapshot(&state);
+    Ok(state)
+}
+
+pub async fn transfer_tra(
+    profile: SetupProfile,
+    request: TransferTraRequest,
+) -> Result<LabState, String> {
+    let state = get_lab_state(profile).await?;
+    let state = lightning_service::TraService::transfer_tra(state, request)
+        .map_err(|error| error.to_string())?;
     storage_service::save_lab_state_snapshot(&state);
     Ok(state)
 }

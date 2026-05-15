@@ -211,6 +211,9 @@
   .contents {
     display: contents;
   }
+  .hidden {
+    display: none;
+  }
   .inline {
     display: inline;
   }

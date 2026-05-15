@@ -6,6 +6,9 @@ pub const DEFAULT_BITCOIN_BACKEND_NAME: &str = "backend1";
 pub const DEFAULT_SATS_PER_TRANSACTION: u64 = 1_000;
 pub const MAX_SATS_PER_TRANSACTION: u64 = 100_000;
 pub const DEFAULT_ROUTE_CAPACITY_SATS: u64 = 250_000;
+pub const MAX_TRA_ITEMS_PER_NODE: usize = 3;
+pub const BOOK_ITEM_ID: u32 = 1;
+pub const APPLE_ITEM_ID: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum DemoNodeId {
@@ -447,6 +450,80 @@ pub struct ActionLogEntry {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum TraOwnershipStatus {
+    Verified,
+    Pending,
+    Missing,
+    Unsupported,
+    Failed,
+}
+
+impl TraOwnershipStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Verified => "Verified",
+            Self::Pending => "Pending",
+            Self::Missing => "Missing",
+            Self::Unsupported => "Unsupported",
+            Self::Failed => "Failed",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum TraTransferStatus {
+    None,
+    Pending,
+    Succeeded,
+    Failed,
+}
+
+impl TraTransferStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Pending => "Pending",
+            Self::Succeeded => "Succeeded",
+            Self::Failed => "Failed",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct GameItemDefinition {
+    pub item_id: u32,
+    pub item_type: String,
+    pub display_name: String,
+    pub cost_sats: u64,
+    pub visual_key: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TraItem {
+    pub tra_id: String,
+    pub asset_id: String,
+    pub unique_name: String,
+    pub item_id: u32,
+    pub owner_node: DemoNodeId,
+    pub ownership_status: TraOwnershipStatus,
+    pub transfer_status: TraTransferStatus,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct MintTraRequest {
+    pub owner_node: DemoNodeId,
+    pub unique_name: String,
+    pub item_id: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TransferTraRequest {
+    pub tra_id: String,
+    pub from_node: DemoNodeId,
+    pub to_node: DemoNodeId,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct LabState {
     pub profile: SetupProfile,
@@ -455,6 +532,8 @@ pub struct LabState {
     pub recent_invoices: Vec<InvoiceRequest>,
     pub recent_payments: Vec<PaymentAttempt>,
     pub block_actions: Vec<BlockWaitAction>,
+    #[serde(default)]
+    pub tra_items: Vec<TraItem>,
     pub operation_faq: Vec<OperationFaqRow>,
     pub block_height: u64,
     #[serde(default)]
