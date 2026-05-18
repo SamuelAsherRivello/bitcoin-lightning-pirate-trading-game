@@ -1,12 +1,14 @@
 use chrono::{DateTime, Utc};
 pub use lightning_service::{
     ActionLogEntry, BlockWaitAction, BlockWaitReason, BlockWaitStatus, ConnectionStatus, DemoNode,
-    DemoNodeId, GameItemDefinition, InvoiceRequest, InvoiceStatus, LabState, Location,
-    MintTraRequest, NodeRole, NodeStatus, OperationFaqRow, PaymentAttempt, PaymentStatus,
-    PolarAutomationProfile, PolarConnectionProfile, PolarNodeConnection, RouteStatus, SetupMode,
-    SetupProfile, TraItem, TraOwnershipStatus, TraTransferStatus, TradeRoute, TransferTraRequest,
-    APPLE_ITEM_ID, BOOK_ITEM_ID, DEFAULT_BITCOIN_BACKEND_NAME, DEFAULT_NETWORK_NAME,
-    DEFAULT_ROUTE_CAPACITY_SATS, DEFAULT_SATS_PER_TRANSACTION, MAX_SATS_PER_TRANSACTION,
+    DemoNodeId, GameItemDefinition, GameTreasury, InvoiceRequest, InvoiceStatus, LabState,
+    Location, MintTraRequest, NodeRole, NodeStatus, NpcItemTransfer, OperationFaqRow,
+    PaymentAttempt, PaymentStatus, PolarAutomationProfile, PolarConnectionProfile,
+    PolarNodeConnection, RouteStatus, SetupMode, SetupProfile, TraItem, TraOwnershipStatus,
+    TraTransferStatus, TradeRoute, TransferTraRequest, TreasuryEntry, TreasuryEntryDirection,
+    TreasuryImpactPreview, TreasuryResource, TreasuryStatus, APPLE_ITEM_ID, BOOK_ITEM_ID,
+    DEFAULT_BITCOIN_BACKEND_NAME, DEFAULT_NETWORK_NAME, DEFAULT_ROUTE_CAPACITY_SATS,
+    DEFAULT_SATS_PER_TRANSACTION, GAME_TREASURY_NODE_LABEL, MAX_SATS_PER_TRANSACTION,
     MAX_TRA_ITEMS_PER_NODE,
 };
 use serde::{Deserialize, Serialize};

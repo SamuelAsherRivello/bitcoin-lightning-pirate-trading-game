@@ -4,6 +4,18 @@ $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Resolve-Path (Join-Path $ScriptRoot "..\..")
 Set-Location $ProjectRoot
 
+function Invoke-CheckedCommand {
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList
+    )
+
+    & $FilePath @ArgumentList
+    if ($LASTEXITCODE -ne 0) {
+        throw "$FilePath exited with code $LASTEXITCODE."
+    }
+}
+
 function Add-CargoToPathIfPresent {
     $CargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
     if ((Test-Path $CargoBin) -and (-not (($env:Path -split ";") -contains $CargoBin))) {
@@ -24,7 +36,7 @@ function Ensure-RustToolchain {
     }
 
     Write-Host "Installing Rust via rustup..."
-    winget install --id Rustlang.Rustup -e --accept-package-agreements --accept-source-agreements
+    Invoke-CheckedCommand "winget" @("install", "--id", "Rustlang.Rustup", "-e", "--accept-package-agreements", "--accept-source-agreements")
 
     Add-CargoToPathIfPresent
 
@@ -41,28 +53,40 @@ function Ensure-WasmTarget {
     }
 
     Write-Host "Installing wasm32-unknown-unknown target..."
-    rustup target add wasm32-unknown-unknown
+    Invoke-CheckedCommand "rustup" @("target", "add", "wasm32-unknown-unknown")
+}
+
+function Get-WorkspaceDioxusVersion {
+    $CargoTomlPath = Join-Path $ProjectRoot "Cargo.toml"
+    $CargoToml = Get-Content -Raw -Path $CargoTomlPath
+
+    if ($CargoToml -match '(?m)^\s*dioxus\s*=\s*\{[^}]*version\s*=\s*"([^"]+)"') {
+        return $Matches[1]
+    }
+
+    throw "Could not find the workspace Dioxus version in $CargoTomlPath."
 }
 
 function Ensure-DioxusCli {
-    $RequiredDxVersion = "0.7.6"
+    $RequiredDxVersion = Get-WorkspaceDioxusVersion
+    $ExpectedDxVersionPattern = "^dioxus\s+$([regex]::Escape($RequiredDxVersion))(\s|\(|$)"
     $DxCommand = Get-Command dx -ErrorAction SilentlyContinue
 
     if ($DxCommand) {
         $DxVersionOutput = (& dx --version | Out-String).Trim()
-        if ($DxVersionOutput -match "^dioxus\s+0\.7(\.|-|$)") {
+        if ($DxVersionOutput -match $ExpectedDxVersionPattern) {
             Write-Host "Dioxus CLI is already installed and compatible ($DxVersionOutput)."
             return
         }
 
-        Write-Host "Dioxus CLI is installed but not on a known-compatible 0.7 version: $DxVersionOutput"
+        Write-Host "Dioxus CLI version does not match workspace Dioxus $RequiredDxVersion ($DxVersionOutput)."
         Write-Host "Reinstalling Dioxus CLI $RequiredDxVersion..."
-        cargo install dioxus-cli@$RequiredDxVersion --force
+        Invoke-CheckedCommand "cargo" @("install", "dioxus-cli@$RequiredDxVersion", "--locked", "--force")
         return
     }
 
     Write-Host "Installing Dioxus CLI $RequiredDxVersion..."
-    cargo install dioxus-cli@$RequiredDxVersion
+    Invoke-CheckedCommand "cargo" @("install", "dioxus-cli@$RequiredDxVersion", "--locked", "--force")
 }
 
 function Ensure-NodeDependencies {
@@ -72,7 +96,7 @@ function Ensure-NodeDependencies {
 
     if (-not (Test-Path (Join-Path $ProjectRoot "node_modules\.bin\tailwindcss.cmd"))) {
         Write-Host "Installing Tailwind CSS dependencies..."
-        npm install
+        Invoke-CheckedCommand "npm" @("install")
     } else {
         Write-Host "Tailwind CSS dependencies are already installed."
     }
@@ -80,7 +104,7 @@ function Ensure-NodeDependencies {
 
 function Build-TailwindCss {
     Write-Host "Building Tailwind CSS..."
-    npm run tailwind:build
+    Invoke-CheckedCommand "npm" @("run", "tailwind:build")
 }
 
 Ensure-RustToolchain
@@ -91,7 +115,7 @@ Build-TailwindCss
 
 Write-Host ""
 Write-Host "Running validation build..."
-cargo check --workspace
+Invoke-CheckedCommand "cargo" @("check", "--workspace")
 
 Write-Host ""
 Write-Host "Dependency install complete."

@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-pub const TOAST_TIMEOUT_MS: u32 = 2_000;
+pub const TOAST_TIMEOUT_MS: u32 = 5_000;
 pub const PROMPT_MESSAGE_MINIMUM_MS: u32 = 250;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -47,10 +47,53 @@ pub fn ToastRegion(mut toast: Signal<Option<Toast>>) -> Element {
             class: "toast-region",
             aria_live: "polite",
             if let Some(toast) = toast() {
-                div { class: toast_class(toast.tone), "{toast.message}" }
+                div { class: toast_class(toast.tone),
+                    span { class: "toast__message", "{toast.message}" }
+                    button {
+                        class: "toast__copy",
+                        r#type: "button",
+                        aria_label: "Copy toast message",
+                        title: "Copy message",
+                        onclick: {
+                            let message = toast.message.clone();
+                            move |_| {
+                                copy_to_clipboard(message.clone());
+                            }
+                        },
+                        svg {
+                            "aria-hidden": "true",
+                            width: "16",
+                            height: "16",
+                            view_box: "0 0 24 24",
+                            fill: "none",
+                            stroke: "currentColor",
+                            stroke_width: "2",
+                            stroke_linecap: "round",
+                            stroke_linejoin: "round",
+                            rect { x: "9", y: "9", width: "13", height: "13", rx: "2", ry: "2" }
+                            path { d: "M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" }
+                        }
+                    }
+                }
             }
         }
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn copy_to_clipboard(message: String) {
+    copy_to_clipboard_js(&message);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn copy_to_clipboard(_message: String) {}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(
+    inline_js = "export function copy_to_clipboard_js(message) { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(message); } }"
+)]
+extern "C" {
+    fn copy_to_clipboard_js(message: &str);
 }
 
 #[component]

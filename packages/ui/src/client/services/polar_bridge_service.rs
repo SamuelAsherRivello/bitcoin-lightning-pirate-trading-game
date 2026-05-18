@@ -8,14 +8,23 @@ use crate::client::models::{
 };
 
 const DEMO_NODE_FUNDING_SATS: u64 = 1_000_000;
-const DEMO_NODE_START_TIMEOUT_SECONDS: u16 = 180;
+const DEMO_NODE_START_TIMEOUT_SECONDS: u16 = 30;
 const DEMO_NODE_START_ATTEMPTS: u16 = DEMO_NODE_START_TIMEOUT_SECONDS / 2;
 const DEMO_NODE_START_DELAY_MS: u32 = 2_000;
 const DEMO_NODE_READY_TIMEOUT_SECONDS: u16 = 90;
 const DEMO_NODE_READY_DELAY_MS: u32 = 1_500;
 const DEMO_NODE_READY_ATTEMPTS: u16 =
     ((DEMO_NODE_READY_TIMEOUT_SECONDS as u32 * 1_000) / DEMO_NODE_READY_DELAY_MS) as u16;
+const GAME_TREASURY_READY_TIMEOUT_SECONDS: u16 = 240;
+const GAME_TREASURY_READY_ATTEMPTS: u16 =
+    ((GAME_TREASURY_READY_TIMEOUT_SECONDS as u32 * 1_000) / DEMO_NODE_READY_DELAY_MS) as u16;
 const DEMO_SERVICE_LOG_LEVEL: DemoLogLevel = DemoLogLevel::On;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TreasuryShellPolicy {
+    AllowCreate,
+    ReclaimOnly,
+}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum DemoLogLevel {
@@ -147,6 +156,8 @@ pub async fn ensure_server(
         ensure_network_running(profile, &network_id).await?;
         let networks = list_networks(profile).await?;
         ensure_named_network_running(&networks, &requested_name)?;
+        clean_network_for_step_two(profile, &network_id, &requested_name).await?;
+        let networks = list_networks(profile).await?;
         return Ok(PolarServerEnsureResult {
             profile: automation_profile_from_network(profile, &networks, network_id),
             status: PolarServerEnsureStatus::Existed,
@@ -164,6 +175,8 @@ pub async fn ensure_server(
     ensure_network_running(profile, &network_id).await?;
     let networks = list_networks(profile).await?;
     ensure_named_network_running(&networks, &requested_name)?;
+    clean_network_for_step_two(profile, &network_id, &requested_name).await?;
+    let networks = list_networks(profile).await?;
 
     Ok(PolarServerEnsureResult {
         profile: automation_profile_from_network(profile, &networks, network_id),
@@ -204,8 +217,6 @@ where
     let resolved_profile = resolve_started_automation_profile(profile).await?;
     let network_id = clean_network_id(&resolved_profile);
     let backend_name = clean_backend_name(&resolved_profile);
-
-    close_demo_channels_with_progress(&resolved_profile, &mut report_progress).await?;
 
     for node_id in DemoNodeId::ALL {
         report_progress(format!("Preparing {} in Polar...", node_id.label()));
@@ -253,6 +264,58 @@ where
     Ok(resolved_profile)
 }
 
+pub async fn create_game_treasury_node(
+    profile: &PolarAutomationProfile,
+    required_balance_sats: u64,
+) -> Result<PolarAutomationProfile, String> {
+    let resolved_profile =
+        resolve_started_automation_profile_with_log_level(profile, DemoLogLevel::On).await?;
+    let network_id = clean_network_id(&resolved_profile);
+    let backend_name = clean_backend_name(&resolved_profile);
+    let mut report_progress = |_| {};
+
+    ensure_game_treasury_node_shell(
+        &resolved_profile,
+        &network_id,
+        TreasuryShellPolicy::AllowCreate,
+    )
+    .await?;
+    let networks = list_networks(&resolved_profile).await?;
+    let treasury_node_name = require_game_treasury_node_name(&networks, &network_id)?;
+    let funding_plan = prepare_existing_game_treasury_node(
+        &resolved_profile,
+        &network_id,
+        &backend_name,
+        &treasury_node_name,
+        required_balance_sats,
+        &mut report_progress,
+    )
+    .await?;
+
+    match funding_plan {
+        DemoNodeFundingPlan::AlreadyFunded => {}
+        DemoNodeFundingPlan::NeedsFunding(sats) => {
+            deposit_demo_node_funds(
+                &resolved_profile,
+                &network_id,
+                DemoNodeId::GameTreasury,
+                sats,
+            )
+            .await?;
+            mine_demo_blocks(&resolved_profile, &network_id, &backend_name).await?;
+        }
+    }
+
+    wait_for_demo_node_ready(
+        &resolved_profile,
+        required_balance_sats,
+        DemoNodeId::GameTreasury,
+    )
+    .await?;
+
+    Ok(resolved_profile)
+}
+
 pub async fn close_demo_channels(
     profile: &PolarAutomationProfile,
 ) -> Result<PolarAutomationProfile, String> {
@@ -283,7 +346,17 @@ where
             continue;
         }
 
-        let channels = list_node_channels(&resolved_profile, &network_id, node_name).await?;
+        let channels = match list_node_channels(&resolved_profile, &network_id, node_name).await {
+            Ok(channels) => channels,
+            Err(message) if can_skip_channel_cleanup_error(&message) => {
+                report_progress(format!(
+                    "Channel cleanup could not inspect {} channels. Continuing setup...",
+                    node_id.label()
+                ));
+                continue;
+            }
+            Err(message) => return Err(message),
+        };
 
         for channel_point in extract_channel_points(&channels) {
             if !closed_channel_points.insert(channel_point.clone()) {
@@ -571,20 +644,9 @@ async fn create_or_prepare_demo_node(
     let before_add = list_networks(profile).await?;
     let created_name =
         create_lightning_node(profile, network_id, desired_name, &before_add).await?;
-    if created_name != desired_name {
-        rename_demo_node(profile, network_id, &created_name, desired_name).await?;
-    }
+    debug_assert_eq!(created_name, desired_name);
 
-    execute_tool(
-        profile,
-        "set_lightning_backend",
-        json!({
-            "networkId": network_id_argument(network_id),
-            "lightningNodeName": desired_name,
-            "bitcoinNodeName": backend_name,
-        }),
-    )
-    .await?;
+    set_lightning_backend(profile, network_id, desired_name, backend_name).await?;
 
     report_progress(format!("Starting {} in Polar...", node_id.label()));
     start_node_if_needed(profile, network_id, desired_name).await?;
@@ -622,14 +684,65 @@ async fn prepare_existing_demo_node(
 
     let before_add = list_networks(profile).await?;
     let created_name = create_lightning_node(profile, network_id, node_name, &before_add).await?;
-    if created_name != node_name {
-        rename_demo_node(profile, network_id, &created_name, node_name).await?;
-    }
+    debug_assert_eq!(created_name, node_name);
 
     report_progress(format!("Starting {} in Polar...", node_id.label()));
     start_node_if_needed(profile, network_id, node_name).await?;
 
     Ok(DemoNodeFundingPlan::NeedsFunding(DEMO_NODE_FUNDING_SATS))
+}
+
+async fn prepare_existing_game_treasury_node(
+    profile: &PolarAutomationProfile,
+    network_id: &str,
+    backend_name: &str,
+    node_name: &str,
+    required_balance_sats: u64,
+    report_progress: &mut impl FnMut(String),
+) -> Result<DemoNodeFundingPlan, String> {
+    set_lightning_backend(profile, network_id, node_name, backend_name).await?;
+
+    report_progress("Starting GAME_TREASURY in Polar...".to_string());
+    start_node_if_needed(profile, network_id, node_name).await?;
+
+    let balance =
+        wait_for_lightning_wallet_balance(profile, network_id, node_name, DemoNodeId::GameTreasury)
+            .await?;
+    let target_sats = demo_node_funding_target(DemoNodeId::GameTreasury, required_balance_sats);
+    if balance >= target_sats {
+        return Ok(DemoNodeFundingPlan::AlreadyFunded);
+    }
+
+    Ok(DemoNodeFundingPlan::NeedsFunding(target_sats - balance))
+}
+
+async fn set_lightning_backend(
+    profile: &PolarAutomationProfile,
+    network_id: &str,
+    lightning_node_name: &str,
+    bitcoin_node_name: &str,
+) -> Result<(), String> {
+    let result = execute_tool(
+        profile,
+        "set_lightning_backend",
+        json!({
+            "networkId": network_id_argument(network_id),
+            "lightningNodeName": lightning_node_name,
+            "bitcoinNodeName": bitcoin_node_name,
+        }),
+    )
+    .await;
+
+    match result {
+        Ok(_) => Ok(()),
+        Err(message) if is_lightning_backend_already_connected_error(&message) => Ok(()),
+        Err(message) => Err(message),
+    }
+}
+
+fn is_lightning_backend_already_connected_error(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("already connected") && normalized.contains("backend")
 }
 
 async fn create_lightning_node(
@@ -641,24 +754,69 @@ async fn create_lightning_node(
     let add_result = execute_tool(
         profile,
         "add_node",
-        json!({
-            "networkId": network_id_argument(network_id),
-            "implementation": "LND",
-        }),
+        add_lightning_node_arguments(network_id, desired_name),
     )
     .await?;
 
-    if let Some(name) = extract_node_name(&add_result) {
-        return Ok(name);
+    let after_add = list_networks(profile).await?;
+    let created_name = validate_created_lightning_node_after_add(
+        desired_name,
+        &add_result,
+        before_add,
+        &after_add,
+        network_id,
+    )?;
+
+    if created_name != desired_name {
+        rename_demo_node(profile, network_id, &created_name, desired_name).await?;
+        let after_rename = list_networks(profile).await?;
+        if !lightning_node_exists(&after_rename, network_id, desired_name) {
+            return Err(format!(
+                "Polar created {created_name} while the app requested {desired_name}, and the app could not verify the rename. Retry after Polar finishes updating the network."
+            ));
+        }
     }
 
-    async_created_node_name(profile, network_id, before_add)
-        .await
-        .ok_or_else(|| {
-            format!(
-                "Polar created an LND node, but the bridge did not expose its generated name. Rename the newest LND node to {desired_name} in Polar, then retry."
-            )
-        })
+    Ok(desired_name.to_string())
+}
+
+async fn ensure_game_treasury_node_shell(
+    profile: &PolarAutomationProfile,
+    network_id: &str,
+    policy: TreasuryShellPolicy,
+) -> Result<(), String> {
+    let networks = list_networks(profile).await?;
+    let desired_name = polar_node_name(DemoNodeId::GameTreasury);
+    if lightning_node_exists(&networks, network_id, desired_name) {
+        return Ok(());
+    }
+
+    if let Some(alice_name) = find_reclaimable_default_alice_node(&networks, network_id) {
+        rename_demo_node(profile, network_id, &alice_name, desired_name).await?;
+        return Ok(());
+    }
+
+    if policy == TreasuryShellPolicy::ReclaimOnly {
+        return Err(game_treasury_missing_message());
+    }
+
+    let before_add = list_networks(profile).await?;
+    let created_name =
+        create_lightning_node(profile, network_id, desired_name, &before_add).await?;
+    debug_assert_eq!(created_name, desired_name);
+
+    Ok(())
+}
+
+fn add_lightning_node_arguments(network_id: &str, desired_name: &str) -> Value {
+    json!({
+        "networkId": network_id_argument(network_id),
+        "implementation": "LND",
+        "name": desired_name,
+        "nodeName": desired_name,
+        "displayName": desired_name,
+        "alias": desired_name,
+    })
 }
 
 async fn remove_demo_node_by_name(
@@ -744,15 +902,6 @@ async fn mine_demo_blocks(
     Ok(())
 }
 
-async fn async_created_node_name(
-    profile: &PolarAutomationProfile,
-    network_id: &str,
-    before_add: &Value,
-) -> Option<String> {
-    let after_add = list_networks(profile).await.ok()?;
-    find_new_lightning_node_name(before_add, &after_add, network_id)
-}
-
 async fn start_node_if_needed(
     profile: &PolarAutomationProfile,
     network_id: &str,
@@ -820,12 +969,13 @@ async fn wait_for_lightning_wallet_balance(
 ) -> Result<u64, String> {
     let mut last_error = None;
 
-    for attempt in 1..=DEMO_NODE_READY_ATTEMPTS {
+    let attempts = ready_attempts_for_node(node_id);
+    for attempt in 1..=attempts {
         match get_lightning_wallet_balance(profile, network_id, node_name).await {
             Ok(balance) => return Ok(balance),
             Err(message) => {
                 last_error = Some(message);
-                if attempt < DEMO_NODE_READY_ATTEMPTS {
+                if attempt < attempts {
                     wait_for_demo_node_ready_delay().await;
                 }
             }
@@ -870,12 +1020,13 @@ async fn wait_for_demo_node_ready(
 ) -> Result<(), String> {
     let mut last_error = None;
 
-    for attempt in 1..=DEMO_NODE_READY_ATTEMPTS {
+    let attempts = ready_attempts_for_node(node_id);
+    for attempt in 1..=attempts {
         match verify_demo_node_ready(profile, required_balance_sats, node_id).await {
             Ok(()) => return Ok(()),
             Err(message) => {
                 last_error = Some(message);
-                if attempt < DEMO_NODE_READY_ATTEMPTS {
+                if attempt < attempts {
                     wait_for_demo_node_ready_delay().await;
                 }
             }
@@ -925,9 +1076,10 @@ async fn verify_demo_node_ready(
             )
         })?;
 
-    if !wallet_balance_matches_app_rules(balance, required_balance_sats) {
+    if !node_wallet_balance_matches_app_rules(node_id, balance, required_balance_sats) {
+        let target_sats = demo_node_funding_target(node_id, required_balance_sats);
         return Err(format!(
-            "{} has {balance} sats available, but the app needs exactly {DEMO_NODE_FUNDING_SATS} sats for a fresh demo node.",
+            "{} has {balance} sats available, but the app needs {target_sats} sats for this setup step.",
             node_id.label()
         ));
     }
@@ -1028,7 +1180,130 @@ fn network_id_argument(network_id: &str) -> Value {
 }
 
 fn wallet_balance_matches_app_rules(balance: u64, required_balance_sats: u64) -> bool {
-    balance == DEMO_NODE_FUNDING_SATS && balance >= required_balance_sats
+    node_wallet_balance_matches_app_rules(DemoNodeId::Alice, balance, required_balance_sats)
+}
+
+fn node_wallet_balance_matches_app_rules(
+    node_id: DemoNodeId,
+    balance: u64,
+    required_balance_sats: u64,
+) -> bool {
+    match node_id {
+        DemoNodeId::GameTreasury => {
+            balance >= demo_node_funding_target(node_id, required_balance_sats)
+        }
+        DemoNodeId::Alice | DemoNodeId::Bob | DemoNodeId::Carol => {
+            balance == demo_node_funding_target(node_id, required_balance_sats)
+        }
+    }
+}
+
+fn demo_node_funding_target(node_id: DemoNodeId, required_balance_sats: u64) -> u64 {
+    match node_id {
+        DemoNodeId::GameTreasury => DEMO_NODE_FUNDING_SATS.max(required_balance_sats),
+        DemoNodeId::Alice | DemoNodeId::Bob | DemoNodeId::Carol => DEMO_NODE_FUNDING_SATS,
+    }
+}
+
+fn ready_attempts_for_node(node_id: DemoNodeId) -> u16 {
+    match node_id {
+        DemoNodeId::GameTreasury => GAME_TREASURY_READY_ATTEMPTS,
+        DemoNodeId::Alice | DemoNodeId::Bob | DemoNodeId::Carol => DEMO_NODE_READY_ATTEMPTS,
+    }
+}
+
+fn require_game_treasury_node_name(value: &Value, network_id: &str) -> Result<String, String> {
+    find_lightning_node_name(value, network_id, polar_node_name(DemoNodeId::GameTreasury))
+        .ok_or_else(game_treasury_missing_message)
+}
+
+fn game_treasury_missing_message() -> String {
+    "GAME_TREASURY is missing. Retry Game Treasury so the app can prepare the treasury node before funding it.".to_string()
+}
+
+async fn clean_network_for_step_two(
+    profile: &PolarAutomationProfile,
+    network_id: &str,
+    requested_name: &str,
+) -> Result<(), String> {
+    let networks = list_networks(profile).await?;
+    let unwanted_nodes = unwanted_step_two_lightning_nodes(&networks, network_id);
+
+    for node_name in unwanted_nodes {
+        log_to_terminal(&format!(
+            "[polar-service] step-2-cleanup network={requested_name} node={node_name}"
+        ));
+        remove_demo_node_by_name(profile, network_id, &node_name).await?;
+    }
+
+    let networks = list_networks(profile).await?;
+    let remaining_nodes = unwanted_step_two_lightning_nodes(&networks, network_id);
+    if remaining_nodes.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Polar server {requested_name} still has old Lightning user nodes after cleanup: {}. Retry step 2 after Polar finishes removing them.",
+            remaining_nodes.join(", ")
+        ))
+    }
+}
+
+fn unwanted_step_two_lightning_nodes(networks: &Value, network_id: &str) -> Vec<String> {
+    let mut node_names: Vec<String> = lightning_node_summaries(networks, network_id)
+        .into_iter()
+        .filter_map(|node| node.name)
+        .collect();
+
+    let has_treasury = node_names
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(polar_node_name(DemoNodeId::GameTreasury)));
+    if has_treasury {
+        node_names
+            .retain(|name| !name.eq_ignore_ascii_case(polar_node_name(DemoNodeId::GameTreasury)));
+        return node_names;
+    }
+
+    let has_alice = node_names
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("alice"));
+    if has_alice {
+        let mut kept_alice = false;
+        node_names.retain(|name| {
+            if name.eq_ignore_ascii_case("alice") && !kept_alice {
+                kept_alice = true;
+                false
+            } else {
+                true
+            }
+        });
+    }
+
+    node_names
+}
+
+fn find_reclaimable_default_alice_node(value: &Value, network_id: &str) -> Option<String> {
+    let node_names: Vec<String> = lightning_node_summaries(value, network_id)
+        .into_iter()
+        .filter_map(|node| node.name)
+        .collect();
+
+    let has_treasury = node_names
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(polar_node_name(DemoNodeId::GameTreasury)));
+    if has_treasury {
+        return None;
+    }
+
+    let has_user_nodes = node_names
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("bob") || name.eq_ignore_ascii_case("carol"));
+    if has_user_nodes {
+        return None;
+    }
+
+    node_names
+        .into_iter()
+        .find(|name| name.eq_ignore_ascii_case("alice"))
 }
 
 fn extract_channel_points(value: &Value) -> Vec<String> {
@@ -1312,12 +1587,7 @@ async fn create_network(
     profile: &PolarAutomationProfile,
     network_name: &str,
 ) -> Result<(), String> {
-    let attempts = [
-        ("create_network", json!({ "name": network_name })),
-        ("create_network", json!({ "networkName": network_name })),
-        ("add_network", json!({ "name": network_name })),
-        ("add_network", json!({ "networkName": network_name })),
-    ];
+    let attempts = create_network_attempts(network_name);
     let mut errors = Vec::new();
 
     for (tool, arguments) in attempts {
@@ -1331,6 +1601,87 @@ async fn create_network(
         "Polar bridge could not create server {network_name}. {}",
         errors.join("; ")
     ))
+}
+
+fn create_network_attempts(network_name: &str) -> Vec<(&'static str, Value)> {
+    vec![
+        (
+            "create_network",
+            json!({
+                "name": network_name,
+                "bitcoinNodes": [{ "name": DEFAULT_BITCOIN_BACKEND_NAME, "implementation": "bitcoind" }],
+                "lightningNodes": [{ "name": "alice", "implementation": "LND" }],
+            }),
+        ),
+        (
+            "create_network",
+            json!({
+                "networkName": network_name,
+                "bitcoinNodes": [{ "name": DEFAULT_BITCOIN_BACKEND_NAME, "implementation": "bitcoind" }],
+                "lightningNodes": [{ "name": "alice", "implementation": "LND" }],
+            }),
+        ),
+        (
+            "create_network",
+            json!({
+                "name": network_name,
+                "nodes": {
+                    "bitcoin": [{ "name": DEFAULT_BITCOIN_BACKEND_NAME, "implementation": "bitcoind" }],
+                    "lightning": [{ "name": "alice", "implementation": "LND" }],
+                    "tap": [],
+                },
+            }),
+        ),
+        (
+            "create_network",
+            json!({
+                "networkName": network_name,
+                "nodes": {
+                    "bitcoin": [{ "name": DEFAULT_BITCOIN_BACKEND_NAME, "implementation": "bitcoind" }],
+                    "lightning": [{ "name": "alice", "implementation": "LND" }],
+                    "tap": [],
+                },
+            }),
+        ),
+        (
+            "add_network",
+            json!({
+                "name": network_name,
+                "bitcoinNodes": [{ "name": DEFAULT_BITCOIN_BACKEND_NAME, "implementation": "bitcoind" }],
+                "lightningNodes": [{ "name": "alice", "implementation": "LND" }],
+            }),
+        ),
+        (
+            "add_network",
+            json!({
+                "networkName": network_name,
+                "bitcoinNodes": [{ "name": DEFAULT_BITCOIN_BACKEND_NAME, "implementation": "bitcoind" }],
+                "lightningNodes": [{ "name": "alice", "implementation": "LND" }],
+            }),
+        ),
+        (
+            "add_network",
+            json!({
+                "name": network_name,
+                "nodes": {
+                    "bitcoin": [{ "name": DEFAULT_BITCOIN_BACKEND_NAME, "implementation": "bitcoind" }],
+                    "lightning": [{ "name": "alice", "implementation": "LND" }],
+                    "tap": [],
+                },
+            }),
+        ),
+        (
+            "add_network",
+            json!({
+                "networkName": network_name,
+                "nodes": {
+                    "bitcoin": [{ "name": DEFAULT_BITCOIN_BACKEND_NAME, "implementation": "bitcoind" }],
+                    "lightning": [{ "name": "alice", "implementation": "LND" }],
+                    "tap": [],
+                },
+            }),
+        ),
+    ]
 }
 
 async fn get_blockchain_height_from_resolved(
@@ -1366,7 +1717,11 @@ fn resolve_network_id(
 ) -> Result<String, String> {
     let requested = clean_network_id(profile);
     if !requested.is_empty() {
-        return Ok(find_network_id(networks, &requested).unwrap_or(requested));
+        return find_network_id(networks, &requested).ok_or_else(|| {
+            format!(
+                "Polar network {requested} is not listed by the current Polar bridge. Return to Server Name, choose the intended Polar server, and retry before the app adds or removes nodes."
+            )
+        });
     }
 
     if let Some(default_id) = find_network_id(networks, DEFAULT_NETWORK_NAME) {
@@ -1517,7 +1872,7 @@ async fn execute_tool_with_log_level(
     .await?;
 
     match extract_mcp_error(&response) {
-        Some(error) => Err(format!("Polar MCP tool {tool} failed: {error}")),
+        Some(error) => Err(format_mcp_error(tool, &error)),
         None => Ok(response),
     }
 }
@@ -1532,6 +1887,7 @@ fn clean_backend_name(profile: &PolarAutomationProfile) -> String {
 
 fn polar_node_name(node_id: DemoNodeId) -> &'static str {
     match node_id {
+        DemoNodeId::GameTreasury => "GAME_TREASURY",
         DemoNodeId::Alice => "alice",
         DemoNodeId::Bob => "bob",
         DemoNodeId::Carol => "carol",
@@ -1569,10 +1925,68 @@ fn log_service_response(
     }
 
     let message = match result {
-        Ok(value) => format!("[polar-service] response {method} {url} body={value}"),
-        Err(error) => format!("[polar-service] error {method} {url} error={error}"),
+        Ok(value) if log_level >= DemoLogLevel::Verbose => {
+            let value = sanitized_log_value(value);
+            format!("[polar-service] response {method} {url} body={value}")
+        }
+        Ok(_) => format!("[polar-service] response {method} {url} ok"),
+        Err(error) => format!(
+            "[polar-service] error {method} {url} error={}",
+            redact_sensitive_log_text(error)
+        ),
     };
     log_to_terminal(&message);
+}
+
+fn sanitized_log_value(value: &Value) -> Value {
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    if is_sensitive_log_key(key) {
+                        (key.clone(), Value::String("[redacted]".to_string()))
+                    } else {
+                        (key.clone(), sanitized_log_value(value))
+                    }
+                })
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(values.iter().map(sanitized_log_value).collect()),
+        _ => value.clone(),
+    }
+}
+
+fn is_sensitive_log_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    key == "paths"
+        || key.contains("macaroon")
+        || key.contains("cert")
+        || key.contains("credential")
+        || key.contains("password")
+        || key.contains("secret")
+        || key.contains("token")
+}
+
+fn redact_sensitive_log_text(text: &str) -> String {
+    let trimmed = text.trim();
+    let normalized = trimmed.to_ascii_lowercase();
+    if [
+        "macaroon",
+        "tls.cert",
+        "tlscert",
+        "credential",
+        "password",
+        "secret",
+        "token",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        "[redacted sensitive Polar detail]".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1607,6 +2021,79 @@ fn extract_node_name(value: &Value) -> Option<String> {
         Value::Array(items) => items.iter().find_map(extract_node_name),
         _ => None,
     }
+}
+
+fn validate_created_lightning_node_name(
+    desired_name: &str,
+    response: &Value,
+) -> Result<(), String> {
+    if let Some(name) = extract_node_name(response) {
+        if name == desired_name {
+            return Ok(());
+        }
+
+        return Err(unexpected_created_node_name_message(desired_name, &name));
+    }
+
+    Ok(())
+}
+
+fn validate_created_lightning_node_after_add(
+    desired_name: &str,
+    response: &Value,
+    before_add: &Value,
+    after_add: &Value,
+    network_id: &str,
+) -> Result<String, String> {
+    if lightning_node_exists(after_add, network_id, desired_name) {
+        return Ok(desired_name.to_string());
+    }
+
+    let response_name = extract_node_name(response).filter(|name| name != desired_name);
+    if let Some(created_name) = find_new_lightning_node_name(before_add, after_add, network_id) {
+        if response_name
+            .as_deref()
+            .map(|name| name == created_name)
+            .unwrap_or(true)
+        {
+            return Ok(created_name);
+        }
+    }
+
+    validate_created_lightning_node_name(desired_name, response)?;
+
+    Err(format!(
+        "Polar did not list the requested LND node {desired_name} after creation. Retry the step after Polar finishes updating the network."
+    ))
+}
+
+fn unexpected_created_node_name_message(desired_name: &str, created_name: &str) -> String {
+    format!(
+        "The app asked Polar to create {desired_name}, but Polar created {created_name}. Remove {created_name} in Polar, then retry after updating or restarting the Polar bridge."
+    )
+}
+
+fn format_mcp_error(tool: &str, error: &str) -> String {
+    if is_missing_mcp_helper_error(error) {
+        return format!(
+            "Polar MCP tool {tool} could not run because Polar's automation helper file is missing. Restart Polar and the local Polar bridge, then retry the step."
+        );
+    }
+
+    format!(
+        "Polar MCP tool {tool} failed: {}",
+        redact_sensitive_log_text(error)
+    )
+}
+
+fn is_missing_mcp_helper_error(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("enoent") && normalized.contains("no such file")
+}
+
+fn can_skip_channel_cleanup_error(error: &str) -> bool {
+    error.contains("Polar MCP tool list_channels could not run")
+        && error.contains("automation helper file is missing")
 }
 
 fn extract_mcp_error(value: &Value) -> Option<String> {
@@ -2005,6 +2492,43 @@ mod tests {
         })
     }
 
+    #[test]
+    fn sanitizes_sensitive_polar_metadata_from_verbose_logs() {
+        let value = json!({
+            "paths": {
+                "adminMacaroon": "C:\\Users\\example\\admin.macaroon",
+                "tlsCert": "C:\\Users\\example\\tls.cert"
+            },
+            "nodes": [
+                {
+                    "name": "alice",
+                    "token": "abc",
+                    "ports": { "grpc": 10001 }
+                }
+            ]
+        });
+
+        let sanitized = sanitized_log_value(&value);
+
+        assert_eq!(sanitized["paths"], "[redacted]");
+        assert_eq!(sanitized["nodes"][0]["token"], "[redacted]");
+        assert_eq!(sanitized["nodes"][0]["ports"]["grpc"], 10001);
+    }
+
+    #[test]
+    fn redacts_sensitive_polar_error_text() {
+        let error = "failed to read C:\\Users\\example\\admin.macaroon";
+
+        assert_eq!(
+            redact_sensitive_log_text(error),
+            "[redacted sensitive Polar detail]"
+        );
+        assert_eq!(
+            format_mcp_error("list_networks", error),
+            "Polar MCP tool list_networks failed: [redacted sensitive Polar detail]"
+        );
+    }
+
     fn healthy_polar_lab_response() -> Value {
         json!({
             "networks": [
@@ -2133,6 +2657,31 @@ mod tests {
     }
 
     #[test]
+    fn resolve_network_id_rejects_stale_requested_network_before_mutation() {
+        let networks = json!({
+            "networks": [
+                {
+                    "id": 2,
+                    "name": DEFAULT_NETWORK_NAME,
+                    "status": "Started",
+                    "nodes": {}
+                }
+            ]
+        });
+        let profile = PolarAutomationProfile {
+            bridge_url: "http://localhost:37373".to_string(),
+            network_id: "network-1".to_string(),
+            bitcoin_backend_name: DEFAULT_BITCOIN_BACKEND_NAME.to_string(),
+        };
+
+        let error = resolve_network_id(&profile, &networks)
+            .expect_err("stale requested network ids must not be sent to Polar mutations");
+
+        assert!(error.contains("network-1"));
+        assert!(error.contains("not listed"));
+    }
+
+    #[test]
     fn detects_existing_started_lightning_nodes() {
         let networks = json!({
             "networks": [
@@ -2209,6 +2758,259 @@ mod tests {
     }
 
     #[test]
+    fn game_treasury_balance_accepts_at_least_required_funding() {
+        assert!(node_wallet_balance_matches_app_rules(
+            DemoNodeId::GameTreasury,
+            DEMO_NODE_FUNDING_SATS,
+            250_000
+        ));
+        assert!(node_wallet_balance_matches_app_rules(
+            DemoNodeId::GameTreasury,
+            DEMO_NODE_FUNDING_SATS + 1,
+            250_000
+        ));
+        assert!(!node_wallet_balance_matches_app_rules(
+            DemoNodeId::GameTreasury,
+            DEMO_NODE_FUNDING_SATS - 1,
+            250_000
+        ));
+    }
+
+    #[test]
+    fn game_treasury_gets_extended_wallet_readiness_window() {
+        assert!(
+            ready_attempts_for_node(DemoNodeId::GameTreasury)
+                > ready_attempts_for_node(DemoNodeId::Alice)
+        );
+    }
+
+    #[test]
+    fn game_treasury_step_rejects_alice_as_treasury_shell() {
+        let networks = json!({
+            "networks": [
+                {
+                    "id": 1,
+                    "name": DEFAULT_NETWORK_NAME,
+                    "status": "Started",
+                    "nodes": {
+                        "bitcoin": [],
+                        "lightning": [
+                            {
+                                "name": "alice",
+                                "type": "lightning",
+                                "implementation": "LND",
+                                "status": "Started"
+                            }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        let error = require_game_treasury_node_name(&networks, "1")
+            .expect_err("alice must not satisfy treasury setup");
+
+        assert!(error.contains("GAME_TREASURY is missing"));
+        assert!(error.contains("Retry Game Treasury"));
+        assert!(!error.contains("Retry Server Name"));
+    }
+
+    #[test]
+    fn game_treasury_step_accepts_exact_treasury_shell() {
+        let networks = json!({
+            "networks": [
+                {
+                    "id": 1,
+                    "name": DEFAULT_NETWORK_NAME,
+                    "status": "Started",
+                    "nodes": {
+                        "bitcoin": [],
+                        "lightning": [
+                            {
+                                "name": "GAME_TREASURY",
+                                "type": "lightning",
+                                "implementation": "LND",
+                                "status": "Started"
+                            }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        assert_eq!(
+            require_game_treasury_node_name(&networks, "1"),
+            Ok("GAME_TREASURY".to_string())
+        );
+    }
+
+    #[test]
+    fn backend_already_connected_error_is_idempotent() {
+        assert!(is_lightning_backend_already_connected_error(
+            "The node 'GAME_TREASURY' is already connected to 'backend1'"
+        ));
+    }
+
+    #[test]
+    fn unrelated_backend_error_is_not_idempotent() {
+        assert!(!is_lightning_backend_already_connected_error(
+            "The node 'GAME_TREASURY' could not connect to backend1"
+        ));
+    }
+
+    #[test]
+    fn treasury_shell_can_reclaim_default_alice_before_user_nodes_exist() {
+        let networks = json!({
+            "networks": [
+                {
+                    "id": 1,
+                    "name": DEFAULT_NETWORK_NAME,
+                    "status": "Stopped",
+                    "nodes": {
+                        "bitcoin": [],
+                        "lightning": [
+                            {
+                                "name": "alice",
+                                "type": "lightning",
+                                "implementation": "LND",
+                                "status": "Stopped"
+                            }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        assert_eq!(
+            find_reclaimable_default_alice_node(&networks, "1"),
+            Some("alice".to_string())
+        );
+    }
+
+    #[test]
+    fn step_two_cleanup_leaves_empty_or_default_alice_only() {
+        let empty = json!({
+            "networks": [
+                {
+                    "id": 1,
+                    "name": DEFAULT_NETWORK_NAME,
+                    "nodes": {
+                        "lightning": []
+                    }
+                }
+            ]
+        });
+        assert!(unwanted_step_two_lightning_nodes(&empty, "1").is_empty());
+
+        let default_alice = json!({
+            "networks": [
+                {
+                    "id": 1,
+                    "name": DEFAULT_NETWORK_NAME,
+                    "nodes": {
+                        "lightning": [
+                            { "name": "alice", "type": "lightning" }
+                        ]
+                    }
+                }
+            ]
+        });
+        assert!(unwanted_step_two_lightning_nodes(&default_alice, "1").is_empty());
+    }
+
+    #[test]
+    fn create_network_requests_single_alice_shell_for_treasury_reclaim() {
+        for (_, arguments) in create_network_attempts(DEFAULT_NETWORK_NAME) {
+            let lightning_nodes = arguments
+                .get("lightningNodes")
+                .or_else(|| arguments.pointer("/nodes/lightning"))
+                .expect("create network attempt includes lightning nodes");
+
+            assert_eq!(lightning_nodes.as_array().map(Vec::len), Some(1));
+            assert_eq!(lightning_nodes[0]["name"], json!("alice"));
+            assert_eq!(lightning_nodes[0]["implementation"], json!("LND"));
+        }
+    }
+
+    #[test]
+    fn step_two_cleanup_targets_old_user_nodes() {
+        let networks = json!({
+            "networks": [
+                {
+                    "id": 1,
+                    "name": DEFAULT_NETWORK_NAME,
+                    "nodes": {
+                        "lightning": [
+                            { "name": "alice", "type": "lightning" },
+                            { "name": "bob", "type": "lightning" },
+                            { "name": "carol", "type": "lightning" }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        let unwanted = unwanted_step_two_lightning_nodes(&networks, "1");
+
+        assert_eq!(unwanted, vec!["bob".to_string(), "carol".to_string()]);
+    }
+
+    #[test]
+    fn step_two_cleanup_targets_all_nodes_when_treasury_exists() {
+        let networks = json!({
+            "networks": [
+                {
+                    "id": 1,
+                    "name": DEFAULT_NETWORK_NAME,
+                    "nodes": {
+                        "lightning": [
+                            { "name": "GAME_TREASURY", "type": "lightning" },
+                            { "name": "alice", "type": "lightning" },
+                            { "name": "bob", "type": "lightning" }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        let unwanted = unwanted_step_two_lightning_nodes(&networks, "1");
+
+        assert_eq!(unwanted, vec!["alice".to_string(), "bob".to_string()]);
+    }
+
+    #[test]
+    fn treasury_shell_does_not_reclaim_alice_after_user_nodes_exist() {
+        let networks = json!({
+            "networks": [
+                {
+                    "id": 1,
+                    "name": DEFAULT_NETWORK_NAME,
+                    "status": "Started",
+                    "nodes": {
+                        "bitcoin": [],
+                        "lightning": [
+                            {
+                                "name": "alice",
+                                "type": "lightning",
+                                "implementation": "LND",
+                                "status": "Started"
+                            },
+                            {
+                                "name": "bob",
+                                "type": "lightning",
+                                "implementation": "LND",
+                                "status": "Started"
+                            }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        assert_eq!(find_reclaimable_default_alice_node(&networks, "1"), None);
+    }
+
+    #[test]
     fn discovers_node_name_added_without_return_value() {
         let before_add = polar_v4_networks_response();
         let after_add = json!({
@@ -2236,6 +3038,180 @@ mod tests {
             find_new_lightning_node_name(&before_add, &after_add, "1"),
             Some("node1".to_string())
         );
+    }
+
+    #[test]
+    fn add_lightning_node_arguments_request_requested_name() {
+        let args = add_lightning_node_arguments("1", "GAME_TREASURY");
+
+        assert_eq!(args["networkId"], json!(1));
+        assert_eq!(args["implementation"], json!("LND"));
+        assert_eq!(args["name"], json!("GAME_TREASURY"));
+        assert_eq!(args["nodeName"], json!("GAME_TREASURY"));
+    }
+
+    #[test]
+    fn add_lightning_node_arguments_send_all_known_name_fields() {
+        let args = add_lightning_node_arguments("1", "alice");
+
+        assert_eq!(args["name"], json!("alice"));
+        assert_eq!(args["nodeName"], json!("alice"));
+        assert_eq!(args["displayName"], json!("alice"));
+        assert_eq!(args["alias"], json!("alice"));
+    }
+
+    #[test]
+    fn generated_fallback_lightning_node_name_is_rejected() {
+        let response = json!({
+            "success": true,
+            "nodeName": "dave"
+        });
+
+        let error = validate_created_lightning_node_name("alice", &response)
+            .expect_err("generated fallback node name must not be accepted");
+
+        assert!(error.contains("asked Polar to create alice"));
+        assert!(error.contains("created dave"));
+        assert!(error.contains("Remove dave"));
+    }
+
+    #[test]
+    fn async_created_fallback_lightning_node_name_can_be_repaired() {
+        let before_add = polar_v4_networks_response();
+        let after_add = json!({
+            "networks": [
+                {
+                    "id": 1,
+                    "name": DEFAULT_NETWORK_NAME,
+                    "status": "Started",
+                    "nodes": {
+                        "bitcoin": [],
+                        "lightning": [
+                            {
+                                "name": "erin",
+                                "type": "lightning",
+                                "implementation": "LND",
+                                "status": "Started"
+                            }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        let created_name = validate_created_lightning_node_after_add(
+            "alice",
+            &json!({ "success": true }),
+            &before_add,
+            &after_add,
+            "1",
+        )
+        .expect("async fallback node name should be returned for repair");
+
+        assert_eq!(created_name, "erin");
+    }
+
+    #[test]
+    fn add_node_response_with_existing_nodes_does_not_override_post_add_state() {
+        let before_add = json!({
+            "networks": [
+                {
+                    "id": 1,
+                    "name": DEFAULT_NETWORK_NAME,
+                    "status": "Started",
+                    "nodes": {
+                        "bitcoin": [],
+                        "lightning": [
+                            {
+                                "name": "bob",
+                                "type": "lightning",
+                                "implementation": "LND",
+                                "status": "Started"
+                            }
+                        ]
+                    }
+                }
+            ]
+        });
+        let after_add = json!({
+            "networks": [
+                {
+                    "id": 1,
+                    "name": DEFAULT_NETWORK_NAME,
+                    "status": "Started",
+                    "nodes": {
+                        "bitcoin": [],
+                        "lightning": [
+                            {
+                                "name": "bob",
+                                "type": "lightning",
+                                "implementation": "LND",
+                                "status": "Started"
+                            },
+                            {
+                                "name": "alice",
+                                "type": "lightning",
+                                "implementation": "LND",
+                                "status": "Started"
+                            }
+                        ]
+                    }
+                }
+            ]
+        });
+        let response = json!({
+            "success": true,
+            "result": {
+                "network": {
+                    "nodes": {
+                        "lightning": [
+                            {
+                                "name": "bob",
+                                "type": "lightning",
+                                "implementation": "LND"
+                            },
+                            {
+                                "name": "alice",
+                                "type": "lightning",
+                                "implementation": "LND"
+                            }
+                        ]
+                    }
+                }
+            }
+        });
+
+        assert_eq!(
+            validate_created_lightning_node_after_add(
+                "alice",
+                &response,
+                &before_add,
+                &after_add,
+                "1",
+            ),
+            Ok("alice".to_string())
+        );
+    }
+
+    #[test]
+    fn mcp_enoent_error_explains_missing_bridge_helper() {
+        assert_eq!(
+            format_mcp_error(
+                "list_channels",
+                "ENOENT: no such file or directory, open 'C:\\\\Users\\\\user\\\\polar.json'"
+            ),
+            "Polar MCP tool list_channels could not run because Polar's automation helper file is missing. Restart Polar and the local Polar bridge, then retry the step."
+        );
+    }
+
+    #[test]
+    fn missing_helper_during_channel_listing_is_optional_cleanup() {
+        let error = format_mcp_error(
+            "list_channels",
+            "ENOENT: no such file or directory, open 'C:\\\\Users\\\\user\\\\polar.json'",
+        );
+
+        assert!(can_skip_channel_cleanup_error(&error));
     }
 
     #[test]

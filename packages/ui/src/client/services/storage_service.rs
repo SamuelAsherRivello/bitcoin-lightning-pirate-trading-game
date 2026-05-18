@@ -94,6 +94,18 @@ fn debug_assert_tra_snapshot_is_non_sensitive(state: &LabState) {
             "TRA inventory snapshots may store only non-sensitive identity, item_id, owner, and status fields"
         );
     }
+    for entry in &state.game_treasury.recent_entries {
+        debug_assert!(
+            !looks_sensitive(&entry.description) && !looks_sensitive(&entry.related_action),
+            "Treasury history snapshots may not store wallet secrets, credentials, seeds, macaroons, or proof material"
+        );
+    }
+    for resource in &state.game_treasury.owned_items {
+        debug_assert!(
+            !looks_sensitive(&resource.resource_id) && !looks_sensitive(&resource.display_name),
+            "Treasury resource snapshots may store only non-sensitive resource labels and item identities"
+        );
+    }
 }
 
 fn looks_sensitive(value: &str) -> bool {

@@ -7,8 +7,8 @@ use crate::client::components::network::NetworkRouteVisual;
 use crate::client::components::toast::{OperationPrompt, Toast, ToastTone};
 use crate::client::models::{DemoNodeId, LabState, RouteStatus, SetupProfile};
 use crate::client::services::lightning_server_functions::{
-    create_invoice, create_invoice_and_maybe_autosend, get_lab_state_or_recover, open_trade_route,
-    pay_latest_invoice, recover_if_polar_lab_unhealthy, wait_for_next_block, PolarLabRecovery,
+    create_invoice_and_maybe_autosend, get_lab_state_or_recover, open_trade_route,
+    recover_if_polar_lab_unhealthy, wait_for_next_block, PolarLabRecovery,
 };
 use crate::client::Route;
 
@@ -92,12 +92,32 @@ pub fn DebugNetwork() -> Element {
 
             section { class: "lab-panel",
                 div { class: "section-heading",
-                    span { class: "eyebrow", "Tap Root Assets" }
-                    h2 { "Game TRA rows" }
+                    span { class: "eyebrow", "Polar nodes" }
+                    h2 { "Lightning nodes" }
+                }
+                div { class: "record-list",
+                    for node in state.nodes.clone() {
+                        div { class: "record-row",
+                            strong { "{node.alias}" }
+                            span { "{node.role.label()} / {node.status.label()}" }
+                            span { "Wallet: {node.wallet_balance_sats} sats" }
+                            span { "Channel: {node.channel_balance_sats} sats" }
+                        }
+                    }
+                }
+            }
+
+            section { class: "lab-panel",
+                div { class: "section-heading",
+                    span { class: "eyebrow", "Taproots assets v0.7.0-alpha" }
+                    h2 { "TRA instances" }
                 }
                 if state.tra_items.is_empty() {
-                    p { class: "muted-copy", "TRA items created by the Add Tap Root Assets setup step will appear here." }
+                    p { class: "muted-copy", "TRA instances created by Game Treasury (TRAs) will appear here with GAME_TREASURY as the owner." }
                 } else {
+                    p { class: "muted-copy",
+                        "After setup step 3, treasury inventory should show as concrete TRA instances owned by GAME_TREASURY. NPC transfers move these rows from GAME_TREASURY to Bob and Carol."
+                    }
                     div { class: "tra-table", role: "table", aria_label: "Tap Root Assets inventory rows",
                         div { class: "tra-table__row tra-table__row--head", role: "row",
                             span { role: "columnheader", "TRA ID" }
@@ -162,175 +182,123 @@ pub fn DebugNetwork() -> Element {
                                 }
                             }
                             div { class: "button-row",
-                                button {
-                                    class: "primary-action",
-                                    r#type: "button",
-                                    disabled: is_busy() || route.status != RouteStatus::Missing,
-                                    onclick: move |_| {
-                                        let to_node = route.to_node;
-                                        async move {
-                                            is_busy.set(true);
-                                            match open_trade_route(setup_profile(), to_node).await {
-                                                Ok(next_state) => {
-                                                    lab_state.set(Some(next_state));
-                                                    push_toast(toast, toast_sequence, "Trade route is under construction.", ToastTone::Success);
+                                if route.status == RouteStatus::Missing {
+                                    button {
+                                        class: "primary-action",
+                                        r#type: "button",
+                                        disabled: is_busy(),
+                                        onclick: move |_| {
+                                            let to_node = route.to_node;
+                                            async move {
+                                                is_busy.set(true);
+                                                match open_trade_route(setup_profile(), to_node).await {
+                                                    Ok(next_state) => {
+                                                        lab_state.set(Some(next_state));
+                                                        push_toast(toast, toast_sequence, "Trade route is under construction.", ToastTone::Success);
+                                                    }
+                                                    Err(message) => handle_lab_action_error(
+                                                        setup_profile(),
+                                                        setup_profile,
+                                                        lab_state,
+                                                        toast,
+                                                        toast_sequence,
+                                                        operation_prompt,
+                                                        prompt_sequence,
+                                                        navigator,
+                                                        message,
+                                                    )
+                                                    .await,
                                                 }
-                                                Err(message) => handle_lab_action_error(
-                                                    setup_profile(),
-                                                    setup_profile,
-                                                    lab_state,
-                                                    toast,
-                                                    toast_sequence,
-                                                    operation_prompt,
-                                                    prompt_sequence,
-                                                    navigator,
-                                                    message,
-                                                )
-                                                .await,
+                                                is_busy.set(false);
                                             }
-                                            is_busy.set(false);
-                                        }
-                                    },
-                                    "Open Trade Route"
-                                }
-                                button {
-                                    class: "secondary-action",
-                                    r#type: "button",
-                                    disabled: is_busy() || !route.requires_next_block,
-                                    onclick: move |_| {
-                                        let route_id = route.route_id.clone();
-                                        async move {
-                                            is_busy.set(true);
-                                            match wait_for_next_block(setup_profile(), Some(route_id)).await {
-                                                Ok(next_state) => {
-                                                    lab_state.set(Some(next_state));
-                                                    push_toast(toast, toast_sequence, "Regtest mined the next block.", ToastTone::Success);
+                                        },
+                                        "Open Trade Route"
+                                    }
+                                } else if route.requires_next_block {
+                                    button {
+                                        class: "primary-action",
+                                        r#type: "button",
+                                        disabled: is_busy(),
+                                        onclick: move |_| {
+                                            let route_id = route.route_id.clone();
+                                            async move {
+                                                is_busy.set(true);
+                                                match wait_for_next_block(setup_profile(), Some(route_id)).await {
+                                                    Ok(next_state) => {
+                                                        lab_state.set(Some(next_state));
+                                                        push_toast(toast, toast_sequence, "Regtest mined the next block.", ToastTone::Success);
+                                                    }
+                                                    Err(message) => handle_lab_action_error(
+                                                        setup_profile(),
+                                                        setup_profile,
+                                                        lab_state,
+                                                        toast,
+                                                        toast_sequence,
+                                                        operation_prompt,
+                                                        prompt_sequence,
+                                                        navigator,
+                                                        message,
+                                                    )
+                                                    .await,
                                                 }
-                                                Err(message) => handle_lab_action_error(
-                                                    setup_profile(),
-                                                    setup_profile,
-                                                    lab_state,
-                                                    toast,
-                                                    toast_sequence,
-                                                    operation_prompt,
-                                                    prompt_sequence,
-                                                    navigator,
-                                                    message,
-                                                )
-                                                .await,
+                                                is_busy.set(false);
                                             }
-                                            is_busy.set(false);
-                                        }
-                                    },
-                                    "Wait for Block {state.block_height.saturating_add(1)}"
-                                }
-                                button {
-                                    class: "secondary-action",
-                                    r#type: "button",
-                                    disabled: is_busy() || route.status != RouteStatus::Active,
-                                    onclick: move |_| {
-                                        let merchant = route.to_node;
-                                        async move {
-                                            is_busy.set(true);
-                                            let memo = format!("{} creates a debug invoice", merchant.label());
-                                            match create_invoice(
-                                                setup_profile(),
-                                                merchant,
-                                                Some(DemoNodeId::Alice),
-                                                memo,
-                                            )
-                                            .await
-                                            {
-                                                Ok(next_state) => {
-                                                    lab_state.set(Some(next_state));
-                                                    push_toast(toast, toast_sequence, "Invoice created.", ToastTone::Success);
+                                        },
+                                        "Wait for Block {state.block_height.saturating_add(1)}"
+                                    }
+                                } else if route.status == RouteStatus::Active {
+                                    button {
+                                        class: "primary-action",
+                                        r#type: "button",
+                                        disabled: is_busy(),
+                                        onclick: move |_| {
+                                            let merchant = route.to_node;
+                                            let autosend = autosend_enabled();
+                                            async move {
+                                                is_busy.set(true);
+                                                let memo = format!("{} creates an AutoSend lab invoice", merchant.label());
+                                                match create_invoice_and_maybe_autosend(
+                                                    setup_profile(),
+                                                    merchant,
+                                                    DemoNodeId::Alice,
+                                                    autosend,
+                                                    memo,
+                                                )
+                                                .await
+                                                {
+                                                    Ok(next_state) => {
+                                                        lab_state.set(Some(next_state));
+                                                        push_toast(toast, toast_sequence, autosend_result_message(autosend), ToastTone::Success);
+                                                    }
+                                                    Err(message) => handle_lab_action_error(
+                                                        setup_profile(),
+                                                        setup_profile,
+                                                        lab_state,
+                                                        toast,
+                                                        toast_sequence,
+                                                        operation_prompt,
+                                                        prompt_sequence,
+                                                        navigator,
+                                                        message,
+                                                    )
+                                                    .await,
                                                 }
-                                                Err(message) => handle_lab_action_error(
-                                                    setup_profile(),
-                                                    setup_profile,
-                                                    lab_state,
-                                                    toast,
-                                                    toast_sequence,
-                                                    operation_prompt,
-                                                    prompt_sequence,
-                                                    navigator,
-                                                    message,
-                                                )
-                                                .await,
+                                                is_busy.set(false);
                                             }
-                                            is_busy.set(false);
+                                        },
+                                        if autosend_enabled() {
+                                            "Create Invoice + AutoSend"
+                                        } else {
+                                            "Create Invoice"
                                         }
-                                    },
-                                    "Create Invoice"
-                                }
-                                button {
-                                    class: "secondary-action",
-                                    r#type: "button",
-                                    disabled: is_busy() || route.status != RouteStatus::Active,
-                                    onclick: move |_| async move {
-                                        is_busy.set(true);
-                                        match pay_latest_invoice(setup_profile(), DemoNodeId::Alice).await {
-                                            Ok(next_state) => {
-                                                lab_state.set(Some(next_state));
-                                                push_toast(toast, toast_sequence, "Latest invoice paid.", ToastTone::Success);
-                                            }
-                                            Err(message) => handle_lab_action_error(
-                                                setup_profile(),
-                                                setup_profile,
-                                                lab_state,
-                                                toast,
-                                                toast_sequence,
-                                                operation_prompt,
-                                                prompt_sequence,
-                                                navigator,
-                                                message,
-                                            )
-                                            .await,
-                                        }
-                                        is_busy.set(false);
-                                    },
-                                    "Pay Invoice"
-                                }
-                                button {
-                                    class: "primary-action",
-                                    r#type: "button",
-                                    disabled: is_busy() || route.status != RouteStatus::Active,
-                                    onclick: move |_| {
-                                        let merchant = route.to_node;
-                                        let autosend = autosend_enabled();
-                                        async move {
-                                            is_busy.set(true);
-                                            let memo = format!("{} creates an AutoSend lab invoice", merchant.label());
-                                            match create_invoice_and_maybe_autosend(
-                                                setup_profile(),
-                                                merchant,
-                                                DemoNodeId::Alice,
-                                                autosend,
-                                                memo,
-                                            )
-                                            .await
-                                            {
-                                                Ok(next_state) => {
-                                                    lab_state.set(Some(next_state));
-                                                    push_toast(toast, toast_sequence, "AutoSend flow complete.", ToastTone::Success);
-                                                }
-                                                Err(message) => handle_lab_action_error(
-                                                    setup_profile(),
-                                                    setup_profile,
-                                                    lab_state,
-                                                    toast,
-                                                    toast_sequence,
-                                                    operation_prompt,
-                                                    prompt_sequence,
-                                                    navigator,
-                                                    message,
-                                                )
-                                                .await,
-                                            }
-                                            is_busy.set(false);
-                                        }
-                                    },
-                                    "Create Invoice + AutoSend"
+                                    }
+                                } else {
+                                    button {
+                                        class: "secondary-action",
+                                        r#type: "button",
+                                        disabled: true,
+                                        "Waiting on route status"
+                                    }
                                 }
                             }
                         }
@@ -408,6 +376,14 @@ fn yes_no(value: bool) -> &'static str {
         "yes"
     } else {
         "no"
+    }
+}
+
+fn autosend_result_message(autosend: bool) -> &'static str {
+    if autosend {
+        "AutoSend flow complete."
+    } else {
+        "Invoice created."
     }
 }
 

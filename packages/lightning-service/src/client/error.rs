@@ -61,6 +61,20 @@ pub enum LightningError {
     #[error("The local Taproot Assets adapter is unavailable.")]
     TraAdapterUnavailable,
 
+    #[error("Create and fund the Game Treasury before continuing setup.")]
+    GameTreasuryNotReady,
+
+    #[error("The Game Treasury does not have enough sats for this game action.")]
+    GameTreasuryInsufficientSats,
+
+    #[error("The Game Treasury is missing an item required for NPC setup.")]
+    GameTreasuryItemUnavailable,
+
+    #[error(
+        "Treasury history cannot include wallet secrets, macaroons, seeds, or proof material."
+    )]
+    SensitiveTreasuryDetail,
+
     #[error("Cannot load the local server profile: {0}")]
     ConfigLoadFailed(String),
 

@@ -4,7 +4,7 @@ use dioxus_i18n::t;
 use wasm_bindgen::JsCast;
 
 use crate::client::components::help::FieldHelpIcon;
-use crate::client::components::setup::WarningCallout;
+use crate::client::components::setup::{NpcItemTransferStatus, WarningCallout};
 use crate::client::components::toast::{
     wait_for_prompt_message_minimum, OperationPrompt, Toast, ToastTone,
 };
@@ -14,16 +14,16 @@ use crate::client::models::{
 };
 use crate::client::services::lightning_server_functions::{
     complete_polar_setup, confirm_polar_block_height, create_polar_demo_nodes_with_progress,
-    destroy_polar_demo_nodes, ensure_polar_server, initial_tra_setup_items, mint_tra, reset_lab,
-    reset_tra_inventory, test_setup, verify_polar_bridge, verify_tra_setup,
-    PolarServerEnsureStatus,
+    destroy_polar_demo_nodes, ensure_polar_server, prepare_game_treasury,
+    prepare_game_treasury_tras, reset_lab, test_setup, transfer_npc_starting_items,
+    verify_polar_bridge, PolarServerEnsureStatus,
 };
 use crate::client::services::storage_service;
 
 const DOCKER_DESKTOP_URL: &str = "https://www.docker.com/products/docker-desktop/";
 const LOCAL_APP_URL: &str = "http://localhost:8080";
 const POLAR_DOWNLOAD_URL: &str = "https://lightningpolar.com/";
-const POLAR_DEMO_NODES_SUBMIT_ID: &str = "polar-demo-nodes-submit";
+const POLAR_DEMO_NODES_SUBMIT_ID: &str = "polar-user-nodes-submit";
 #[cfg(target_arch = "wasm32")]
 const FOCUS_RETRY_ATTEMPTS: u8 = 12;
 #[cfg(target_arch = "wasm32")]
@@ -33,9 +33,11 @@ const FOCUS_RETRY_DELAY_MS: u32 = 16;
 enum PolarWizardStep {
     BridgeUrl,
     ServerName,
-    DemoNodes,
+    GameTreasury,
+    GameTreasuryTras,
+    UserNodes,
+    NpcItemTransfers,
     BlockHeight,
-    TraInventory,
     Complete,
     Done,
 }
@@ -45,11 +47,26 @@ impl PolarWizardStep {
         match self {
             Self::BridgeUrl => 1,
             Self::ServerName => 2,
-            Self::DemoNodes => 3,
-            Self::BlockHeight => 4,
-            Self::TraInventory => 5,
-            Self::Complete | Self::Done => 6,
+            Self::GameTreasury => 3,
+            Self::GameTreasuryTras => 4,
+            Self::UserNodes => 5,
+            Self::NpcItemTransfers => 6,
+            Self::BlockHeight => 7,
+            Self::Complete | Self::Done => 8,
         }
+    }
+}
+
+fn polar_wizard_step_label(step: PolarWizardStep) -> &'static str {
+    match step {
+        PolarWizardStep::BridgeUrl => "Bridge URL",
+        PolarWizardStep::ServerName => "Server Name",
+        PolarWizardStep::GameTreasury => "Game Treasury (Sats)",
+        PolarWizardStep::GameTreasuryTras => "Game Treasury (TRAs)",
+        PolarWizardStep::UserNodes => "User Nodes",
+        PolarWizardStep::NpcItemTransfers => "NPC Item Transfers",
+        PolarWizardStep::BlockHeight => "Block Height",
+        PolarWizardStep::Complete | PolarWizardStep::Done => "Unlock Routes",
     }
 }
 
@@ -359,7 +376,7 @@ pub fn SetUp() -> Element {
                                             class: wizard_step_class(active_step, PolarWizardStep::BridgeUrl).to_string(),
                                             number: 1,
                                             info: "Default localhost bridge while Polar is open".to_string(),
-                                            name: rsx! { "Bridge URL" },
+                                            name: rsx! { "{polar_wizard_step_label(PolarWizardStep::BridgeUrl)}" },
                                             value: Some(rsx! {
                                                 label { class: "setup-field-row",
                                                     input {
@@ -441,6 +458,7 @@ pub fn SetUp() -> Element {
                                                                             lab_state.set(None);
                                                                             close_operation_prompt(operation_prompt, operation_id);
                                                                             push_toast(toast, toast_sequence, "Connected to Polar bridge.", ToastTone::Success);
+                                                                            focus_step_control("polar-server-name-input").await;
                                                                         }
                                                                         Err(message) => {
                                                                             let message = bridge_step_error_message(message);
@@ -468,7 +486,7 @@ pub fn SetUp() -> Element {
                                             class: wizard_step_class(active_step, PolarWizardStep::ServerName).to_string(),
                                             number: 2,
                                             info: "App creates this Polar network".to_string(),
-                                            name: rsx! { "Server name" },
+                                            name: rsx! { "{polar_wizard_step_label(PolarWizardStep::ServerName)}" },
                                             value: Some(rsx! {
                                                 label { class: "setup-field-row",
                                                     input {
@@ -538,6 +556,9 @@ pub fn SetUp() -> Element {
                                                                         let mut saved_profile = profile;
                                                                         saved_profile.polar_automation = result.profile;
                                                                         saved_profile.connection_status = ConnectionStatus::SavedOffline;
+                                                                        saved_profile.polar_block_height_confirmed = false;
+                                                                        saved_profile.game_treasury_ready = false;
+                                                                        saved_profile.game_treasury_funded_sats = 0;
                                                                         saved_profile.last_verified_at = None;
                                                                         setup_profile.set(saved_profile);
                                                                         lab_state.set(None);
@@ -548,6 +569,7 @@ pub fn SetUp() -> Element {
                                                                         };
                                                                         close_operation_prompt(operation_prompt, operation_id);
                                                                         push_toast(toast, toast_sequence, message, ToastTone::Success);
+                                                                        focus_step_control("polar-game-treasury-submit").await;
                                                                     }
                                                                     Err(message) => {
                                                                         if is_bridge_connection_error(&message) {
@@ -601,15 +623,169 @@ pub fn SetUp() -> Element {
                                         }
 
                                         Instruction {
-                                            id: "polar-step-demo-nodes".to_string(),
-                                            class: wizard_step_class(active_step, PolarWizardStep::DemoNodes).to_string(),
+                                            id: "polar-step-game-treasury".to_string(),
+                                            class: wizard_step_class(active_step, PolarWizardStep::GameTreasury).to_string(),
                                             number: 3,
-                                            info: "App creates these LND nodes".to_string(),
-                                            name: rsx! { "Demo nodes" },
+                                            info: "Funds the Game Treasury with sats for gameplay spending".to_string(),
+                                            name: rsx! { "{polar_wizard_step_label(PolarWizardStep::GameTreasury)}" },
+                                            value: Some(rsx! {
+                                                if setup_profile().game_treasury_ready {
+                                                    div { class: "tra-setup-status", role: "status",
+                                                        span { "Game Treasury was funded with all sats for use in gameplay." }
+                                                    }
+                                                } else {
+                                                    label { class: "setup-field-row",
+                                                        input {
+                                                            id: "polar-game-treasury-input",
+                                                            r#type: "text",
+                                                            value: "Game Treasury is funded with all sats for use in gameplay.",
+                                                            readonly: true,
+                                                            disabled: active_step != PolarWizardStep::GameTreasury,
+                                                        }
+                                                    }
+                                                }
+                                            }),
+                                            actions: Some(rsx! {
+                                                button {
+                                                    id: "polar-game-treasury-submit",
+                                                    class: "primary-action",
+                                                    r#type: "button",
+                                                    disabled: is_busy() || active_step != PolarWizardStep::GameTreasury,
+                                                    onclick: move |_| async move {
+                                                        is_busy.set(true);
+                                                        let operation_id = begin_operation_prompt(
+                                                            operation_prompt,
+                                                            prompt_sequence,
+                                                            "Game Treasury (Sats)",
+                                                            "Creating and funding the Game Treasury house node...",
+                                                            false,
+                                                        )
+                                                        .await;
+
+                                                        match profile_from_inputs(
+                                                            amount_text(),
+                                                            polar_server_name(),
+                                                            SetupMode::ServerConfig,
+                                                            polar_automation_from_input(
+                                                                polar_bridge_url(),
+                                                                setup_profile().polar_automation,
+                                                            ),
+                                                            setup_profile(),
+                                                        ) {
+                                                            Ok(profile) => match prepare_game_treasury(profile).await {
+                                                                Ok(state) => {
+                                                                    setup_profile.set(state.profile.clone());
+                                                                    lab_state.set(Some(state));
+                                                                    close_operation_prompt(operation_prompt, operation_id);
+                                                                    push_toast(toast, toast_sequence, "Game Treasury sats ready.", ToastTone::Success);
+                                                                    focus_step_control("polar-game-treasury-tras-submit").await;
+                                                                }
+                                                                Err(message) => {
+                                                                    close_operation_prompt(operation_prompt, operation_id);
+                                                                    push_toast(toast, toast_sequence, message, ToastTone::Error);
+                                                                }
+                                                            },
+                                                            Err(message) => {
+                                                                close_operation_prompt(operation_prompt, operation_id);
+                                                                push_toast(toast, toast_sequence, message, ToastTone::Error);
+                                                            }
+                                                        }
+
+                                                        is_busy.set(false);
+                                                    },
+                                                    "SUBMIT"
+                                                }
+                                                button {
+                                                    id: "polar-game-treasury-reset",
+                                                    class: "secondary-action danger-action",
+                                                    r#type: "button",
+                                                    disabled: is_busy() || active_step != PolarWizardStep::GameTreasury,
+                                                    onclick: move |_| async move {
+                                                        is_busy.set(true);
+                                                        let saved_profile = reset_to_server_name_step(setup_profile());
+                                                        setup_profile.set(saved_profile.clone());
+                                                        lab_state.set(None);
+                                                        push_toast(toast, toast_sequence, "Returned to step 2.", ToastTone::Success);
+                                                        focus_step_control("polar-server-name-input").await;
+                                                        is_busy.set(false);
+                                                    },
+                                                    "RESET"
+                                                }
+                                            }),
+                                        }
+
+                                        Instruction {
+                                            id: "polar-step-game-treasury-tras".to_string(),
+                                            class: wizard_step_class(active_step, PolarWizardStep::GameTreasuryTras).to_string(),
+                                            number: 4,
+                                            info: "Gifts the Game Treasury with TRA items for gameplay inventory".to_string(),
+                                            name: rsx! { "{polar_wizard_step_label(PolarWizardStep::GameTreasuryTras)}" },
+                                            value: Some(rsx! {
+                                                if treasury_tras_ready(current_lab_state.as_ref()) {
+                                                    div { class: "tra-setup-status", role: "status",
+                                                        span { "Game Treasury was gifted with all TRA items for use in gameplay." }
+                                                    }
+                                                } else {
+                                                    label { class: "setup-field-row",
+                                                        input {
+                                                            id: "polar-game-treasury-tras-input",
+                                                            r#type: "text",
+                                                            value: "Game Treasury is gifted with all TRA items for use in gameplay.",
+                                                            readonly: true,
+                                                            disabled: active_step != PolarWizardStep::GameTreasuryTras,
+                                                        }
+                                                    }
+                                                }
+                                            }),
+                                            actions: Some(rsx! {
+                                                button {
+                                                    id: "polar-game-treasury-tras-submit",
+                                                    class: "primary-action",
+                                                    r#type: "button",
+                                                    disabled: is_busy() || active_step != PolarWizardStep::GameTreasuryTras,
+                                                    onclick: move |_| async move {
+                                                        prepare_treasury_tras_step(
+                                                            is_busy,
+                                                            setup_profile,
+                                                            lab_state,
+                                                            operation_prompt,
+                                                            prompt_sequence,
+                                                            toast,
+                                                            toast_sequence,
+                                                        )
+                                                        .await;
+                                                    },
+                                                    "SUBMIT"
+                                                }
+                                                button {
+                                                    id: "polar-game-treasury-tras-reset",
+                                                    class: "secondary-action danger-action",
+                                                    r#type: "button",
+                                                    disabled: is_busy() || active_step != PolarWizardStep::GameTreasuryTras,
+                                                    onclick: move |_| async move {
+                                                        is_busy.set(true);
+                                                        let saved_profile = reset_to_game_treasury_step(setup_profile());
+                                                        setup_profile.set(saved_profile.clone());
+                                                        lab_state.set(None);
+                                                        push_toast(toast, toast_sequence, "Returned to step 3.", ToastTone::Success);
+                                                        focus_step_control("polar-game-treasury-submit").await;
+                                                        is_busy.set(false);
+                                                    },
+                                                    "RESET"
+                                                }
+                                            }),
+                                        }
+
+                                        Instruction {
+                                            id: "polar-step-user-nodes".to_string(),
+                                            class: wizard_step_class(active_step, PolarWizardStep::UserNodes).to_string(),
+                                            number: 5,
+                                            info: "App creates the user LND nodes".to_string(),
+                                            name: rsx! { "{polar_wizard_step_label(PolarWizardStep::UserNodes)}" },
                                             value: Some(rsx! {
                                                 label { class: "setup-field-row",
                                                     input {
-                                                        id: "polar-demo-nodes-input",
+                                                        id: "polar-user-nodes-input",
                                                         r#type: "text",
                                                         value: "Alice, Bob, Carol",
                                                         readonly: true,
@@ -621,7 +797,7 @@ pub fn SetUp() -> Element {
                                                     id: POLAR_DEMO_NODES_SUBMIT_ID,
                                                     class: "primary-action",
                                                     r#type: "button",
-                                                    disabled: is_busy() || active_step != PolarWizardStep::DemoNodes,
+                                                        disabled: is_busy() || active_step != PolarWizardStep::UserNodes,
                                                     onclick: move |_| async move {
                                                         create_demo_nodes_step(
                                                             is_busy,
@@ -641,10 +817,10 @@ pub fn SetUp() -> Element {
                                                     "SUBMIT"
                                                 }
                                                 button {
-                                                    id: "polar-demo-nodes-reset",
+                                                    id: "polar-user-nodes-reset",
                                                     class: "secondary-action danger-action",
                                                     r#type: "button",
-                                                    disabled: is_busy() || active_step != PolarWizardStep::DemoNodes,
+                                                    disabled: is_busy() || active_step != PolarWizardStep::UserNodes,
                                                     onclick: move |_| async move {
                                                         is_busy.set(true);
                                                         match profile_from_inputs(
@@ -658,13 +834,13 @@ pub fn SetUp() -> Element {
                                                             setup_profile(),
                                                         ) {
                                                             Ok(profile) => {
-                                                                let saved_profile = reset_to_server_name_step(profile);
+                                                                let saved_profile = reset_to_game_treasury_tras_step(profile);
                                                                 setup_profile.set(saved_profile.clone());
-                                                                lab_state.set(None);
+                                                                lab_state.set(lab_state_after_reset_to_game_treasury_tras_step());
                                                                 polar_bridge_url.set(saved_profile.polar_automation.bridge_url.clone());
                                                                 polar_server_name.set(saved_profile.network_name.clone());
-                                                                push_toast(toast, toast_sequence, "Returned to step 2.", ToastTone::Success);
-                                                                focus_step_control("polar-server-name-input").await;
+                                                                push_toast(toast, toast_sequence, "Returned to step 4.", ToastTone::Success);
+                                                                focus_step_control("polar-game-treasury-tras-submit").await;
                                                             }
                                                             Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
                                                         }
@@ -677,11 +853,71 @@ pub fn SetUp() -> Element {
                                         }
 
                                         Instruction {
+                                            id: "polar-step-tra-assets".to_string(),
+                                            class: wizard_step_class(active_step, PolarWizardStep::NpcItemTransfers).to_string(),
+                                            number: 6,
+                                            info: "Transfers starting items from Game Treasury to Bob and Carol".to_string(),
+                                            name: rsx! { "{polar_wizard_step_label(PolarWizardStep::NpcItemTransfers)}" },
+                                            value: Some(rsx! {
+                                                if let Some(state) = current_lab_state.as_ref() {
+                                                    NpcItemTransferStatus { transfers: state.npc_item_transfers.clone() }
+                                                } else {
+                                                    label { class: "setup-field-row",
+                                                        input {
+                                                            id: "polar-tra-assets-input",
+                                                            r#type: "text",
+                                                            value: "Bob and Carol starting items come from Game Treasury.",
+                                                            readonly: true,
+                                                            disabled: active_step != PolarWizardStep::NpcItemTransfers,
+                                                        }
+                                                    }
+                                                }
+                                            }),
+                                            actions: Some(rsx! {
+                                                button {
+                                                    id: "polar-tra-assets-submit",
+                                                    class: "primary-action",
+                                                    r#type: "button",
+                                                    disabled: is_busy() || active_step != PolarWizardStep::NpcItemTransfers,
+                                                    onclick: move |_| async move {
+                                                        prepare_tra_inventory_step(
+                                                            is_busy,
+                                                            setup_profile,
+                                                            lab_state,
+                                                            operation_prompt,
+                                                            prompt_sequence,
+                                                            toast,
+                                                            toast_sequence,
+                                                        )
+                                                        .await;
+                                                    },
+                                                    "SUBMIT"
+                                                }
+                                                button {
+                                                    id: "polar-tra-assets-reset",
+                                                    class: "secondary-action danger-action",
+                                                    r#type: "button",
+                                                    disabled: is_busy() || active_step != PolarWizardStep::NpcItemTransfers,
+                                                    onclick: move |_| async move {
+                                                        is_busy.set(true);
+                                                        let saved_profile = reset_to_demo_nodes_step(setup_profile());
+                                                        setup_profile.set(saved_profile.clone());
+                                                        lab_state.set(lab_state_after_reset_to_demo_nodes_step(saved_profile.clone()));
+                                                        push_toast(toast, toast_sequence, "Returned to step 4. NPC item transfers will be recreated on submit.", ToastTone::Success);
+                                                        focus_step_control(POLAR_DEMO_NODES_SUBMIT_ID).await;
+                                                        is_busy.set(false);
+                                                    },
+                                                    "RESET"
+                                                }
+                                            }),
+                                        }
+
+                                        Instruction {
                                             id: "polar-step-block-height".to_string(),
                                             class: wizard_step_class(active_step, PolarWizardStep::BlockHeight).to_string(),
-                                            number: 4,
-                                            info: "Populated from the current Polar block height".to_string(),
-                                            name: rsx! { "Block Height" },
+                                            number: 7,
+                                            info: "Sets the game block-height baseline".to_string(),
+                                            name: rsx! { "{polar_wizard_step_label(PolarWizardStep::BlockHeight)}" },
                                             value: Some(rsx! {
                                                 label { class: "setup-field-row",
                                                     input {
@@ -690,8 +926,8 @@ pub fn SetUp() -> Element {
                                                         min: "0",
                                                         step: "1",
                                                         value: polar_block_height(),
-                                                        readonly: true,
                                                         disabled: active_step != PolarWizardStep::BlockHeight,
+                                                        oninput: move |event| polar_block_height.set(event.value()),
                                                     }
                                                 }
                                             }),
@@ -734,27 +970,27 @@ pub fn SetUp() -> Element {
                                                                     )
                                                                     .await;
                                                                     match confirm_polar_block_height(profile, block_height).await {
-                                                                    Ok(state) => {
-                                                                        update_operation_prompt(
-                                                                            operation_prompt,
-                                                                            operation_id,
-                                                                            format!("Block Height saved as {block_height}."),
-                                                                            ToastTone::Info,
-                                                                            true,
-                                                                            false,
-                                                                        )
-                                                                        .await;
-                                                                        polar_block_height.set(state.block_height.to_string());
-                                                                        setup_profile.set(state.profile.clone());
-                                                                        lab_state.set(Some(state));
-                                                                        close_operation_prompt(operation_prompt, operation_id);
-                                                                        push_toast(toast, toast_sequence, "Block Height sent", ToastTone::Success);
-                                                                        focus_step_control("polar-tra-assets-submit").await;
-                                                                    }
-                                                                    Err(message) => {
-                                                                        close_operation_prompt(operation_prompt, operation_id);
-                                                                        push_toast(toast, toast_sequence, message, ToastTone::Error);
-                                                                    },
+                                                                        Ok(state) => {
+                                                                            update_operation_prompt(
+                                                                                operation_prompt,
+                                                                                operation_id,
+                                                                                format!("Block Height saved as {block_height}."),
+                                                                                ToastTone::Info,
+                                                                                true,
+                                                                                false,
+                                                                            )
+                                                                            .await;
+                                                                            polar_block_height.set(state.block_height.to_string());
+                                                                            setup_profile.set(state.profile.clone());
+                                                                            lab_state.set(Some(state));
+                                                                            close_operation_prompt(operation_prompt, operation_id);
+                                                                            push_toast(toast, toast_sequence, "Block Height sent", ToastTone::Success);
+                                                                            focus_step_control("polar-complete-submit").await;
+                                                                        }
+                                                                        Err(message) => {
+                                                                            close_operation_prompt(operation_prompt, operation_id);
+                                                                            push_toast(toast, toast_sequence, message, ToastTone::Error);
+                                                                        },
                                                                     }
                                                                 },
                                                                 Err(message) => {
@@ -779,89 +1015,19 @@ pub fn SetUp() -> Element {
                                                     disabled: is_busy() || active_step != PolarWizardStep::BlockHeight,
                                                     onclick: move |_| async move {
                                                         is_busy.set(true);
-                                                        match profile_from_inputs(
-                                                            amount_text(),
-                                                            polar_server_name(),
-                                                            SetupMode::ServerConfig,
-                                                            polar_automation_from_input(
-                                                                polar_bridge_url(),
-                                                                setup_profile().polar_automation,
-                                                            ),
-                                                            setup_profile(),
-                                                        ) {
-                                                            Ok(profile) => {
-                                                                let saved_profile = reset_to_demo_nodes_step(profile);
-                                                                setup_profile.set(saved_profile.clone());
-                                                                lab_state.set(None);
-                                                                polar_bridge_url.set(saved_profile.polar_automation.bridge_url.clone());
-                                                                polar_server_name.set(saved_profile.network_name.clone());
-                                                                push_toast(toast, toast_sequence, "Returned to step 3.", ToastTone::Success);
-                                                                focus_step_control(POLAR_DEMO_NODES_SUBMIT_ID).await;
-                                                            }
-                                                            Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
-                                                        }
-
-                                                        is_busy.set(false);
-                                                    },
-                                                    "RESET"
-                                                }
-                                            }),
-                                        }
-
-                                        Instruction {
-                                            id: "polar-step-tra-assets".to_string(),
-                                            class: wizard_step_class(active_step, PolarWizardStep::TraInventory).to_string(),
-                                            number: 5,
-                                            info: "Creates mock inventory items as local Tap Root Assets".to_string(),
-                                            name: rsx! { "Add Tap Root Assets" },
-                                            value: Some(rsx! {
-                                                label { class: "setup-field-row",
-                                                    input {
-                                                        id: "polar-tra-assets-input",
-                                                        r#type: "text",
-                                                        value: tra_inventory_summary(current_lab_state.as_ref()),
-                                                        readonly: true,
-                                                        disabled: active_step != PolarWizardStep::TraInventory,
-                                                    }
-                                                }
-                                            }),
-                                            actions: Some(rsx! {
-                                                button {
-                                                    id: "polar-tra-assets-submit",
-                                                    class: "primary-action",
-                                                    r#type: "button",
-                                                    disabled: is_busy() || active_step != PolarWizardStep::TraInventory,
-                                                    onclick: move |_| async move {
-                                                        prepare_tra_inventory_step(
-                                                            is_busy,
-                                                            setup_profile,
-                                                            lab_state,
-                                                            operation_prompt,
-                                                            prompt_sequence,
-                                                            toast,
-                                                            toast_sequence,
-                                                        )
-                                                        .await;
-                                                    },
-                                                    "SUBMIT"
-                                                }
-                                                button {
-                                                    id: "polar-tra-assets-reset",
-                                                    class: "secondary-action danger-action",
-                                                    r#type: "button",
-                                                    disabled: is_busy() || active_step != PolarWizardStep::TraInventory,
-                                                    onclick: move |_| async move {
-                                                        is_busy.set(true);
-                                                        let saved_profile = reset_to_block_height_step(setup_profile());
+                                                        let saved_profile = reset_to_npc_item_transfers_step(setup_profile());
                                                         setup_profile.set(saved_profile.clone());
                                                         if let Some(mut state) = lab_state().or_else(storage_service::load_lab_state_snapshot) {
                                                             state.profile = saved_profile;
-                                                            state.tra_items.clear();
+                                                            state.npc_item_transfers.clear();
+                                                            if let Ok(next_state) = lightning_service::TraService::prepare_game_treasury_items(state.clone()) {
+                                                                state = next_state;
+                                                            }
                                                             storage_service::save_lab_state_snapshot(&state);
                                                             lab_state.set(Some(state));
                                                         }
-                                                        push_toast(toast, toast_sequence, "Returned to step 4. Tap Root Assets will be recreated on submit.", ToastTone::Success);
-                                                        focus_step_control("polar-block-height-input").await;
+                                                        push_toast(toast, toast_sequence, "Returned to step 6. NPC Item Transfers will be recreated on submit.", ToastTone::Success);
+                                                        focus_step_control("polar-tra-assets-submit").await;
                                                         is_busy.set(false);
                                                     },
                                                     "RESET"
@@ -872,9 +1038,9 @@ pub fn SetUp() -> Element {
                                         Instruction {
                                             id: "polar-step-complete".to_string(),
                                             class: wizard_step_class(active_step, PolarWizardStep::Complete).to_string(),
-                                            number: 6,
+                                            number: 8,
                                             info: "Saves setup as connected".to_string(),
-                                            name: rsx! { "Unlock routes" },
+                                            name: rsx! { "{polar_wizard_step_label(PolarWizardStep::Complete)}" },
                                             value: Some(rsx! {
                                                 label { class: "setup-field-row",
                                                     input {
@@ -1156,8 +1322,34 @@ async fn focus_step_control(id: &'static str) {
 #[cfg(not(target_arch = "wasm32"))]
 async fn focus_step_control(_id: &'static str) {}
 
+#[cfg(test)]
+fn submit_focus_target(step: PolarWizardStep) -> Option<&'static str> {
+    match step {
+        PolarWizardStep::BridgeUrl => Some("polar-server-name-input"),
+        PolarWizardStep::ServerName => Some("polar-game-treasury-submit"),
+        PolarWizardStep::GameTreasury => Some("polar-game-treasury-tras-submit"),
+        PolarWizardStep::GameTreasuryTras => Some(POLAR_DEMO_NODES_SUBMIT_ID),
+        PolarWizardStep::UserNodes => Some("polar-tra-assets-submit"),
+        PolarWizardStep::NpcItemTransfers => Some("polar-block-height-input"),
+        PolarWizardStep::BlockHeight => Some("polar-complete-submit"),
+        PolarWizardStep::Complete | PolarWizardStep::Done => None,
+    }
+}
+
+fn reset_focus_target(step: PolarWizardStep) -> &'static str {
+    match step {
+        PolarWizardStep::BridgeUrl | PolarWizardStep::ServerName => "polar-bridge-url-input",
+        PolarWizardStep::GameTreasury => "polar-server-name-input",
+        PolarWizardStep::GameTreasuryTras => "polar-game-treasury-submit",
+        PolarWizardStep::UserNodes => "polar-game-treasury-tras-submit",
+        PolarWizardStep::NpcItemTransfers => POLAR_DEMO_NODES_SUBMIT_ID,
+        PolarWizardStep::BlockHeight => "polar-tra-assets-submit",
+        PolarWizardStep::Complete | PolarWizardStep::Done => "polar-block-height-input",
+    }
+}
+
 fn complete_reset_focus_target() -> &'static str {
-    "polar-tra-assets-submit"
+    reset_focus_target(PolarWizardStep::Complete)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1233,31 +1425,38 @@ fn polar_wizard_step(profile: &SetupProfile, lab_state: Option<&LabState>) -> Po
         return PolarWizardStep::Done;
     }
 
-    if profile.connection_status == ConnectionStatus::PartiallyConnected
-        || lab_state_has_status(lab_state, ConnectionStatus::PartiallyConnected)
+    if profile.connection_status != ConnectionStatus::SavedOffline
+        && profile.connection_status != ConnectionStatus::PartiallyConnected
+        && !lab_state_has_status(lab_state, ConnectionStatus::PartiallyConnected)
     {
-        if !profile.polar_block_height_confirmed {
-            return PolarWizardStep::BlockHeight;
-        }
-
-        if !tra_inventory_ready(lab_state) {
-            return PolarWizardStep::TraInventory;
-        }
-
-        return PolarWizardStep::Complete;
+        return PolarWizardStep::BridgeUrl;
     }
 
-    if profile.connection_status == ConnectionStatus::SavedOffline
-        && !profile.polar_automation.network_id.trim().is_empty()
-    {
-        return PolarWizardStep::DemoNodes;
-    }
-
-    if profile.connection_status == ConnectionStatus::SavedOffline {
+    if profile.polar_automation.network_id.trim().is_empty() {
         return PolarWizardStep::ServerName;
     }
 
-    PolarWizardStep::BridgeUrl
+    if !profile.game_treasury_ready {
+        return PolarWizardStep::GameTreasury;
+    }
+
+    if !treasury_tras_ready(lab_state) {
+        return PolarWizardStep::GameTreasuryTras;
+    }
+
+    if !user_nodes_ready(lab_state) {
+        return PolarWizardStep::UserNodes;
+    }
+
+    if !npc_item_transfers_ready(lab_state) {
+        return PolarWizardStep::NpcItemTransfers;
+    }
+
+    if !profile.polar_block_height_confirmed {
+        return PolarWizardStep::BlockHeight;
+    }
+
+    PolarWizardStep::Complete
 }
 
 fn lab_state_has_status(lab_state: Option<&LabState>, status: ConnectionStatus) -> bool {
@@ -1267,12 +1466,51 @@ fn lab_state_has_status(lab_state: Option<&LabState>, status: ConnectionStatus) 
     }
 }
 
-fn tra_inventory_ready(lab_state: Option<&LabState>) -> bool {
+fn npc_item_transfers_ready(lab_state: Option<&LabState>) -> bool {
     lab_state
         .map(|state| {
             let bob_books = verified_tra_count(state, DemoNodeId::Bob, BOOK_ITEM_ID);
             let carol_apples = verified_tra_count(state, DemoNodeId::Carol, APPLE_ITEM_ID);
-            bob_books >= 2 && carol_apples >= 2
+            let bob_book_transfers =
+                successful_npc_transfer_count(state, DemoNodeId::Bob, BOOK_ITEM_ID);
+            let carol_apple_transfers =
+                successful_npc_transfer_count(state, DemoNodeId::Carol, APPLE_ITEM_ID);
+
+            bob_books >= 2
+                && carol_apples >= 2
+                && bob_book_transfers >= 2
+                && carol_apple_transfers >= 2
+        })
+        .unwrap_or(false)
+}
+
+fn treasury_tras_ready(lab_state: Option<&LabState>) -> bool {
+    if npc_item_transfers_ready(lab_state) {
+        return true;
+    }
+
+    lab_state
+        .map(|state| {
+            let treasury_books =
+                verified_tra_count(state, DemoNodeId::GameTreasury, BOOK_ITEM_ID);
+            let treasury_apples =
+                verified_tra_count(state, DemoNodeId::GameTreasury, APPLE_ITEM_ID);
+
+            treasury_books >= 2 && treasury_apples >= 2
+        })
+        .unwrap_or(false)
+}
+
+fn user_nodes_ready(lab_state: Option<&LabState>) -> bool {
+    lab_state
+        .map(|state| {
+            DemoNodeId::ALL.into_iter().all(|node_id| {
+                state.nodes.iter().any(|node| {
+                    node.node_id == node_id
+                        && node.status == crate::client::models::NodeStatus::Online
+                        && node.pubkey.is_some()
+                })
+            })
         })
         .unwrap_or(false)
 }
@@ -1289,16 +1527,16 @@ fn verified_tra_count(state: &LabState, owner_node: DemoNodeId, item_id: u32) ->
         .count()
 }
 
-fn tra_inventory_summary(lab_state: Option<&LabState>) -> String {
-    let item_count = lab_state
-        .map(|state| state.tra_items.len())
-        .unwrap_or_default();
-
-    if item_count == 0 {
-        "No Tap Root Assets added yet".to_string()
-    } else {
-        format!("{item_count} Tap Root Assets ready")
-    }
+fn successful_npc_transfer_count(state: &LabState, destination: DemoNodeId, item_id: u32) -> usize {
+    state
+        .npc_item_transfers
+        .iter()
+        .filter(|transfer| {
+            transfer.destination == destination
+                && transfer.item_id == item_id
+                && transfer.status == crate::client::models::TraTransferStatus::Succeeded
+        })
+        .count()
 }
 
 fn wizard_step_class(active_step: PolarWizardStep, step: PolarWizardStep) -> &'static str {
@@ -1319,8 +1557,13 @@ fn is_valid_local_bridge_url(bridge_url: &str) -> bool {
 fn browser_origin_allows_polar_bridge() -> bool {
     web_sys::window()
         .and_then(|window| window.location().hostname().ok())
-        .map(|hostname| hostname.eq_ignore_ascii_case("localhost"))
+        .map(|hostname| browser_hostname_allows_polar_bridge(&hostname))
         .unwrap_or(false)
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn browser_hostname_allows_polar_bridge(hostname: &str) -> bool {
+    hostname.eq_ignore_ascii_case("localhost") || hostname == "127.0.0.1"
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1375,6 +1618,8 @@ fn reset_to_bridge_url_step(mut profile: SetupProfile) -> SetupProfile {
 fn reset_to_server_name_step(mut profile: SetupProfile) -> SetupProfile {
     profile.connection_status = ConnectionStatus::SavedOffline;
     profile.polar_block_height_confirmed = false;
+    profile.game_treasury_ready = false;
+    profile.game_treasury_funded_sats = 0;
     profile.last_verified_at = None;
     profile.polar_automation.network_id.clear();
     storage_service::save_setup_profile(&profile);
@@ -1382,8 +1627,58 @@ fn reset_to_server_name_step(mut profile: SetupProfile) -> SetupProfile {
     profile
 }
 
-fn reset_to_demo_nodes_step(mut profile: SetupProfile) -> SetupProfile {
+fn reset_to_game_treasury_step(mut profile: SetupProfile) -> SetupProfile {
     profile.connection_status = ConnectionStatus::SavedOffline;
+    profile.polar_block_height_confirmed = false;
+    profile.game_treasury_ready = false;
+    profile.game_treasury_funded_sats = 0;
+    profile.last_verified_at = None;
+    if profile.polar_automation.network_id.trim().is_empty() {
+        profile.polar_automation.network_id = profile.network_name.trim().to_string();
+    }
+
+    storage_service::save_setup_profile(&profile);
+    storage_service::clear_lab_state_snapshot();
+
+    profile
+}
+
+fn reset_to_game_treasury_tras_step(mut profile: SetupProfile) -> SetupProfile {
+    profile.connection_status = ConnectionStatus::PartiallyConnected;
+    profile.polar_block_height_confirmed = false;
+    profile.last_verified_at = None;
+    if profile.polar_automation.network_id.trim().is_empty() {
+        profile.polar_automation.network_id = profile.network_name.trim().to_string();
+    }
+
+    storage_service::save_setup_profile(&profile);
+
+    profile
+}
+
+fn lab_state_after_reset_to_game_treasury_tras_step() -> Option<LabState> {
+    let current = storage_service::load_lab_state_snapshot();
+    let next = current.map(|mut state| {
+        state.nodes.retain(|node| node.node_id == DemoNodeId::GameTreasury);
+        state.tra_items.clear();
+        state.game_treasury.owned_items.clear();
+        state.game_treasury.inventory_value_sats = 0;
+        state.npc_item_transfers.clear();
+        state.profile.connection_status = ConnectionStatus::PartiallyConnected;
+        state.profile.polar_block_height_confirmed = false;
+        state
+    });
+
+    match next.as_ref() {
+        Some(state) => storage_service::save_lab_state_snapshot(state),
+        None => storage_service::clear_lab_state_snapshot(),
+    }
+
+    next
+}
+
+fn reset_to_demo_nodes_step(mut profile: SetupProfile) -> SetupProfile {
+    profile.connection_status = ConnectionStatus::PartiallyConnected;
     profile.polar_block_height_confirmed = false;
     profile.last_verified_at = None;
     if profile.polar_automation.network_id.trim().is_empty() {
@@ -1396,17 +1691,35 @@ fn reset_to_demo_nodes_step(mut profile: SetupProfile) -> SetupProfile {
     profile
 }
 
+fn lab_state_after_reset_to_demo_nodes_step(profile: SetupProfile) -> Option<LabState> {
+    let current = storage_service::load_lab_state_snapshot();
+    let mut state = current.unwrap_or_else(|| lightning_service::default_lab_state(profile.clone()));
+    state.profile = profile;
+    state.nodes.retain(|node| node.node_id == DemoNodeId::GameTreasury);
+    state.npc_item_transfers.clear();
+    if state.game_treasury.status != crate::client::models::TreasuryStatus::Ready {
+        state = lightning_service::TraService::prepare_game_treasury(state).ok()?;
+    }
+    let state = lightning_service::TraService::prepare_game_treasury_items(state).ok()?;
+
+    storage_service::save_lab_state_snapshot(&state);
+    Some(state)
+}
+
 fn reset_to_block_height_step(mut profile: SetupProfile) -> SetupProfile {
     profile.connection_status = ConnectionStatus::PartiallyConnected;
     profile.polar_block_height_confirmed = false;
     profile.last_verified_at = None;
+    if profile.polar_automation.network_id.trim().is_empty() {
+        profile.polar_automation.network_id = profile.network_name.trim().to_string();
+    }
     storage_service::save_setup_profile(&profile);
     profile
 }
 
-fn reset_to_tra_inventory_step(mut profile: SetupProfile) -> SetupProfile {
+fn reset_to_npc_item_transfers_step(mut profile: SetupProfile) -> SetupProfile {
     profile.connection_status = ConnectionStatus::PartiallyConnected;
-    profile.polar_block_height_confirmed = true;
+    profile.polar_block_height_confirmed = false;
     profile.last_verified_at = None;
     storage_service::save_setup_profile(&profile);
     profile
@@ -1439,11 +1752,12 @@ mod tests {
     fn polar_wizard_advances_only_after_saved_bridge_state() {
         let bridge_connected = profile_with_status(ConnectionStatus::SavedOffline, "");
         let server_ready = profile_with_status(ConnectionStatus::SavedOffline, "network-1");
+        let mut treasury_ready =
+            profile_with_status(ConnectionStatus::PartiallyConnected, "network-1");
+        treasury_ready.game_treasury_ready = true;
         let mut demo_nodes_ready =
             profile_with_status(ConnectionStatus::PartiallyConnected, "network-1");
-        let mut block_height_ready =
-            profile_with_status(ConnectionStatus::PartiallyConnected, "network-1");
-        block_height_ready.polar_block_height_confirmed = true;
+        demo_nodes_ready.game_treasury_ready = true;
         let connected = profile_with_status(ConnectionStatus::Connected, "network-1");
 
         assert_eq!(
@@ -1452,30 +1766,40 @@ mod tests {
         );
         assert_eq!(
             polar_wizard_step(&server_ready, None).order(),
-            PolarWizardStep::DemoNodes.order()
+            PolarWizardStep::GameTreasury.order()
         );
         assert_eq!(
-            polar_wizard_step(&demo_nodes_ready, None).order(),
-            PolarWizardStep::BlockHeight.order()
+            polar_wizard_step(&treasury_ready, None).order(),
+            PolarWizardStep::GameTreasuryTras.order()
         );
-        demo_nodes_ready.polar_block_height_confirmed = true;
+        let mut treasury_tras_state = lightning_service::default_lab_state(treasury_ready.clone());
+        treasury_tras_state.tra_items = treasury_tra_items();
         assert_eq!(
-            polar_wizard_step(&demo_nodes_ready, None).order(),
-            PolarWizardStep::TraInventory.order()
+            polar_wizard_step(&treasury_ready, Some(&treasury_tras_state)).order(),
+            PolarWizardStep::UserNodes.order()
         );
+        let mut demo_nodes_state = user_nodes_ready_state(demo_nodes_ready.clone());
+        demo_nodes_state.tra_items = treasury_tra_items();
         assert_eq!(
-            polar_wizard_step(&block_height_ready, None).order(),
-            PolarWizardStep::TraInventory.order()
+            polar_wizard_step(&demo_nodes_ready, Some(&demo_nodes_state)).order(),
+            PolarWizardStep::NpcItemTransfers.order()
         );
-        let mut tra_ready_state = lightning_service::default_lab_state(block_height_ready.clone());
-        tra_ready_state.tra_items = vec![
+        demo_nodes_state.tra_items = vec![
             verified_item(DemoNodeId::Bob, "Book", BOOK_ITEM_ID),
             verified_item(DemoNodeId::Bob, "Book 2", BOOK_ITEM_ID),
             verified_item(DemoNodeId::Carol, "Apple", APPLE_ITEM_ID),
             verified_item(DemoNodeId::Carol, "Apple 2", APPLE_ITEM_ID),
         ];
+        demo_nodes_state.npc_item_transfers = successful_npc_transfers();
         assert_eq!(
-            polar_wizard_step(&block_height_ready, Some(&tra_ready_state)).order(),
+            polar_wizard_step(&demo_nodes_ready, Some(&demo_nodes_state)).order(),
+            PolarWizardStep::BlockHeight.order()
+        );
+        let mut block_height_ready = demo_nodes_ready;
+        block_height_ready.polar_block_height_confirmed = true;
+        demo_nodes_state.profile = block_height_ready.clone();
+        assert_eq!(
+            polar_wizard_step(&block_height_ready, Some(&demo_nodes_state)).order(),
             PolarWizardStep::Complete.order()
         );
         assert_eq!(
@@ -1500,23 +1824,77 @@ mod tests {
         }
     }
 
+    fn successful_npc_transfer(
+        destination: DemoNodeId,
+        unique_name: &str,
+        item_id: u32,
+        index: usize,
+    ) -> crate::client::models::NpcItemTransfer {
+        crate::client::models::NpcItemTransfer {
+            transfer_id: format!("npc-transfer-{index}"),
+            item_id,
+            item_name: unique_name.to_string(),
+            source: lightning_service::GAME_TREASURY_NODE_LABEL.to_string(),
+            destination,
+            status: crate::client::models::TraTransferStatus::Succeeded,
+            entry_id: Some(format!("treasury-entry-{index}")),
+        }
+    }
+
+    fn successful_npc_transfers() -> Vec<crate::client::models::NpcItemTransfer> {
+        vec![
+            successful_npc_transfer(DemoNodeId::Bob, "Book", BOOK_ITEM_ID, 1),
+            successful_npc_transfer(DemoNodeId::Bob, "Book 2", BOOK_ITEM_ID, 2),
+            successful_npc_transfer(DemoNodeId::Carol, "Apple", APPLE_ITEM_ID, 3),
+            successful_npc_transfer(DemoNodeId::Carol, "Apple 2", APPLE_ITEM_ID, 4),
+        ]
+    }
+
+    fn treasury_tra_items() -> Vec<crate::client::models::TraItem> {
+        vec![
+            verified_item(DemoNodeId::GameTreasury, "Book", BOOK_ITEM_ID),
+            verified_item(DemoNodeId::GameTreasury, "Book 2", BOOK_ITEM_ID),
+            verified_item(DemoNodeId::GameTreasury, "Apple", APPLE_ITEM_ID),
+            verified_item(DemoNodeId::GameTreasury, "Apple 2", APPLE_ITEM_ID),
+        ]
+    }
+
+    fn user_nodes_ready_state(profile: SetupProfile) -> LabState {
+        let mut state = lightning_service::default_lab_state(profile);
+        for node in state.nodes.iter_mut() {
+            if DemoNodeId::ALL.contains(&node.node_id) {
+                node.status = crate::client::models::NodeStatus::Online;
+                node.pubkey = Some(format!("{}-pubkey", node.alias));
+            }
+        }
+        state
+    }
+
     #[test]
-    fn tra_inventory_reset_returns_to_block_height() {
-        let mut profile = profile_with_status(ConnectionStatus::PartiallyConnected, "");
-        profile.polar_block_height_confirmed = true;
+    fn complete_reset_returns_to_block_height() {
+        let mut profile = profile_with_status(ConnectionStatus::Connected, "network-1");
+        profile.game_treasury_ready = true;
         profile.network_name = DEFAULT_NETWORK_NAME.to_string();
 
         let reset_profile = reset_to_block_height_step(profile);
+        let mut state = user_nodes_ready_state(reset_profile.clone());
+        state.tra_items = vec![
+            verified_item(DemoNodeId::Bob, "Book", BOOK_ITEM_ID),
+            verified_item(DemoNodeId::Bob, "Book 2", BOOK_ITEM_ID),
+            verified_item(DemoNodeId::Carol, "Apple", APPLE_ITEM_ID),
+            verified_item(DemoNodeId::Carol, "Apple 2", APPLE_ITEM_ID),
+        ];
+        state.npc_item_transfers = successful_npc_transfers();
 
         assert_eq!(
-            polar_wizard_step(&reset_profile, None).order(),
+            polar_wizard_step(&reset_profile, Some(&state)).order(),
             PolarWizardStep::BlockHeight.order()
         );
         assert!(!reset_profile.polar_block_height_confirmed);
     }
 
     #[test]
-    fn tra_inventory_ready_requires_two_books_and_two_apples() {
+    fn npc_item_transfers_ready_requires_two_books_and_two_apples() {
         let mut profile = profile_with_status(ConnectionStatus::PartiallyConnected, "network-1");
         profile.polar_block_height_confirmed = true;
         let mut state = lightning_service::default_lab_state(profile);
@@ -1526,21 +1904,21 @@ mod tests {
             verified_item(DemoNodeId::Carol, "Apple", APPLE_ITEM_ID),
         ];
 
-        assert!(!tra_inventory_ready(Some(&state)));
+        assert!(!npc_item_transfers_ready(Some(&state)));
 
         state
             .tra_items
             .push(verified_item(DemoNodeId::Carol, "Apple 2", APPLE_ITEM_ID));
+        state.npc_item_transfers = successful_npc_transfers();
 
-        assert!(tra_inventory_ready(Some(&state)));
+        assert!(npc_item_transfers_ready(Some(&state)));
     }
 
     #[test]
-    fn complete_reset_returns_to_tra_inventory() {
-        let mut profile = profile_with_status(ConnectionStatus::Connected, "network-1");
-        profile.polar_block_height_confirmed = true;
-        profile.network_name = DEFAULT_NETWORK_NAME.to_string();
-        let mut state = lightning_service::default_lab_state(profile.clone());
+    fn npc_item_transfers_ready_requires_transfer_records() {
+        let mut profile = profile_with_status(ConnectionStatus::PartiallyConnected, "network-1");
+        profile.game_treasury_ready = true;
+        let mut state = user_nodes_ready_state(profile);
         state.tra_items = vec![
             verified_item(DemoNodeId::Bob, "Book", BOOK_ITEM_ID),
             verified_item(DemoNodeId::Bob, "Book 2", BOOK_ITEM_ID),
@@ -1548,25 +1926,158 @@ mod tests {
             verified_item(DemoNodeId::Carol, "Apple 2", APPLE_ITEM_ID),
         ];
 
-        let reset_profile = reset_to_tra_inventory_step(profile);
-        state.profile = reset_profile.clone();
-        state.tra_items.clear();
-
-        assert_eq!(
-            polar_wizard_step(&reset_profile, Some(&state)).order(),
-            PolarWizardStep::TraInventory.order()
-        );
-        assert!(reset_profile.polar_block_height_confirmed);
+        assert!(!npc_item_transfers_ready(Some(&state)));
     }
 
     #[test]
-    fn complete_reset_focuses_step_five_primary_control() {
-        assert_eq!(complete_reset_focus_target(), "polar-tra-assets-submit");
+    fn npc_item_transfers_reset_clears_snapshot_to_revisit_user_nodes() {
+        let mut profile = profile_with_status(ConnectionStatus::PartiallyConnected, "network-1");
+        profile.game_treasury_ready = true;
+        let reset_profile = reset_to_demo_nodes_step(profile.clone());
+        let state = lab_state_after_reset_to_demo_nodes_step(reset_profile.clone());
+
+        assert!(state.as_ref().is_some_and(|state| treasury_tras_ready(Some(state))));
+        assert_eq!(
+            polar_wizard_step(&reset_profile, state.as_ref()).order(),
+            PolarWizardStep::UserNodes.order()
+        );
+    }
+
+    #[test]
+    fn block_height_reset_returns_to_npc_item_transfers() {
+        let mut profile = profile_with_status(ConnectionStatus::Connected, "network-1");
+        profile.game_treasury_ready = true;
+        profile.polar_block_height_confirmed = true;
+        profile.network_name = DEFAULT_NETWORK_NAME.to_string();
+        let mut state = user_nodes_ready_state(profile.clone());
+        state.tra_items = vec![
+            verified_item(DemoNodeId::Bob, "Book", BOOK_ITEM_ID),
+            verified_item(DemoNodeId::Bob, "Book 2", BOOK_ITEM_ID),
+            verified_item(DemoNodeId::Carol, "Apple", APPLE_ITEM_ID),
+            verified_item(DemoNodeId::Carol, "Apple 2", APPLE_ITEM_ID),
+        ];
+        state.npc_item_transfers = successful_npc_transfers();
+
+        let reset_profile = reset_to_npc_item_transfers_step(profile);
+        state.tra_items = treasury_tra_items();
+        state.npc_item_transfers.clear();
+        state.profile = reset_profile.clone();
+
+        assert_eq!(
+            polar_wizard_step(&reset_profile, Some(&state)).order(),
+            PolarWizardStep::NpcItemTransfers.order()
+        );
+        assert!(!reset_profile.polar_block_height_confirmed);
+    }
+
+    #[test]
+    fn submit_focus_targets_advance_to_next_step() {
+        assert_eq!(
+            submit_focus_target(PolarWizardStep::BridgeUrl),
+            Some("polar-server-name-input")
+        );
+        assert_eq!(
+            submit_focus_target(PolarWizardStep::ServerName),
+            Some("polar-game-treasury-submit")
+        );
+        assert_eq!(
+            submit_focus_target(PolarWizardStep::GameTreasury),
+            Some("polar-game-treasury-tras-submit")
+        );
+        assert_eq!(
+            submit_focus_target(PolarWizardStep::GameTreasuryTras),
+            Some(POLAR_DEMO_NODES_SUBMIT_ID)
+        );
+        assert_eq!(
+            submit_focus_target(PolarWizardStep::UserNodes),
+            Some("polar-tra-assets-submit")
+        );
+        assert_eq!(
+            submit_focus_target(PolarWizardStep::NpcItemTransfers),
+            Some("polar-block-height-input")
+        );
+        assert_eq!(
+            submit_focus_target(PolarWizardStep::BlockHeight),
+            Some("polar-complete-submit")
+        );
+        assert_eq!(submit_focus_target(PolarWizardStep::Complete), None);
+    }
+
+    #[test]
+    fn polar_wizard_step_labels_match_required_visual_order() {
+        let labels = [
+            polar_wizard_step_label(PolarWizardStep::BridgeUrl),
+            polar_wizard_step_label(PolarWizardStep::ServerName),
+            polar_wizard_step_label(PolarWizardStep::GameTreasury),
+            polar_wizard_step_label(PolarWizardStep::GameTreasuryTras),
+            polar_wizard_step_label(PolarWizardStep::UserNodes),
+            polar_wizard_step_label(PolarWizardStep::NpcItemTransfers),
+            polar_wizard_step_label(PolarWizardStep::BlockHeight),
+            polar_wizard_step_label(PolarWizardStep::Complete),
+        ];
+
+        assert_eq!(
+            labels,
+            [
+                "Bridge URL",
+                "Server Name",
+                "Game Treasury (Sats)",
+                "Game Treasury (TRAs)",
+                "User Nodes",
+                "NPC Item Transfers",
+                "Block Height",
+                "Unlock Routes"
+            ]
+        );
+    }
+
+    #[test]
+    fn reset_focus_targets_return_to_previous_step() {
+        assert_eq!(
+            reset_focus_target(PolarWizardStep::ServerName),
+            "polar-bridge-url-input"
+        );
+        assert_eq!(
+            reset_focus_target(PolarWizardStep::GameTreasury),
+            "polar-server-name-input"
+        );
+        assert_eq!(
+            reset_focus_target(PolarWizardStep::UserNodes),
+            "polar-game-treasury-tras-submit"
+        );
+        assert_eq!(
+            reset_focus_target(PolarWizardStep::GameTreasuryTras),
+            "polar-game-treasury-submit"
+        );
+        assert_eq!(
+            reset_focus_target(PolarWizardStep::NpcItemTransfers),
+            POLAR_DEMO_NODES_SUBMIT_ID
+        );
+        assert_eq!(
+            reset_focus_target(PolarWizardStep::BlockHeight),
+            "polar-tra-assets-submit"
+        );
+        assert_eq!(
+            reset_focus_target(PolarWizardStep::Complete),
+            "polar-block-height-input"
+        );
+    }
+
+    #[test]
+    fn complete_reset_focuses_step_six_primary_control() {
+        assert_eq!(complete_reset_focus_target(), "polar-block-height-input");
     }
 
     #[test]
     fn block_height_accepts_zero() {
         assert_eq!(block_height_from_input("0".to_string()), Ok(0));
+    }
+
+    #[test]
+    fn local_browser_hostname_allows_loopback_hosts() {
+        assert!(browser_hostname_allows_polar_bridge("localhost"));
+        assert!(browser_hostname_allows_polar_bridge("127.0.0.1"));
+        assert!(!browser_hostname_allows_polar_bridge("192.168.0.10"));
     }
 
     #[test]
@@ -1631,8 +2142,8 @@ async fn create_demo_nodes_step(
     let operation_id = begin_operation_prompt(
         operation_prompt,
         prompt_sequence,
-        "Create demo nodes",
-        "Starting demo-node creation...",
+        "Create user nodes",
+        "Starting user-node creation...",
         true,
     )
     .await;
@@ -1670,7 +2181,7 @@ async fn create_demo_nodes_step(
                                 update_operation_prompt(
                                     operation_prompt,
                                     operation_id,
-                                    "Demo node creation canceled. Alice, Bob, and Carol were removed.",
+                                    "User node creation canceled. Alice, Bob, and Carol were removed.",
                                     ToastTone::Success,
                                     false,
                                     false,
@@ -1680,7 +2191,7 @@ async fn create_demo_nodes_step(
                                 push_toast(
                                     toast,
                                     toast_sequence,
-                                    "Demo node creation canceled.",
+                                    "User node creation canceled.",
                                     ToastTone::Success,
                                 );
                             }
@@ -1691,7 +2202,7 @@ async fn create_demo_nodes_step(
                                     operation_prompt,
                                     operation_id,
                                     format!(
-                                        "Cancel could not remove the created demo nodes: {message}"
+                                        "Cancel could not remove the created user nodes: {message}"
                                     ),
                                     ToastTone::Error,
                                     false,
@@ -1702,7 +2213,7 @@ async fn create_demo_nodes_step(
                                 push_toast(
                                     toast,
                                     toast_sequence,
-                                    "Cancel could not remove the created demo nodes.",
+                                    "Cancel could not remove the created user nodes.",
                                     ToastTone::Error,
                                 );
                             }
@@ -1712,8 +2223,8 @@ async fn create_demo_nodes_step(
                         polar_block_height.set(state.block_height.to_string());
                         lab_state.set(Some(state));
                         close_operation_prompt(operation_prompt, operation_id);
-                        push_toast(toast, toast_sequence, "Demo nodes sent", ToastTone::Success);
-                        focus_step_control("polar-block-height-input").await;
+                        push_toast(toast, toast_sequence, "User Nodes sent", ToastTone::Success);
+                        focus_step_control("polar-tra-assets-submit").await;
                     }
                 }
                 Err(message) => {
@@ -1726,7 +2237,7 @@ async fn create_demo_nodes_step(
                         update_operation_prompt(
                             operation_prompt,
                             operation_id,
-                            "Return to step 1 and connect to the Polar bridge before creating demo nodes.",
+                            "Return to step 1 and connect to the Polar bridge before creating user nodes.",
                             ToastTone::Error,
                             false,
                             false,
@@ -1779,23 +2290,74 @@ async fn reset_complete_step(
 ) {
     is_busy.set(true);
     operation_prompt.set(None);
-    let saved_profile = reset_to_tra_inventory_step(setup_profile());
+    let saved_profile = reset_to_block_height_step(setup_profile());
     setup_profile.set(saved_profile.clone());
     let current_lab_state = lab_state().or_else(storage_service::load_lab_state_snapshot);
     if let Some(mut state) = current_lab_state {
         state.profile = saved_profile;
-        state.tra_items.clear();
         storage_service::save_lab_state_snapshot(&state);
         lab_state.set(Some(state));
     }
     push_toast(
         toast,
         toast_sequence,
-        "Returned to step 5. Tap Root Assets will be recreated on submit.",
+        "Returned to step 7. Block Height must be submitted before routes unlock again.",
         ToastTone::Success,
     );
     is_busy.set(false);
     schedule_step_control_focus(complete_reset_focus_target());
+}
+
+async fn prepare_treasury_tras_step(
+    mut is_busy: Signal<bool>,
+    mut setup_profile: Signal<SetupProfile>,
+    mut lab_state: Signal<Option<LabState>>,
+    operation_prompt: Signal<Option<OperationPrompt>>,
+    prompt_sequence: Signal<u64>,
+    toast: Signal<Option<Toast>>,
+    toast_sequence: Signal<u64>,
+) {
+    is_busy.set(true);
+    let operation_id = begin_operation_prompt(
+        operation_prompt,
+        prompt_sequence,
+        "Game Treasury (TRAs)",
+        "Creating treasury-owned TRA inventory items...",
+        false,
+    )
+    .await;
+
+    let result = prepare_game_treasury_tras(setup_profile()).await;
+
+    match result {
+        Ok(state) => {
+            setup_profile.set(state.profile.clone());
+            lab_state.set(Some(state));
+            close_operation_prompt(operation_prompt, operation_id);
+            push_toast(
+                toast,
+                toast_sequence,
+                "Game Treasury TRAs ready.",
+                ToastTone::Success,
+            );
+            focus_step_control(POLAR_DEMO_NODES_SUBMIT_ID).await;
+        }
+        Err(message) => {
+            update_operation_prompt(
+                operation_prompt,
+                operation_id,
+                message.clone(),
+                ToastTone::Error,
+                false,
+                false,
+            )
+            .await;
+            close_operation_prompt(operation_prompt, operation_id);
+            push_toast(toast, toast_sequence, message, ToastTone::Error);
+        }
+    }
+
+    is_busy.set(false);
 }
 
 async fn prepare_tra_inventory_step(
@@ -1811,50 +2373,23 @@ async fn prepare_tra_inventory_step(
     let operation_id = begin_operation_prompt(
         operation_prompt,
         prompt_sequence,
-        "Add Tap Root Assets",
-        "Recreating Tap Root Assets from scratch...",
+        "Add NPC Item Transfers",
+        "Recreating NPC Item Transfers from scratch...",
         false,
     )
     .await;
 
-    let result = async {
-        let mut state = reset_tra_inventory(setup_profile()).await?;
-        update_operation_prompt(
-            operation_prompt,
-            operation_id,
-            "Checking Tap Root Assets setup...",
-            ToastTone::Info,
-            true,
-            false,
-        )
-        .await;
-
-        state = verify_tra_setup(state.profile.clone()).await?;
-
-        let initial_items = initial_tra_setup_items();
-        let initial_item_count = initial_items.len();
-
-        for (index, request) in initial_items.into_iter().enumerate() {
-            update_operation_prompt(
-                operation_prompt,
-                operation_id,
-                format!(
-                    "Creating Tap Root Asset {} of {}...",
-                    index + 1,
-                    initial_item_count
-                ),
-                ToastTone::Info,
-                true,
-                false,
-            )
-            .await;
-
-            state = mint_tra(state.profile.clone(), request).await?;
-        }
-
-        Ok::<LabState, String>(state)
-    }
+    update_operation_prompt(
+        operation_prompt,
+        operation_id,
+        "Transferring Bob and Carol starting items from Game Treasury...",
+        ToastTone::Info,
+        true,
+        false,
+    )
     .await;
+
+    let result = transfer_npc_starting_items(setup_profile()).await;
 
     match result {
         Ok(state) => {
@@ -1864,10 +2399,10 @@ async fn prepare_tra_inventory_step(
             push_toast(
                 toast,
                 toast_sequence,
-                "Tap Root Assets added.",
+                "NPC Item Transfers added.",
                 ToastTone::Success,
             );
-            focus_step_control("polar-complete-submit").await;
+            focus_step_control("polar-block-height-input").await;
         }
         Err(message) => {
             update_operation_prompt(

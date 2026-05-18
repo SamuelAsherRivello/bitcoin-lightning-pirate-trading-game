@@ -35,7 +35,7 @@ The static web build is exported and hosted automatically with each push to the 
 | Command | Required? | Description |
 | ------- | --------- | --- |
 | `.\Scripts\Common\InstallDependencies.ps1` | ✅ | Installs repository dependencies and builds Tailwind CSS output. |
-| `.\Scripts\Common\RunWeb.ps1` | ✅ | Stops this repo's Dioxus web/static server and generated app server, then starts a fresh web app at `http://localhost:8080` for Polar bridge compatibility. |
+| `.\Scripts\Common\RunWeb.ps1` | ✅ | Stops this repo's Dioxus web/static server and generated app server, then starts a fresh web app at `http://localhost:8080` for Polar bridge compatibility and opens it in the default browser. Use `-NoOpen` to skip browser launch. |
 | `.\Scripts\Common\StopWeb.ps1` | ❌ | Stops the Dioxus web server and generated game server for the requested port. |
 | `.\Scripts\Common\RunDesktop.ps1` | ✅ | Starts the desktop app with Dioxus desktop. |
 

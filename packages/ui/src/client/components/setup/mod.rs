@@ -1,5 +1,11 @@
 use dioxus::prelude::*;
 
+mod game_treasury;
+mod npc_item_transfers;
+
+pub use game_treasury::GameTreasurySetupStatus;
+pub use npc_item_transfers::NpcItemTransferStatus;
+
 #[component]
 pub fn SetupChecklist(items: Vec<String>) -> Element {
     rsx! {

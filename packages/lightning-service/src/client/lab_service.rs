@@ -3,9 +3,9 @@ use chrono::Utc;
 use super::error::LightningError;
 use super::models::{
     ActionLogEntry, BlockWaitAction, BlockWaitReason, BlockWaitStatus, ConnectionStatus, DemoNode,
-    DemoNodeId, InvoiceRequest, InvoiceStatus, LabState, NodeStatus, OperationFaqRow,
+    DemoNodeId, GameTreasury, InvoiceRequest, InvoiceStatus, LabState, NodeStatus, OperationFaqRow,
     PaymentAttempt, PaymentStatus, RouteStatus, SetupMode, SetupProfile, TradeRoute,
-    DEFAULT_ROUTE_CAPACITY_SATS, MAX_SATS_PER_TRANSACTION,
+    DEFAULT_ROUTE_CAPACITY_SATS, GAME_TREASURY_NODE_LABEL, MAX_SATS_PER_TRANSACTION,
 };
 use crate::server::config::validate_polar_connection_profile;
 
@@ -81,6 +81,8 @@ pub fn default_lab_state(profile: SetupProfile) -> LabState {
         recent_payments: Vec::new(),
         block_actions: Vec::new(),
         tra_items: Vec::new(),
+        game_treasury: GameTreasury::default(),
+        npc_item_transfers: Vec::new(),
         operation_faq: get_operation_faq(),
         block_height: 0,
         polar_observed_block_height: None,
@@ -492,6 +494,34 @@ fn default_nodes(connected: bool) -> Vec<DemoNode> {
             },
         })
         .collect()
+}
+
+pub fn upsert_game_treasury_node(state: &mut LabState, wallet_balance_sats: u64) {
+    if let Some(node) = state
+        .nodes
+        .iter_mut()
+        .find(|node| node.node_id == DemoNodeId::GameTreasury)
+    {
+        node.wallet_balance_sats = wallet_balance_sats;
+        node.channel_balance_sats = 0;
+        node.status = NodeStatus::Online;
+        node.pubkey = Some("game-treasure-regtest-demo-pubkey".to_string());
+        return;
+    }
+
+    state.nodes.insert(
+        0,
+        DemoNode {
+            node_id: DemoNodeId::GameTreasury,
+            role: DemoNodeId::GameTreasury.role(),
+            location: DemoNodeId::GameTreasury.location(),
+            alias: GAME_TREASURY_NODE_LABEL.to_ascii_lowercase(),
+            pubkey: Some("game-treasure-regtest-demo-pubkey".to_string()),
+            wallet_balance_sats,
+            channel_balance_sats: 0,
+            status: NodeStatus::Online,
+        },
+    );
 }
 
 fn default_routes() -> Vec<TradeRoute> {

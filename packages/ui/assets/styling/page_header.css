@@ -26,22 +26,50 @@
 }
 
 #page-header .toast {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: 8px;
   max-width: 100%;
-  padding: 8px 16px;
+  min-height: 40px;
+  padding: 6px 6px 6px 16px;
   border: 1px solid var(--app-control-border);
   border-radius: 8px;
   background: var(--app-surface-strong);
   color: var(--app-text-muted);
   font-size: 14px;
   line-height: 1.35;
+  pointer-events: auto;
+  box-shadow: var(--app-shadow-soft);
+}
+
+#page-header .toast__message {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  pointer-events: auto;
   cursor: text;
   -webkit-user-select: text;
   user-select: text;
-  box-shadow: var(--app-shadow-soft);
+}
+
+#page-header .toast__copy {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: currentColor;
+  cursor: pointer;
+}
+
+#page-header .toast__copy:hover,
+#page-header .toast__copy:focus-visible {
+  border-color: currentColor;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  outline: none;
 }
 
 #page-header .toast--info {

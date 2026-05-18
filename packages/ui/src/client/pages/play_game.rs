@@ -3,8 +3,8 @@ use dioxus::prelude::*;
 use dioxus_i18n::t;
 
 use crate::client::components::game::{
-    GameAnimation, GameChannelAnimation, GameChannelVisual, GameInventorySlot, GameSide, GameView,
-    GameViewConfig, HistoryItems, LabStatusWidget, RouteSummary,
+    GameAnimation, GameChannelAnimation, GameChannelVisual, GameInventorySlot, GameSide,
+    GameTreasuryPanel, GameView, GameViewConfig, HistoryItems, LabStatusWidget, RouteSummary,
 };
 use crate::client::components::toast::{
     wait_for_prompt_message_minimum, OperationPrompt, Toast, ToastTone,
@@ -99,7 +99,7 @@ impl GameLocation {
         match self.merchant() {
             DemoNodeId::Bob => GAME_NPC,
             DemoNodeId::Carol => GAME_NPC_ALT,
-            DemoNodeId::Alice => GAME_NPC,
+            DemoNodeId::Alice | DemoNodeId::GameTreasury => GAME_NPC,
         }
     }
 }
@@ -595,6 +595,8 @@ pub fn PlayGame() -> Element {
                     });
                 },
             }
+
+            GameTreasuryPanel { treasury: state.game_treasury.clone() }
 
             if let Some(route) = focused_route_for_panel {
                 section { class: "lab-grid",

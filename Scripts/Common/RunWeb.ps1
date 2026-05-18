@@ -1,6 +1,7 @@
 param(
     [string]$Address = "",
     [int]$Port = 8080,
+    [switch]$NoOpen,
     [switch]$Restart
 )
 
@@ -135,8 +136,10 @@ if ([string]::IsNullOrWhiteSpace($bindAddress)) {
     }
 }
 
+$appUrl = "http://$browserHost`:$Port"
+
 Write-Host "Starting web app."
-Write-Host "Laptop: http://$browserHost`:$Port"
+Write-Host "Laptop: $appUrl"
 if ($browserHost -eq "localhost") {
     Write-Host "Polar:  use this localhost URL when testing Polar Automation with http://localhost:37373."
 } elseif ($bindAddress -eq $wifiAddress) {
@@ -153,5 +156,28 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
 
 Write-Host "Building Tailwind CSS..."
 npm run tailwind:build
+
+if (-not $NoOpen) {
+    Write-Host "Browser: will open $appUrl when the web server is ready."
+    Start-Job -Name "OpenDioxusWeb-$Port" -ScriptBlock {
+        param(
+            [string]$Url
+        )
+
+        for ($attempt = 0; $attempt -lt 120; $attempt += 1) {
+            try {
+                Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2 | Out-Null
+                Start-Process -FilePath $Url
+                return
+            } catch {
+                Start-Sleep -Milliseconds 500
+            }
+        }
+
+        Start-Process -FilePath $Url
+    } -ArgumentList $appUrl | Out-Null
+} else {
+    Write-Host "Browser: -NoOpen was set; open $appUrl manually when needed."
+}
 
 dx serve --platform web --addr $bindAddress --port $Port

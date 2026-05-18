@@ -20,6 +20,7 @@ Provide concise code examples with detailed descriptions
 * Keep first-time native database/schema/seed setup in the clearly named `create_database_if_missing()` service method. Normal reads should not recreate or reseed an existing database.
 * Do not introduce browser SQLite or OPFS worker startup for template data caching.
 * The primary product routes, from left to right, are `Home`, `Set Up`, `Play Game`, and `Network Dashboard`. `Home` owns why the demo exists and the FAQ/concepts content.
+* Polar setup steps have a required visual order, and the execution/progression logic must match that same order exactly: `User Auth`, `Bridge URL`, `Server Name`, `Game Treasury (Sats)`, `Game Treasury (TRAs)`, `User Nodes`, `NPC Item Transfers`, `Block Height`, and `Unlock Routes`.
 * Keep `Documentation/DioxusFeatureMatrix.md` updated as development continues whenever Dioxus feature usage, routes, cache behavior, platform support, or suggested future work changes.
 
 # AI Agent Safety Rules
@@ -299,5 +300,6 @@ The initial UI rendered by the component on the client must be identical to the 
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/005-tra-inventory-assets/plan.md`
+`specs/008-qr-lightning-auth/plan.md`
 <!-- SPECKIT END -->
+

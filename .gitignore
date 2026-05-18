@@ -22,3 +22,4 @@ release/
 
 # Node dependencies for Tailwind CSS tooling
 /node_modules/
+/output

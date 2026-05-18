@@ -9,9 +9,11 @@ pub const DEFAULT_ROUTE_CAPACITY_SATS: u64 = 250_000;
 pub const MAX_TRA_ITEMS_PER_NODE: usize = 3;
 pub const BOOK_ITEM_ID: u32 = 1;
 pub const APPLE_ITEM_ID: u32 = 2;
+pub const GAME_TREASURY_NODE_LABEL: &str = "GAME_TREASURY";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum DemoNodeId {
+    GameTreasury,
     Alice,
     Bob,
     Carol,
@@ -25,11 +27,13 @@ impl DemoNodeId {
             Self::Alice => "Alice",
             Self::Bob => "Bob",
             Self::Carol => "Carol",
+            Self::GameTreasury => GAME_TREASURY_NODE_LABEL,
         }
     }
 
     pub fn role(self) -> NodeRole {
         match self {
+            Self::GameTreasury => NodeRole::GameTreasury,
             Self::Alice => NodeRole::Player,
             Self::Bob => NodeRole::BeachMerchant,
             Self::Carol => NodeRole::MountainMerchant,
@@ -38,6 +42,7 @@ impl DemoNodeId {
 
     pub fn location(self) -> Location {
         match self {
+            Self::GameTreasury => Location::Town,
             Self::Alice => Location::Town,
             Self::Bob => Location::Beach,
             Self::Carol => Location::Mountain,
@@ -47,6 +52,7 @@ impl DemoNodeId {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum NodeRole {
+    GameTreasury,
     Player,
     BeachMerchant,
     MountainMerchant,
@@ -58,6 +64,7 @@ impl NodeRole {
             Self::Player => "Player",
             Self::BeachMerchant => "Beach merchant",
             Self::MountainMerchant => "Mountain merchant",
+            Self::GameTreasury => "Game treasury",
         }
     }
 }
@@ -152,6 +159,7 @@ pub struct PolarConnectionProfile {
 impl PolarConnectionProfile {
     pub fn node(&self, node_id: DemoNodeId) -> &PolarNodeConnection {
         match node_id {
+            DemoNodeId::GameTreasury => &self.alice,
             DemoNodeId::Alice => &self.alice,
             DemoNodeId::Bob => &self.bob,
             DemoNodeId::Carol => &self.carol,
@@ -233,6 +241,10 @@ pub struct SetupProfile {
     pub polar_automation: PolarAutomationProfile,
     #[serde(default)]
     pub polar_block_height_confirmed: bool,
+    #[serde(default)]
+    pub game_treasury_ready: bool,
+    #[serde(default)]
+    pub game_treasury_funded_sats: u64,
     pub last_verified_at: Option<DateTime<Utc>>,
     pub connection_status: ConnectionStatus,
 }
@@ -252,6 +264,8 @@ impl Default for SetupProfile {
             polar_connection: PolarConnectionProfile::default(),
             polar_automation: PolarAutomationProfile::default(),
             polar_block_height_confirmed: false,
+            game_treasury_ready: false,
+            game_treasury_funded_sats: 0,
             last_verified_at: None,
             connection_status: ConnectionStatus::NotConfigured,
         }
@@ -524,6 +538,118 @@ pub struct TransferTraRequest {
     pub to_node: DemoNodeId,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum TreasuryStatus {
+    NotStarted,
+    CreatingNode,
+    Funding,
+    CreatingItems,
+    Ready,
+    Refreshing,
+    Degraded,
+    Failed,
+}
+
+impl TreasuryStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::NotStarted => "Not started",
+            Self::CreatingNode => "Creating node",
+            Self::Funding => "Funding",
+            Self::CreatingItems => "Creating items",
+            Self::Ready => "Ready",
+            Self::Refreshing => "Refreshing",
+            Self::Degraded => "Needs attention",
+            Self::Failed => "Failed",
+        }
+    }
+}
+
+impl Default for TreasuryStatus {
+    fn default() -> Self {
+        Self::NotStarted
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum TreasuryEntryDirection {
+    Increase,
+    Decrease,
+    TransferOut,
+    TransferIn,
+    NoChange,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TreasuryResource {
+    pub resource_id: String,
+    pub resource_type: String,
+    pub display_name: String,
+    pub item_id: Option<u32>,
+    pub owner: String,
+    pub estimated_value_sats: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TreasuryEntry {
+    pub entry_id: String,
+    pub created_at: DateTime<Utc>,
+    pub description: String,
+    pub direction: TreasuryEntryDirection,
+    pub amount_sats: Option<u64>,
+    pub item_id: Option<u32>,
+    pub item_name: Option<String>,
+    pub source: Option<String>,
+    pub destination: Option<String>,
+    pub related_action: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TreasuryImpactPreview {
+    pub action_label: String,
+    pub can_execute: bool,
+    pub blocking_reason: Option<String>,
+    pub expected_sats_delta: Option<i64>,
+    pub expected_item_movements: Vec<String>,
+    pub requires_refresh: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct NpcItemTransfer {
+    pub transfer_id: String,
+    pub item_id: u32,
+    pub item_name: String,
+    pub source: String,
+    pub destination: DemoNodeId,
+    pub status: TraTransferStatus,
+    pub entry_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct GameTreasury {
+    pub node_label: String,
+    pub status: TreasuryStatus,
+    pub spendable_sats: u64,
+    pub inventory_value_sats: u64,
+    pub owned_items: Vec<TreasuryResource>,
+    pub recent_entries: Vec<TreasuryEntry>,
+    pub last_updated_at: Option<DateTime<Utc>>,
+}
+
+impl Default for GameTreasury {
+    fn default() -> Self {
+        Self {
+            node_label: GAME_TREASURY_NODE_LABEL.to_string(),
+            status: TreasuryStatus::NotStarted,
+            spendable_sats: 0,
+            inventory_value_sats: 0,
+            owned_items: Vec::new(),
+            recent_entries: Vec::new(),
+            last_updated_at: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct LabState {
     pub profile: SetupProfile,
@@ -534,6 +660,10 @@ pub struct LabState {
     pub block_actions: Vec<BlockWaitAction>,
     #[serde(default)]
     pub tra_items: Vec<TraItem>,
+    #[serde(default)]
+    pub game_treasury: GameTreasury,
+    #[serde(default)]
+    pub npc_item_transfers: Vec<NpcItemTransfer>,
     pub operation_faq: Vec<OperationFaqRow>,
     pub block_height: u64,
     #[serde(default)]

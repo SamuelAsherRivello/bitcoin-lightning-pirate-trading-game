@@ -3,8 +3,10 @@ use dioxus::prelude::*;
 use crate::client::components::help::FieldHelpIcon;
 use crate::client::models::{ActionLogEntry, TradeRoute};
 
+mod game_treasury;
 mod game_view;
 
+pub use game_treasury::GameTreasuryPanel;
 pub use game_view::{
     GameAnimation, GameChannelAnimation, GameChannelVisual, GameInventorySlot, GameSide, GameView,
     GameViewConfig,

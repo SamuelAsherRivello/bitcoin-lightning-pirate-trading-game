@@ -3,8 +3,10 @@ use chrono::Utc;
 use super::error::LightningError;
 use super::models::{
     ActionLogEntry, ConnectionStatus, DemoNodeId, GameItemDefinition, LabState, MintTraRequest,
-    TraItem, TraOwnershipStatus, TraTransferStatus, TransferTraRequest, APPLE_ITEM_ID,
-    BOOK_ITEM_ID, DEFAULT_SATS_PER_TRANSACTION, MAX_TRA_ITEMS_PER_NODE,
+    NpcItemTransfer, TraItem, TraOwnershipStatus, TraTransferStatus, TransferTraRequest,
+    TreasuryEntry, TreasuryEntryDirection, TreasuryImpactPreview, TreasuryResource, TreasuryStatus,
+    APPLE_ITEM_ID, BOOK_ITEM_ID, DEFAULT_ROUTE_CAPACITY_SATS, DEFAULT_SATS_PER_TRANSACTION,
+    GAME_TREASURY_NODE_LABEL, MAX_TRA_ITEMS_PER_NODE,
 };
 
 pub struct TraService;
@@ -52,6 +54,189 @@ impl TraService {
                 item_id: APPLE_ITEM_ID,
             },
         ]
+    }
+
+    pub fn prepare_game_treasury(mut state: LabState) -> Result<LabState, LightningError> {
+        ensure_setup_started(&state)?;
+
+        let funded_sats = state
+            .profile
+            .sats_per_transaction
+            .saturating_mul(10)
+            .max(DEFAULT_ROUTE_CAPACITY_SATS);
+        state.profile.game_treasury_ready = true;
+        state.profile.game_treasury_funded_sats = funded_sats;
+        state.game_treasury.node_label = GAME_TREASURY_NODE_LABEL.to_string();
+        state.game_treasury.status = TreasuryStatus::Ready;
+        state.game_treasury.spendable_sats = funded_sats;
+        state.game_treasury.last_updated_at = Some(Utc::now());
+        crate::upsert_game_treasury_node(&mut state, funded_sats);
+
+        push_treasury_entry(
+            &mut state,
+            "Game Treasury funded for local game activity.",
+            TreasuryEntryDirection::Increase,
+            Some(funded_sats),
+            None,
+            None,
+            "Polar setup: Game Treasury",
+        )?;
+        push_log(
+            &mut state,
+            "Game Treasury ready",
+            "The house node is funded and ready for treasury-owned TRA setup.",
+            &["Game Treasury"],
+        );
+
+        Ok(state)
+    }
+
+    pub fn prepare_game_treasury_items(mut state: LabState) -> Result<LabState, LightningError> {
+        ensure_game_treasury_ready(&state)?;
+        state.game_treasury.status = TreasuryStatus::CreatingItems;
+        state.game_treasury.owned_items.clear();
+        state
+            .tra_items
+            .retain(|item| item.owner_node != DemoNodeId::GameTreasury);
+        for request in Self::initial_setup_items() {
+            validate_supported_item_id(request.item_id)?;
+            let definition = Self::catalog_item(request.item_id)
+                .ok_or(LightningError::UnsupportedTraItemType)?;
+            let tra_id = format!("tra-treasury-{}", state.tra_items.len() + 1);
+            state.tra_items.push(TraItem {
+                asset_id: format!("regtest-treasury-asset-{}", state.tra_items.len() + 1),
+                tra_id: tra_id.clone(),
+                unique_name: request.unique_name.clone(),
+                item_id: request.item_id,
+                owner_node: DemoNodeId::GameTreasury,
+                ownership_status: TraOwnershipStatus::Verified,
+                transfer_status: TraTransferStatus::None,
+            });
+            state.game_treasury.owned_items.push(TreasuryResource {
+                resource_id: tra_id,
+                resource_type: "Item".to_string(),
+                display_name: request.unique_name,
+                item_id: Some(request.item_id),
+                owner: GAME_TREASURY_NODE_LABEL.to_string(),
+                estimated_value_sats: Some(definition.cost_sats),
+            });
+        }
+        state.game_treasury.inventory_value_sats = state
+            .game_treasury
+            .owned_items
+            .iter()
+            .filter_map(|item| item.estimated_value_sats)
+            .sum();
+        state.game_treasury.status = TreasuryStatus::Ready;
+        state.game_treasury.last_updated_at = Some(Utc::now());
+        push_treasury_entry(
+            &mut state,
+            "Game Treasury prepared the starting items for Bob and Carol.",
+            TreasuryEntryDirection::NoChange,
+            None,
+            None,
+            None,
+            "Polar setup: Treasury items",
+        )?;
+
+        Ok(state)
+    }
+
+    pub fn transfer_npc_starting_items(mut state: LabState) -> Result<LabState, LightningError> {
+        ensure_connected(&state)?;
+        ensure_game_treasury_ready(&state)?;
+
+        let requests = Self::initial_setup_items();
+        for (index, request) in requests.into_iter().enumerate() {
+            let definition = Self::catalog_item(request.item_id)
+                .ok_or(LightningError::UnsupportedTraItemType)?;
+            let tra_id = state
+                .tra_items
+                .iter()
+                .find(|item| {
+                    item.owner_node == DemoNodeId::GameTreasury
+                        && item.item_id == request.item_id
+                        && item.unique_name == request.unique_name
+                })
+                .map(|item| item.tra_id.clone())
+                .ok_or(LightningError::GameTreasuryItemUnavailable)?;
+            state = Self::transfer_tra(
+                state,
+                TransferTraRequest {
+                    tra_id,
+                    from_node: DemoNodeId::GameTreasury,
+                    to_node: request.owner_node,
+                },
+            )?;
+            let entry_id = push_treasury_entry(
+                &mut state,
+                &format!(
+                    "Game Treasury transferred {} to {}.",
+                    request.unique_name,
+                    request.owner_node.label()
+                ),
+                TreasuryEntryDirection::TransferOut,
+                None,
+                Some(request.item_id),
+                Some(request.unique_name.clone()),
+                "Polar setup: NPC Item Transfers",
+            )?;
+            state.npc_item_transfers.push(NpcItemTransfer {
+                transfer_id: format!("npc-transfer-{}", index + 1),
+                item_id: request.item_id,
+                item_name: definition.display_name,
+                source: GAME_TREASURY_NODE_LABEL.to_string(),
+                destination: request.owner_node,
+                status: TraTransferStatus::Succeeded,
+                entry_id: Some(entry_id),
+            });
+        }
+        state.game_treasury.owned_items.clear();
+        state.game_treasury.inventory_value_sats = 0;
+        state.game_treasury.status = TreasuryStatus::Ready;
+        state.game_treasury.last_updated_at = Some(Utc::now());
+
+        Ok(state)
+    }
+
+    pub fn treasury_summary(state: &LabState) -> super::models::GameTreasury {
+        let mut treasury = state.game_treasury.clone();
+        treasury.recent_entries = state
+            .game_treasury
+            .recent_entries
+            .iter()
+            .take(10)
+            .cloned()
+            .collect();
+        treasury
+    }
+
+    pub fn preview_treasury_impact(
+        state: &LabState,
+        action_label: String,
+        amount_sats: Option<u64>,
+    ) -> TreasuryImpactPreview {
+        let missing_treasury = !state.profile.game_treasury_ready;
+        let insufficient_sats = amount_sats
+            .map(|amount| state.game_treasury.spendable_sats < amount)
+            .unwrap_or(false);
+        let can_execute = !missing_treasury && !insufficient_sats;
+        let blocking_reason = if missing_treasury {
+            Some("Game Treasury is not ready yet.".to_string())
+        } else if insufficient_sats {
+            Some("Game Treasury does not have enough sats for this action.".to_string())
+        } else {
+            None
+        };
+
+        TreasuryImpactPreview {
+            action_label,
+            can_execute,
+            blocking_reason,
+            expected_sats_delta: amount_sats.map(|amount| -(amount as i64)),
+            expected_item_movements: Vec::new(),
+            requires_refresh: state.game_treasury.status != TreasuryStatus::Ready,
+        }
     }
 
     pub fn verify_tra_setup(mut state: LabState) -> Result<LabState, LightningError> {
@@ -182,6 +367,28 @@ fn ensure_connected(state: &LabState) -> Result<(), LightningError> {
     }
 }
 
+fn ensure_setup_started(state: &LabState) -> Result<(), LightningError> {
+    if matches!(
+        state.profile.connection_status,
+        ConnectionStatus::SavedOffline
+            | ConnectionStatus::PartiallyConnected
+            | ConnectionStatus::Connected
+    ) && !state.profile.polar_automation.network_id.trim().is_empty()
+    {
+        Ok(())
+    } else {
+        Err(LightningError::SetupIncomplete)
+    }
+}
+
+fn ensure_game_treasury_ready(state: &LabState) -> Result<(), LightningError> {
+    if state.profile.game_treasury_ready && state.game_treasury.status == TreasuryStatus::Ready {
+        Ok(())
+    } else {
+        Err(LightningError::GameTreasuryNotReady)
+    }
+}
+
 fn validate_supported_item_id(item_id: u32) -> Result<(), LightningError> {
     if TraService::is_supported_item_id(item_id) {
         Ok(())
@@ -206,6 +413,10 @@ fn ensure_inventory_capacity(
     state: &LabState,
     owner_node: DemoNodeId,
 ) -> Result<(), LightningError> {
+    if owner_node == DemoNodeId::GameTreasury {
+        return Ok(());
+    }
+
     let item_count = state
         .tra_items
         .iter()
@@ -232,14 +443,70 @@ fn push_log(state: &mut LabState, summary: &str, network_detail: &str, details: 
     );
 }
 
+fn push_treasury_entry(
+    state: &mut LabState,
+    description: &str,
+    direction: TreasuryEntryDirection,
+    amount_sats: Option<u64>,
+    item_id: Option<u32>,
+    item_name: Option<String>,
+    related_action: &str,
+) -> Result<String, LightningError> {
+    if looks_sensitive(description) || looks_sensitive(related_action) {
+        return Err(LightningError::SensitiveTreasuryDetail);
+    }
+
+    let entry_id = format!(
+        "treasury-entry-{}",
+        state.game_treasury.recent_entries.len() + 1
+    );
+    state.game_treasury.recent_entries.insert(
+        0,
+        TreasuryEntry {
+            entry_id: entry_id.clone(),
+            created_at: Utc::now(),
+            description: description.to_string(),
+            direction,
+            amount_sats,
+            item_id,
+            item_name,
+            source: Some(GAME_TREASURY_NODE_LABEL.to_string()),
+            destination: None,
+            related_action: related_action.to_string(),
+        },
+    );
+    state.game_treasury.recent_entries.truncate(10);
+    Ok(entry_id)
+}
+
+fn looks_sensitive(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    [
+        "macaroon", "seed", "private", "xprv", "proof", "password", "secret",
+    ]
+    .iter()
+    .any(|marker| value.contains(marker))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ConnectionStatus, SetupProfile};
+    use crate::{ConnectionStatus, PolarAutomationProfile, SetupProfile};
 
     fn connected_state() -> LabState {
         let mut profile = SetupProfile::default();
         profile.connection_status = ConnectionStatus::Connected;
+        crate::default_lab_state(profile)
+    }
+
+    fn setup_started_state() -> LabState {
+        let mut profile = SetupProfile::default();
+        profile.connection_status = ConnectionStatus::PartiallyConnected;
+        profile.polar_automation = PolarAutomationProfile {
+            bridge_url: "http://localhost:37373".to_string(),
+            network_id: "1".to_string(),
+            bitcoin_backend_name: "backend1".to_string(),
+        };
         crate::default_lab_state(profile)
     }
 
@@ -279,6 +546,44 @@ mod tests {
                 })
                 .count(),
             2
+        );
+    }
+
+    #[test]
+    fn prepare_game_treasury_funds_sats_without_creating_items() {
+        let state =
+            TraService::prepare_game_treasury(setup_started_state()).expect("prepare treasury");
+
+        assert!(state.profile.game_treasury_ready);
+        assert!(state.profile.game_treasury_funded_sats >= DEFAULT_ROUTE_CAPACITY_SATS);
+        assert_eq!(state.game_treasury.node_label, GAME_TREASURY_NODE_LABEL);
+        assert_eq!(
+            state.game_treasury.spendable_sats,
+            state.profile.game_treasury_funded_sats
+        );
+        assert!(state.game_treasury.owned_items.is_empty());
+        assert!(state.tra_items.is_empty());
+    }
+
+    #[test]
+    fn prepare_game_treasury_items_assigns_initial_items_to_treasury() {
+        let state =
+            TraService::prepare_game_treasury(setup_started_state()).expect("prepare treasury");
+        let state = TraService::prepare_game_treasury_items(state).expect("prepare treasury items");
+
+        assert_eq!(state.game_treasury.owned_items.len(), 4);
+        assert!(state
+            .game_treasury
+            .owned_items
+            .iter()
+            .all(|item| item.owner == GAME_TREASURY_NODE_LABEL));
+        assert_eq!(
+            state
+                .tra_items
+                .iter()
+                .filter(|item| item.owner_node == DemoNodeId::GameTreasury)
+                .count(),
+            4
         );
     }
 
