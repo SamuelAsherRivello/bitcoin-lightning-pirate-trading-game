@@ -12,7 +12,7 @@ fn connector_bridge_url_joins_trimmed_base_and_path() {
     let profile = PolarAutomationProfile {
         bridge_url: "http://localhost:37373/".to_string(),
         network_id: String::new(),
-        bitcoin_backend_name: "GAME_BITCOIN".to_string(),
+        bitcoin_backend_name: "BITCOIN_TESTNET".to_string(),
     };
 
     assert_eq!(
@@ -35,7 +35,7 @@ fn connector_rejects_non_local_profiles_before_requests() {
     let profile = PolarAutomationProfile {
         bridge_url: "http://192.168.1.44:37373".to_string(),
         network_id: String::new(),
-        bitcoin_backend_name: "GAME_BITCOIN".to_string(),
+        bitcoin_backend_name: "BITCOIN_TESTNET".to_string(),
     };
 
     let error = validate_local_profile(&profile).expect_err("non-local profile");

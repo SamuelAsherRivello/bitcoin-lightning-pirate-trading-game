@@ -82,8 +82,22 @@ pub async fn verify_polar_bridge(profile: SetupProfile) -> Result<SetupProfile, 
     lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
     polar_bridge_service::test_bridge(&profile.polar_automation).await?;
 
+    let previous_profile = storage_service::load_setup_profile();
+    let previous_state = storage_service::load_lab_state_snapshot();
+    let bridge_unchanged = previous_profile.polar_automation.bridge_url.trim()
+        == profile.polar_automation.bridge_url.trim();
+
     storage_service::save_setup_profile(&profile);
-    storage_service::clear_lab_state_snapshot();
+    if !bridge_unchanged {
+        storage_service::clear_lab_state_snapshot();
+    } else if let Some(mut state) = previous_state
+        .filter(|state| setup_snapshot_matches_polar_network(state, &profile))
+    {
+        state.profile = profile.clone();
+        storage_service::save_lab_state_snapshot(&state);
+    } else {
+        storage_service::clear_lab_state_snapshot();
+    }
     Ok(profile)
 }
 
@@ -374,6 +388,21 @@ pub async fn confirm_polar_block_height(
     block_height: u64,
 ) -> Result<LabState, String> {
     lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
+    if let Some(mut state) = storage_service::load_lab_state_snapshot() {
+        if setup_snapshot_matches_polar_network(&state, &profile)
+            && state.profile.polar_block_height_confirmed
+            && state.block_height == block_height
+        {
+            profile.polar_block_height_confirmed = true;
+            profile.connection_status = state.profile.connection_status;
+            profile.last_verified_at = state.profile.last_verified_at;
+            state.profile = profile;
+            storage_service::save_setup_profile(&state.profile);
+            storage_service::save_lab_state_snapshot(&state);
+            return Ok(state);
+        }
+    }
+
     let should_read_polar = should_read_polar(&profile);
     let polar_observed_block_height = if should_read_polar {
         let report = polar_bridge_service::validate_lab_health(&profile.polar_automation)

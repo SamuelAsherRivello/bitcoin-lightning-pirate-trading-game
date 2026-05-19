@@ -122,7 +122,7 @@ fn setup_profile_defaults_to_polar_connection() {
     );
     assert_eq!(
         profile.polar_automation.bitcoin_backend_name,
-        "GAME_BITCOIN"
+        "BITCOIN_TESTNET"
     );
     assert!(profile.polar_automation.is_complete());
 }

@@ -104,22 +104,24 @@ Polar setup steps have a required visual order, and execution/progression logic 
 
 Required Polar node names are exact and case-sensitive in app requests:
 
-- `GAME_BITCOIN`: the Polar Bitcoin backend / bitcoind node.
+- `BITCOIN_TESTNET`: the Polar Bitcoin backend / bitcoind node.
 - `GAME_LND`: the Game Treasury LND node.
-- `GAME_TAPROOT`: the Taproot Assets node attached to `GAME_LND` and `GAME_BITCOIN`.
+- `GAME_TAPROOT`: the Taproot Assets node attached to `GAME_LND` and `BITCOIN_TESTNET`.
 - `Alice`: the player LND node.
 - `Bob`: NPC LND node 1.
 - `Carol`: NPC LND node 2.
 
 `Server Name` only finds, creates, and starts the named Polar server. It must not delete, rename, or add non-server nodes.
 
+Polar node mutation has lifecycle side effects. The live Polar MCP tool schema documents that `rename_node` temporarily stops a running network, `set_lightning_backend` restarts the affected Lightning node when the network is running, and `remove_node` stops the removed node. Treat those operations as disruptive: setup steps must inspect first, preserve already-usable manual Polar state, and avoid rename/remove/backend rewiring unless a required node or backend is genuinely missing and the user is in the owning setup step.
+
 `Create Nodes` owns topology reconciliation:
 
 1. Get the full Polar node list for the selected server.
-2. Delete any node whose name is not one of `GAME_BITCOIN`, `GAME_LND`, `GAME_TAPROOT`, `Alice`, `Bob`, or `Carol`.
-3. Create any required node from that exact list that does not exist yet.
-4. After the exact required list exists, request start for all required nodes.
-5. Poll all required nodes every 3 seconds until they are started. If there is no progress after 6 polls, stop/start the network once as the Polar stability workaround, then continue polling.
+2. If every required node already exists by exact name and all existing nodes are started/running, mark the step ready and report extra nodes without deleting, renaming, stopping, or restarting anything.
+3. Create any required node from the exact required list that does not exist yet. Do not rename existing nodes into the required names; node rename can stop a running network.
+4. After the exact required list exists, request start only for required nodes that are not already started/running.
+5. Poll required nodes every 3 seconds until they are started. If there is no progress after 6 polls, stop/start the network once as the Polar stability workaround, then continue polling.
 
 `User Nodes (Sats)` and `User Nodes (TRAs)` rebalance existing or newly created networks by transferring value to or from Game Treasury until the player/NPC user nodes match the requested demo balances and inventory. Game Treasury may retain extra sats or TRAs after rebalancing; do not require exact treasury depletion.
 

@@ -4,7 +4,7 @@ use super::error::LightningError;
 use super::models::{
     ActionLogEntry, ConnectionStatus, DemoNodeId, GameItemDefinition, LabState, MintTraRequest,
     NpcItemTransfer, TraItem, TraOwnershipStatus, TraTransferStatus, TransferTraRequest,
-    TreasuryEntry, TreasuryEntryDirection, TreasuryImpactPreview, TreasuryResource, TreasuryStatus,
+    TreasuryEntry, TreasuryEntryDirection, TreasuryImpactPreview, TreasuryStatus,
     APPLE_ITEM_ID, BOOK_ITEM_ID, DEFAULT_ROUTE_CAPACITY_SATS, DEFAULT_SATS_PER_TRANSACTION,
     GAME_TREASURY_NODE_LABEL, MAX_TRA_ITEMS_PER_NODE,
 };
@@ -94,14 +94,12 @@ impl TraService {
     pub fn prepare_game_treasury_items(mut state: LabState) -> Result<LabState, LightningError> {
         ensure_game_treasury_ready(&state)?;
         state.game_treasury.status = TreasuryStatus::CreatingItems;
-        state.game_treasury.owned_items.clear();
-        state
-            .tra_items
-            .retain(|item| item.owner_node != DemoNodeId::GameTreasury);
         for request in Self::initial_setup_items() {
+            if treasury_has_item(&state, request.item_id, &request.unique_name) {
+                continue;
+            }
+
             validate_supported_item_id(request.item_id)?;
-            let definition = Self::catalog_item(request.item_id)
-                .ok_or(LightningError::UnsupportedTraItemType)?;
             let tra_id = format!("tra-treasury-{}", state.tra_items.len() + 1);
             state.tra_items.push(TraItem {
                 asset_id: format!("regtest-treasury-asset-{}", state.tra_items.len() + 1),
@@ -112,21 +110,8 @@ impl TraService {
                 ownership_status: TraOwnershipStatus::Verified,
                 transfer_status: TraTransferStatus::None,
             });
-            state.game_treasury.owned_items.push(TreasuryResource {
-                resource_id: tra_id,
-                resource_type: "Item".to_string(),
-                display_name: request.unique_name,
-                item_id: Some(request.item_id),
-                owner: GAME_TREASURY_NODE_LABEL.to_string(),
-                estimated_value_sats: Some(definition.cost_sats),
-            });
         }
-        state.game_treasury.inventory_value_sats = state
-            .game_treasury
-            .owned_items
-            .iter()
-            .filter_map(|item| item.estimated_value_sats)
-            .sum();
+        refresh_treasury_owned_items(&mut state);
         state.game_treasury.status = TreasuryStatus::Ready;
         state.game_treasury.last_updated_at = Some(Utc::now());
         push_treasury_entry(
@@ -148,6 +133,10 @@ impl TraService {
 
         let requests = Self::initial_setup_items();
         for (index, request) in requests.into_iter().enumerate() {
+            if node_has_item(&state, request.owner_node, request.item_id, &request.unique_name) {
+                continue;
+            }
+
             let definition = Self::catalog_item(request.item_id)
                 .ok_or(LightningError::UnsupportedTraItemType)?;
             let tra_id = state
@@ -191,8 +180,7 @@ impl TraService {
                 entry_id: Some(entry_id),
             });
         }
-        state.game_treasury.owned_items.clear();
-        state.game_treasury.inventory_value_sats = 0;
+        refresh_treasury_owned_items(&mut state);
         state.game_treasury.status = TreasuryStatus::Ready;
         state.game_treasury.last_updated_at = Some(Utc::now());
 
@@ -430,6 +418,48 @@ fn ensure_inventory_capacity(
     Ok(())
 }
 
+fn treasury_has_item(state: &LabState, item_id: u32, unique_name: &str) -> bool {
+    node_has_item(state, DemoNodeId::GameTreasury, item_id, unique_name)
+}
+
+fn node_has_item(
+    state: &LabState,
+    owner_node: DemoNodeId,
+    item_id: u32,
+    unique_name: &str,
+) -> bool {
+    state.tra_items.iter().any(|item| {
+        item.owner_node == owner_node
+            && item.item_id == item_id
+            && item.unique_name.eq_ignore_ascii_case(unique_name)
+    })
+}
+
+fn refresh_treasury_owned_items(state: &mut LabState) {
+    state.game_treasury.owned_items = state
+        .tra_items
+        .iter()
+        .filter(|item| item.owner_node == DemoNodeId::GameTreasury)
+        .map(|item| {
+            let definition = TraService::catalog_item(item.item_id);
+            super::models::TreasuryResource {
+                resource_id: item.tra_id.clone(),
+                resource_type: "Item".to_string(),
+                display_name: item.unique_name.clone(),
+                item_id: Some(item.item_id),
+                owner: GAME_TREASURY_NODE_LABEL.to_string(),
+                estimated_value_sats: definition.map(|definition| definition.cost_sats),
+            }
+        })
+        .collect();
+    state.game_treasury.inventory_value_sats = state
+        .game_treasury
+        .owned_items
+        .iter()
+        .filter_map(|item| item.estimated_value_sats)
+        .sum();
+}
+
 fn push_log(state: &mut LabState, summary: &str, network_detail: &str, details: &[&str]) {
     state.action_log.insert(
         0,
@@ -584,6 +614,63 @@ mod tests {
                 .filter(|item| item.owner_node == DemoNodeId::GameTreasury)
                 .count(),
             4
+        );
+    }
+
+    #[test]
+    fn prepare_game_treasury_items_is_idempotent_for_existing_treasury_items() {
+        let state =
+            TraService::prepare_game_treasury(setup_started_state()).expect("prepare treasury");
+        let state = TraService::prepare_game_treasury_items(state).expect("prepare treasury items");
+        let state = TraService::prepare_game_treasury_items(state)
+            .expect("prepare treasury items again");
+
+        assert_eq!(state.game_treasury.owned_items.len(), 4);
+        assert_eq!(
+            state
+                .tra_items
+                .iter()
+                .filter(|item| item.owner_node == DemoNodeId::GameTreasury)
+                .count(),
+            4
+        );
+        assert_eq!(state.game_treasury.inventory_value_sats, 4_000);
+    }
+
+    #[test]
+    fn transfer_npc_starting_items_refreshes_treasury_owned_summary() {
+        let mut profile = SetupProfile::default();
+        profile.connection_status = ConnectionStatus::PartiallyConnected;
+        profile.polar_automation = PolarAutomationProfile {
+            bridge_url: "http://localhost:37373".to_string(),
+            network_id: "1".to_string(),
+            bitcoin_backend_name: crate::DEFAULT_BITCOIN_BACKEND_NAME.to_string(),
+        };
+        profile.game_treasury_ready = true;
+        let mut state = crate::default_lab_state(profile);
+        state.game_treasury.status = TreasuryStatus::Ready;
+        state = TraService::prepare_game_treasury_items(state).expect("prepare treasury items");
+
+        let state = TraService::transfer_npc_starting_items(state)
+            .expect("transfer starting items");
+
+        assert!(state.game_treasury.owned_items.is_empty());
+        assert_eq!(state.game_treasury.inventory_value_sats, 0);
+        assert_eq!(
+            state
+                .tra_items
+                .iter()
+                .filter(|item| item.owner_node == DemoNodeId::Bob)
+                .count(),
+            2
+        );
+        assert_eq!(
+            state
+                .tra_items
+                .iter()
+                .filter(|item| item.owner_node == DemoNodeId::Carol)
+                .count(),
+            2
         );
     }
 

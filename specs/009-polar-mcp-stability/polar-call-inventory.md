@@ -56,6 +56,17 @@ Generated during T005 for the Polar MCP stability refactor.
 - `pay_invoice`
 - Taproot Assets operations used behind setup and TRA flows.
 
+## Lifecycle Side Effects From Tool Docs
+
+The upstream Polar MCP README says tools are dynamically discovered from the running Polar app, and the local bridge schema at `GET /api/mcp/tools` is the most specific reference for behavior in the current installed Polar version.
+
+- `rename_node`: documented by the live schema as temporarily stopping the network when the network is running.
+- `set_lightning_backend`: documented by the live schema as restarting the affected Lightning node when the network is running.
+- `remove_node`: documented by the live schema as stopping the node before removal when the network is running.
+- `rename_network`: documented as renaming the network and updating description; the live schema does not mention a stop/start side effect.
+
+Setup orchestration should treat node rename, backend rewiring, and node removal as disruptive. Prefer readiness-first checks, exact-name matching, missing-node creation, and informational reporting of extras over cleanup or normalization in a manually prepared network.
+
 ## Refactor Notes
 
 - Keep setup labels and route locking unchanged.

@@ -65,6 +65,20 @@ pub struct PolarServerEnsureResult {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PolarSetupReadiness {
+    Ready,
+    NeedsWork,
+    Blocked(String),
+    ReadyWithExtras(Vec<String>),
+}
+
+impl PolarSetupReadiness {
+    fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready | Self::ReadyWithExtras(_))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PolarLabHealthIssue {
     BridgeUnavailable(String),
     NetworkMissing {
@@ -178,6 +192,10 @@ pub async fn ensure_server(
 
     let networks = list_networks(profile).await?;
     if let Some(network_id) = find_network_id_by_name(&networks, &requested_name) {
+        if !network_is_started(&networks, &network_id) {
+            ensure_network_running(profile, &network_id).await?;
+        }
+        let networks = list_networks(profile).await?;
         return Ok(PolarServerEnsureResult {
             profile: automation_profile_from_network(profile, &networks, network_id),
             status: PolarServerEnsureStatus::Existed,
@@ -269,8 +287,12 @@ where
 
     report_progress("Reading current Polar node list...".to_string());
     let networks = list_networks(&resolved_profile).await?;
-    if required_polar_topology_is_ready(&networks, &network_id) {
-        report_progress("Required Polar nodes are already created and started.".to_string());
+    let readiness = classify_required_polar_topology(&networks, &network_id);
+    if readiness.is_ready() {
+        report_progress(readiness_message(
+            "Required Polar nodes are already created and started.",
+            &readiness,
+        ));
         log_to_terminal(&format!(
             "[polar-service] required-node-ready-preflight network={network_id}"
         ));
@@ -368,20 +390,58 @@ fn required_polar_base_node_names() -> [&'static str; 5] {
     ]
 }
 
+#[cfg(test)]
 fn required_polar_topology_is_ready(value: &Value, network_id: &str) -> bool {
-    required_polar_node_names()
+    classify_required_polar_topology(value, network_id).is_ready()
+}
+
+fn classify_required_polar_topology(value: &Value, network_id: &str) -> PolarSetupReadiness {
+    if !required_polar_node_names()
         .iter()
         .copied()
         .all(|node_name| any_node_is_started(value, network_id, node_name))
-        && network_node_summaries(value, network_id)
-            .into_iter()
-            .filter(|node| node.name.is_some())
-            .all(|node| {
-                node.status
-                    .as_deref()
-                    .map(network_status_is_started)
-                    .unwrap_or(false)
-            })
+    {
+        return PolarSetupReadiness::NeedsWork;
+    }
+
+    let nodes = network_node_summaries(value, network_id);
+    if !nodes.iter().filter(|node| node.name.is_some()).all(|node| {
+        node.status
+            .as_deref()
+            .map(network_status_is_started)
+            .unwrap_or(false)
+    }) {
+        return PolarSetupReadiness::NeedsWork;
+    }
+
+    let extras = nodes
+        .into_iter()
+        .filter_map(|node| node.name.map(|name| (name, node.status)))
+        .filter(|(name, _)| !required_polar_node_names().contains(&name.as_str()))
+        .filter_map(|(name, status)| {
+            let status = status.unwrap_or_else(|| "unknown".to_string());
+            if network_status_is_started(&status) {
+                Some(format!("{name} is extra and already {status}"))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if extras.is_empty() {
+        PolarSetupReadiness::Ready
+    } else {
+        PolarSetupReadiness::ReadyWithExtras(extras)
+    }
+}
+
+fn readiness_message(base: &str, readiness: &PolarSetupReadiness) -> String {
+    match readiness {
+        PolarSetupReadiness::ReadyWithExtras(extras) if !extras.is_empty() => {
+            format!("{base} Extra Polar state preserved: {}.", extras.join("; "))
+        }
+        _ => base.to_string(),
+    }
 }
 
 async fn delete_unwanted_required_topology_nodes(
@@ -1418,6 +1478,21 @@ async fn prepare_existing_game_treasury_node(
     required_balance_sats: u64,
     report_progress: &mut impl FnMut(String),
 ) -> Result<DemoNodeFundingPlan, String> {
+    let target_sats = demo_node_funding_target(DemoNodeId::GameTreasury, required_balance_sats);
+    let networks = list_networks(profile).await?;
+    if lightning_node_is_started(&networks, network_id, node_name) {
+        if let Ok(balance) =
+            get_lightning_wallet_balance(profile, network_id, node_name).await
+        {
+            if balance >= target_sats {
+                report_progress(format!(
+                    "{node_name} already has {balance} sats. Extra sats preserved."
+                ));
+                return Ok(DemoNodeFundingPlan::AlreadyFunded);
+            }
+        }
+    }
+
     set_lightning_backend(profile, network_id, node_name, backend_name).await?;
 
     report_progress(format!("Starting {node_name} in Polar..."));
@@ -1426,7 +1501,6 @@ async fn prepare_existing_game_treasury_node(
     let balance =
         wait_for_lightning_wallet_balance(profile, network_id, node_name, DemoNodeId::GameTreasury)
             .await?;
-    let target_sats = demo_node_funding_target(DemoNodeId::GameTreasury, required_balance_sats);
     if balance >= target_sats {
         return Ok(DemoNodeFundingPlan::AlreadyFunded);
     }
@@ -4315,7 +4389,7 @@ mod tests {
         assert_eq!(
             required_polar_node_names(),
             [
-                "GAME_BITCOIN",
+                "BITCOIN_TESTNET",
                 "GAME_LND",
                 "GAME_TAPROOT",
                 "Alice",
@@ -4325,7 +4399,7 @@ mod tests {
         );
         assert_eq!(
             required_polar_base_node_names(),
-            ["GAME_BITCOIN", "GAME_LND", "Alice", "Bob", "Carol"]
+            ["BITCOIN_TESTNET", "GAME_LND", "Alice", "Bob", "Carol"]
         );
     }
 
@@ -4354,6 +4428,44 @@ mod tests {
         });
 
         assert!(required_polar_topology_is_ready(&networks, "1"));
+    }
+
+    #[test]
+    fn required_topology_readiness_reports_started_extra_nodes() {
+        let networks = json!({
+            "networks": [{
+                "id": 1,
+                "name": DEFAULT_NETWORK_NAME,
+                "nodes": {
+                    "bitcoin": [
+                        { "name": DEFAULT_BITCOIN_BACKEND_NAME, "type": "bitcoin", "status": "Started" }
+                    ],
+                    "lightning": [
+                        { "name": "GAME_LND", "type": "lightning", "status": "Started" },
+                        { "name": "Alice", "type": "lightning", "status": "Started" },
+                        { "name": "Bob", "type": "lightning", "status": "Started" },
+                        { "name": "Carol", "type": "lightning", "status": "Started" },
+                        { "name": "Extra", "type": "lightning", "status": "Started" }
+                    ],
+                    "tap": [
+                        { "name": TAPROOT_ASSETS_NODE_NAME, "type": "tap", "status": "Started" }
+                    ]
+                }
+            }]
+        });
+
+        let readiness = classify_required_polar_topology(&networks, "1");
+
+        assert_eq!(
+            readiness,
+            PolarSetupReadiness::ReadyWithExtras(vec![
+                "Extra is extra and already Started".to_string()
+            ])
+        );
+        assert_eq!(
+            readiness_message("Required Polar nodes are already created and started.", &readiness),
+            "Required Polar nodes are already created and started. Extra Polar state preserved: Extra is extra and already Started."
+        );
     }
 
     #[test]

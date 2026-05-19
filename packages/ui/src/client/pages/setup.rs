@@ -779,7 +779,7 @@ pub fn SetUp() -> Element {
                                                     input {
                                                         id: "polar-create-nodes-input",
                                                         r#type: "text",
-                                                        value: "GAME_BITCOIN, GAME_LND, GAME_TAPROOT, Alice, Bob, Carol",
+                                                        value: "BITCOIN_TESTNET, GAME_LND, GAME_TAPROOT, Alice, Bob, Carol",
                                                         readonly: true,
                                                     }
                                                 }
@@ -2642,6 +2642,17 @@ mod tests {
     }
 
     #[test]
+    fn autopilot_initial_server_name_honors_step_2_field() {
+        assert_eq!(
+            requested_autopilot_server_name(" User Selected Polar "),
+            "User Selected Polar"
+        );
+
+        let generated = requested_autopilot_server_name(" ");
+        assert!(generated.starts_with("autopilot-"));
+    }
+
+    #[test]
     fn autopilot_fresh_retry_profile_rewinds_to_server_ready_state() {
         let mut profile = profile_with_status(ConnectionStatus::Connected, "stale-network");
         profile.network_name = "stale-network".to_string();
@@ -3000,14 +3011,14 @@ async fn run_polar_setup_autopilot_inner(
                 .trim()
                 .is_empty());
     let requested_server_name = if should_start_fresh {
-        fresh_autopilot_server_name()
+        requested_autopilot_server_name(&polar_server_name())
     } else {
         current_profile.network_name.clone()
     };
     polar_server_name.set(requested_server_name.clone());
     if should_start_fresh {
         autopilot_status.set(format!(
-            "Using fresh Polar server name {requested_server_name}..."
+            "Using Polar server name {requested_server_name}..."
         ));
     } else {
         autopilot_status.set(format!(
@@ -3494,6 +3505,15 @@ fn fresh_autopilot_server_name() -> String {
 
 fn autopilot_server_name_from_timestamp(timestamp: i64) -> String {
     format!("autopilot-{timestamp}")
+}
+
+fn requested_autopilot_server_name(server_name: &str) -> String {
+    let server_name = server_name.trim();
+    if server_name.is_empty() {
+        fresh_autopilot_server_name()
+    } else {
+        server_name.to_string()
+    }
 }
 
 fn autopilot_profile_for_fresh_server_retry(
