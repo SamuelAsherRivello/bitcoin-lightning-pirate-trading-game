@@ -20,7 +20,7 @@ Represents learner-facing setup state.
 - Setup is complete only when the app has created Alice, Bob, and Carol or mock mode is connected.
 - Polar Connection setup requires the learner to confirm a whole-number Block Height before final unlock; `0` is valid and sets the app's initial lab baseline without rewinding Polar's actual chain.
 - Mock Connection mode must show fake offline-data messaging and must not require credential acknowledgement.
-- Polar Connection mode must include a local bridge URL. The app ensures the named Polar server exists through the bridge, discovers the Bitcoin backend when possible, and falls back to the `backend1` backend convention.
+- Polar Connection mode must include a local bridge URL. The app ensures the named Polar server exists through the bridge, discovers the Bitcoin backend when possible, and falls back to the `My Bitcoin Node` backend convention.
 
 ## PolarAutomationProfile
 
@@ -28,7 +28,7 @@ Represents the non-wallet-secret values needed to ask Polar to create the demo L
 
 - `bridge_url`: Local Polar MCP bridge URL, default `http://localhost:37373`.
 - `network_id`: Discovered Polar network name or id that already contains the Bitcoin backend node.
-- `bitcoin_backend_name`: Discovered Polar node name for the Bitcoin Core backend, default fallback `backend1`.
+- `bitcoin_backend_name`: Discovered Polar node name for the Bitcoin Core backend, default fallback `My Bitcoin Node`.
 
 ### Validation Rules
 

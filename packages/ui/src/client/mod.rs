@@ -52,16 +52,37 @@ fn AppLayout() -> Element {
         let profile = setup_profile.peek().clone();
         if should_resume_polar_setup_after_restart(&profile) {
             spawn(async move {
+                let requested_profile = profile.clone();
                 match services::lightning_server_functions::resume_polar_setup_after_restart(
                     profile,
                 )
                 .await
                 {
                     Ok(state) => {
+                        let current_profile = setup_profile.peek().clone();
+                        if !should_apply_restart_resume_result(&requested_profile, &current_profile)
+                        {
+                            let current_lab_state = lab_state.peek().clone();
+                            restore_current_setup_after_stale_lab_poll(
+                                &current_profile,
+                                current_lab_state.as_ref(),
+                            );
+                            return;
+                        }
                         setup_profile.set(state.profile.clone());
                         lab_state.set(Some(state));
                     }
                     Err(recovery) => {
+                        let current_profile = setup_profile.peek().clone();
+                        if !should_apply_restart_resume_result(&requested_profile, &current_profile)
+                        {
+                            let current_lab_state = lab_state.peek().clone();
+                            restore_current_setup_after_stale_lab_poll(
+                                &current_profile,
+                                current_lab_state.as_ref(),
+                            );
+                            return;
+                        }
                         let next_id = *operation_prompt_sequence.peek() + 1;
                         operation_prompt_sequence.set(next_id);
                         setup_profile.set(recovery.profile);
@@ -164,6 +185,13 @@ fn should_apply_lab_poll_result(
     current_profile: &models::SetupProfile,
 ) -> bool {
     current_profile.is_connected() && current_profile == requested_profile
+}
+
+fn should_apply_restart_resume_result(
+    requested_profile: &models::SetupProfile,
+    current_profile: &models::SetupProfile,
+) -> bool {
+    current_profile == requested_profile
 }
 
 fn should_resume_polar_setup_after_restart(profile: &models::SetupProfile) -> bool {
@@ -276,6 +304,31 @@ mod tests {
         requested_profile.connection_status = ConnectionStatus::Connected;
 
         assert!(should_apply_lab_poll_result(
+            &requested_profile,
+            &requested_profile
+        ));
+    }
+
+    #[test]
+    fn restart_resume_result_is_ignored_after_setup_changes() {
+        let mut requested_profile = SetupProfile::default();
+        requested_profile.connection_status = ConnectionStatus::SavedOffline;
+
+        let mut changed_profile = requested_profile.clone();
+        changed_profile.network_name = "autopilot-1779136456132".to_string();
+
+        assert!(!should_apply_restart_resume_result(
+            &requested_profile,
+            &changed_profile
+        ));
+    }
+
+    #[test]
+    fn restart_resume_result_applies_to_unchanged_setup() {
+        let mut requested_profile = SetupProfile::default();
+        requested_profile.connection_status = ConnectionStatus::SavedOffline;
+
+        assert!(should_apply_restart_resume_result(
             &requested_profile,
             &requested_profile
         ));

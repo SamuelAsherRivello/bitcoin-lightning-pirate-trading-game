@@ -16,10 +16,10 @@ use crate::client::models::{
 };
 use crate::client::services::lightning_server_functions::{
     close_polar_demo_channels_with_progress, close_trade_route, complete_polar_setup,
-    create_invoice_and_maybe_autosend_for_amount, create_polar_demo_nodes_with_progress,
-    destroy_polar_demo_nodes, ensure_polar_server, initial_tra_setup_items, mint_tra,
-    open_trade_route, recover_if_polar_lab_unhealthy, reset_tra_inventory, transfer_tra,
-    verify_polar_bridge, verify_tra_setup, wait_for_next_block, PolarLabRecovery,
+    create_polar_demo_nodes_with_progress, destroy_polar_demo_nodes, ensure_polar_server,
+    execute_tra_item_trade, initial_tra_setup_items, mint_tra, open_trade_route, preview_tra_setup,
+    recover_if_polar_lab_unhealthy, reset_tra_inventory, verify_polar_bridge, verify_tra_setup,
+    wait_for_next_block, PolarLabRecovery,
 };
 use crate::client::Route;
 
@@ -122,10 +122,10 @@ pub fn PlayGame() -> Element {
 
     use_effect(move || {
         let profile = setup_profile();
-        if active_route == (Route::PlayGame {}) && profile.is_connected() {
+        if active_route == (Route::PlayGame {}) && profile.is_connected() && !is_busy() {
             play_game_refresh_status.set(PlayGameRefreshStatus::Refreshing);
             spawn(async move {
-                match verify_tra_setup(profile.clone()).await {
+                match preview_tra_setup(profile.clone()).await {
                     Ok(state) => {
                         lab_state.set(Some(state));
                         play_game_refresh_status.set(PlayGameRefreshStatus::Refreshed);
@@ -435,53 +435,34 @@ pub fn PlayGame() -> Element {
                             selected_item.tra_id,
                             merchant.label()
                         );
-                        match create_invoice_and_maybe_autosend_for_amount(
+                        match execute_tra_item_trade(
                             setup_profile(),
                             merchant,
                             DemoNodeId::Alice,
                             selected_item.cost_sats,
-                            true,
                             memo,
+                            TransferTraRequest {
+                                tra_id: selected_item.tra_id.clone(),
+                                from_node: merchant,
+                                to_node: DemoNodeId::Alice,
+                            },
                         )
                         .await
                         {
-                            Ok(_) => {
+                            Ok(next_state) => {
                                 wait_between_trade_animations().await;
                                 game_animation.set(GameAnimation::ItemRightToLeft);
                                 wait_for_game_animation().await;
-                                match transfer_tra(
-                                    setup_profile(),
-                                    TransferTraRequest {
-                                        tra_id: selected_item.tra_id.clone(),
-                                        from_node: merchant,
-                                        to_node: DemoNodeId::Alice,
-                                    },
-                                )
-                                .await
-                                {
-                                    Ok(next_state) => {
-                                        lab_state.set(Some(next_state));
-                                        push_toast(
-                                            toast,
-                                            toast_sequence,
-                                            format!(
-                                                "Bought {} and verified TRA ownership.",
-                                                selected_item.unique_name
-                                            ),
-                                            ToastTone::Success,
-                                        );
-                                    }
-                                    Err(message) => {
-                                        push_toast(
-                                            toast,
-                                            toast_sequence,
-                                            format!(
-                                                "Payment succeeded, but TRA transfer needs recovery: {message}"
-                                            ),
-                                            ToastTone::Error,
-                                        );
-                                    }
-                                }
+                                lab_state.set(Some(next_state));
+                                push_toast(
+                                    toast,
+                                    toast_sequence,
+                                    format!(
+                                        "Bought {} and verified TRA ownership.",
+                                        selected_item.unique_name
+                                    ),
+                                    ToastTone::Success,
+                                );
                             }
                             Err(message) => handle_lab_action_error(
                                 setup_profile(),
@@ -530,52 +511,33 @@ pub fn PlayGame() -> Element {
                             selected_item.tra_id,
                             merchant.label()
                         );
-                        match create_invoice_and_maybe_autosend_for_amount(
+                        match execute_tra_item_trade(
                             setup_profile(),
                             DemoNodeId::Alice,
                             merchant,
                             selected_item.cost_sats,
-                            true,
                             memo,
+                            TransferTraRequest {
+                                tra_id: selected_item.tra_id.clone(),
+                                from_node: DemoNodeId::Alice,
+                                to_node: merchant,
+                            },
                         )
                         .await
                         {
-                            Ok(_) => {
+                            Ok(next_state) => {
                                 game_animation.set(GameAnimation::PaymentRightToLeft);
                                 wait_for_game_animation().await;
-                                match transfer_tra(
-                                    setup_profile(),
-                                    TransferTraRequest {
-                                        tra_id: selected_item.tra_id.clone(),
-                                        from_node: DemoNodeId::Alice,
-                                        to_node: merchant,
-                                    },
-                                )
-                                .await
-                                {
-                                    Ok(next_state) => {
-                                        lab_state.set(Some(next_state));
-                                        push_toast(
-                                            toast,
-                                            toast_sequence,
-                                            format!(
-                                                "Sold {} and verified TRA ownership.",
-                                                selected_item.unique_name
-                                            ),
-                                            ToastTone::Success,
-                                        );
-                                    }
-                                    Err(message) => {
-                                        push_toast(
-                                            toast,
-                                            toast_sequence,
-                                            format!(
-                                                "Payment succeeded, but TRA transfer needs recovery: {message}"
-                                            ),
-                                            ToastTone::Error,
-                                        );
-                                    }
-                                }
+                                lab_state.set(Some(next_state));
+                                push_toast(
+                                    toast,
+                                    toast_sequence,
+                                    format!(
+                                        "Sold {} and verified TRA ownership.",
+                                        selected_item.unique_name
+                                    ),
+                                    ToastTone::Success,
+                                );
                             }
                             Err(message) => handle_lab_action_error(
                                 setup_profile(),
@@ -1374,6 +1336,35 @@ mod tests {
             .find(|route| route.to_node == DemoNodeId::Bob);
 
         assert!(!can_sell_item_to_current_npc(
+            &state,
+            focused_route,
+            DemoNodeId::Bob,
+            Some(&selected)
+        ));
+    }
+
+    #[test]
+    fn sell_is_available_when_npc_wallet_can_fund_without_route_outbound_liquidity() {
+        let catalog = item_catalog();
+        let mut apple = item(DemoNodeId::Alice, "Apple", TraOwnershipStatus::Verified);
+        apple.item_id = APPLE_ITEM_ID;
+        let mut state = state_with_items(vec![apple]);
+        activate_route_to(&mut state, DemoNodeId::Bob);
+        let route = state
+            .trade_routes
+            .iter_mut()
+            .find(|route| route.to_node == DemoNodeId::Bob)
+            .expect("route to Bob");
+        route.remote_balance_sats = 0;
+        let selected =
+            rightmost_transferable_item(&tradable_items_for(&state, DemoNodeId::Alice, &catalog))
+                .expect("player item");
+        let focused_route = state
+            .trade_routes
+            .iter()
+            .find(|route| route.to_node == DemoNodeId::Bob);
+
+        assert!(can_sell_item_to_current_npc(
             &state,
             focused_route,
             DemoNodeId::Bob,

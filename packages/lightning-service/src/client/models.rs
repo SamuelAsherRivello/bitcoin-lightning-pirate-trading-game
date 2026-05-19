@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_NETWORK_NAME: &str = "Dioxus Bitcoin Lightning Game";
-pub const DEFAULT_BITCOIN_BACKEND_NAME: &str = "backend1";
+pub const DEFAULT_BITCOIN_BACKEND_NAME: &str = "My Bitcoin Node";
 pub const DEFAULT_SATS_PER_TRANSACTION: u64 = 1_000;
 pub const MAX_SATS_PER_TRANSACTION: u64 = 100_000;
 pub const DEFAULT_ROUTE_CAPACITY_SATS: u64 = 250_000;

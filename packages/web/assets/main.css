@@ -699,6 +699,43 @@ textarea {
     font-size: 15px;
 }
 
+.autopilot-panel {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px;
+    border: 1px solid color-mix(in srgb, var(--app-positive) 34%, var(--app-border));
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--app-positive) 8%, var(--app-raised));
+}
+
+.autopilot-panel__body {
+    display: grid;
+    min-width: min(100%, 280px);
+    gap: 4px;
+}
+
+.autopilot-panel__body strong {
+    color: var(--app-text);
+    font-size: 16px;
+}
+
+.autopilot-panel__body p {
+    margin: 0;
+    color: var(--app-text-muted);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.autopilot-panel__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
 .wizard-step-list {
     display: grid;
     gap: 10px;
@@ -1776,6 +1813,17 @@ textarea {
         minmax(95px, 0.9fr);
     min-width: 900px;
     border-top: 1px solid var(--app-border);
+}
+
+.node-table__row {
+    grid-template-columns:
+        minmax(130px, 1.1fr)
+        minmax(90px, 0.75fr)
+        minmax(130px, 1fr)
+        minmax(120px, 0.9fr)
+        minmax(130px, 1fr)
+        minmax(220px, 1.5fr);
+    min-width: 820px;
 }
 
 .tra-table__row:first-child {

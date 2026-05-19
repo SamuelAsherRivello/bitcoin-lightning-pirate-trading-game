@@ -505,7 +505,7 @@ mod tests {
         profile.polar_automation = PolarAutomationProfile {
             bridge_url: "http://localhost:37373".to_string(),
             network_id: "1".to_string(),
-            bitcoin_backend_name: "backend1".to_string(),
+            bitcoin_backend_name: crate::DEFAULT_BITCOIN_BACKEND_NAME.to_string(),
         };
         crate::default_lab_state(profile)
     }

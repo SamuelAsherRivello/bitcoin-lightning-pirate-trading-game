@@ -35,6 +35,7 @@ pub async fn test_setup(profile: SetupProfile) -> Result<LabState, String> {
         lightning_service::test_setup(profile).map_err(|error| error.to_string())?
     };
     let state = refresh_polar_block_height(state).await?;
+    let state = refresh_polar_node_names(state).await?;
 
     storage_service::save_setup_profile(&state.profile);
     storage_service::save_lab_state_snapshot(&state);
@@ -134,6 +135,7 @@ where
         }
     }
     let mut state = refresh_polar_block_height(state).await?;
+    state = refresh_polar_node_names(state).await?;
     state.profile.connection_status = lightning_service::ConnectionStatus::PartiallyConnected;
     state.profile.polar_block_height_confirmed = false;
     storage_service::save_setup_profile(&state.profile);
@@ -173,6 +175,14 @@ pub async fn prepare_game_treasury_tras(profile: SetupProfile) -> Result<LabStat
     if !profile.game_treasury_ready {
         return Err("Complete Game Treasury (Sats) before creating treasury TRAs.".to_string());
     }
+    let mut profile = profile;
+    if should_read_polar(&profile) {
+        profile.polar_automation =
+            polar_bridge_service::ensure_taproot_assets_node(&profile.polar_automation).await?;
+        profile.connection_status = lightning_service::ConnectionStatus::PartiallyConnected;
+        profile.last_verified_at = None;
+        storage_service::save_setup_profile(&profile);
+    }
 
     let mut state = storage_service::load_lab_state_snapshot()
         .unwrap_or_else(|| lightning_service::default_lab_state(profile.clone()));
@@ -195,8 +205,7 @@ pub async fn transfer_npc_starting_items(mut profile: SetupProfile) -> Result<La
     let state = get_lab_state(profile).await?;
     if !setup_has_treasury_tras(&state) {
         return Err(
-            "Complete Game Treasury (TRAs) before transferring starting items to NPCs."
-                .to_string(),
+            "Complete Game Treasury (TRAs) before transferring starting items to NPCs.".to_string(),
         );
     }
     let state = lightning_service::TraService::transfer_npc_starting_items(state)
@@ -295,6 +304,38 @@ pub async fn delete_created_polar_server(profile: SetupProfile) -> Result<SetupP
     Ok(profile)
 }
 
+pub async fn delete_all_polar_networks(
+    profile: SetupProfile,
+) -> Result<(SetupProfile, usize), String> {
+    delete_all_polar_networks_with_progress(profile, |_, _| {}).await
+}
+
+pub async fn delete_all_polar_networks_with_progress<F>(
+    profile: SetupProfile,
+    report_progress: F,
+) -> Result<(SetupProfile, usize), String>
+where
+    F: FnMut(usize, usize),
+{
+    lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
+    let deleted_count = polar_bridge_service::delete_all_polar_networks_with_progress(
+        &profile.polar_automation,
+        report_progress,
+    )
+    .await?;
+
+    let mut profile = profile;
+    profile.connection_status = lightning_service::ConnectionStatus::NotConfigured;
+    profile.last_verified_at = None;
+    profile.polar_automation.network_id.clear();
+    profile.polar_automation.bitcoin_backend_name =
+        lightning_service::DEFAULT_BITCOIN_BACKEND_NAME.to_string();
+
+    storage_service::save_setup_profile(&profile);
+    storage_service::clear_lab_state_snapshot();
+    Ok((profile, deleted_count))
+}
+
 pub async fn reset_polar_setup_start(mut profile: SetupProfile) -> Result<SetupProfile, String> {
     profile.connection_status = lightning_service::ConnectionStatus::NotConfigured;
     profile.last_verified_at = None;
@@ -316,6 +357,7 @@ pub async fn lock_polar_setup_completion(mut profile: SetupProfile) -> Result<La
         .unwrap_or_else(|| lightning_service::default_lab_state(profile.clone()));
     state.profile = profile;
     let state = refresh_polar_block_height(state).await?;
+    let state = refresh_polar_node_names(state).await?;
 
     storage_service::save_setup_profile(&state.profile);
     storage_service::save_lab_state_snapshot(&state);
@@ -375,6 +417,7 @@ pub async fn get_lab_state(profile: SetupProfile) -> Result<LabState, String> {
     };
 
     let mut refreshed_state = refresh_polar_block_height(state).await?;
+    refreshed_state = refresh_polar_node_names(refreshed_state).await?;
     if refreshed_state.profile.is_connected() && !refreshed_state.tra_items.is_empty() {
         refreshed_state = lightning_service::TraService::verify_tra_setup(refreshed_state)
             .map_err(|error| error.to_string())?;
@@ -619,6 +662,30 @@ pub async fn create_invoice_and_maybe_autosend_for_amount(
     Ok(state)
 }
 
+pub async fn execute_tra_item_trade(
+    profile: SetupProfile,
+    creator_node: DemoNodeId,
+    candidate_payer_node: DemoNodeId,
+    amount_sats: u64,
+    memo: String,
+    transfer_request: TransferTraRequest,
+) -> Result<LabState, String> {
+    let state = get_lab_state(profile).await?;
+    let state = lightning_service::create_invoice_and_maybe_autosend(
+        state,
+        creator_node,
+        candidate_payer_node,
+        amount_sats,
+        memo,
+        true,
+    )
+    .map_err(|error| error.to_string())?;
+    let state = lightning_service::TraService::transfer_tra(state, transfer_request)
+        .map_err(|error| error.to_string())?;
+    storage_service::save_lab_state_snapshot(&state);
+    Ok(state)
+}
+
 pub async fn get_tra_item_catalog() -> Result<Vec<GameItemDefinition>, String> {
     Ok(lightning_service::TraService::item_catalog())
 }
@@ -633,6 +700,37 @@ pub async fn verify_tra_setup(profile: SetupProfile) -> Result<LabState, String>
         .map_err(|error| error.to_string())?;
     storage_service::save_lab_state_snapshot(&state);
     Ok(state)
+}
+
+pub async fn preview_tra_setup(profile: SetupProfile) -> Result<LabState, String> {
+    let can_load_snapshot = profile.is_connected()
+        || profile.connection_status == lightning_service::ConnectionStatus::PartiallyConnected;
+
+    if !can_load_snapshot {
+        return Ok(lightning_service::default_lab_state(profile));
+    }
+
+    let mut state = storage_service::load_lab_state_snapshot()
+        .filter(|state| {
+            state.profile.is_connected()
+                || state.profile.connection_status
+                    == lightning_service::ConnectionStatus::PartiallyConnected
+        })
+        .unwrap_or_else(|| lightning_service::default_lab_state(profile.clone()));
+
+    let state = if setup_snapshot_matches_profile(&state, &profile) {
+        state.profile = profile;
+        state
+    } else {
+        lightning_service::default_lab_state(profile)
+    };
+
+    let mut refreshed_state = refresh_polar_block_height(state).await?;
+    if refreshed_state.profile.is_connected() && !refreshed_state.tra_items.is_empty() {
+        refreshed_state = lightning_service::TraService::verify_tra_setup(refreshed_state)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(refreshed_state)
 }
 
 pub async fn reset_tra_inventory(profile: SetupProfile) -> Result<LabState, String> {
@@ -918,6 +1016,48 @@ async fn refresh_polar_block_height(mut state: LabState) -> Result<LabState, Str
             state.polar_observed_block_height = Some(polar_height);
             state
         };
+    }
+
+    Ok(state)
+}
+
+async fn refresh_polar_node_names(mut state: LabState) -> Result<LabState, String> {
+    if !should_read_polar(&state.profile) {
+        return Ok(state);
+    }
+
+    let names =
+        polar_bridge_service::read_network_node_names(&state.profile.polar_automation).await?;
+    state.profile.polar_automation.bitcoin_backend_name = names.bitcoin_backend_name;
+
+    let treasury_name = names
+        .game_treasury_name
+        .unwrap_or_else(|| "Not listed by Polar".to_string());
+    state.game_treasury.node_label = treasury_name.clone();
+    if let Some(node) = state
+        .nodes
+        .iter_mut()
+        .find(|node| node.node_id == DemoNodeId::GameTreasury)
+    {
+        node.alias = treasury_name;
+    }
+
+    let user_node_names = names.user_node_names;
+    for (node_id, node_name) in &user_node_names {
+        if let Some(node) = state.nodes.iter_mut().find(|node| node.node_id == *node_id) {
+            node.alias = node_name.clone();
+        }
+    }
+
+    for node_id in DemoNodeId::ALL {
+        if !user_node_names
+            .iter()
+            .any(|(listed_node_id, _)| *listed_node_id == node_id)
+        {
+            if let Some(node) = state.nodes.iter_mut().find(|node| node.node_id == node_id) {
+                node.alias = "Not listed by Polar".to_string();
+            }
+        }
     }
 
     Ok(state)

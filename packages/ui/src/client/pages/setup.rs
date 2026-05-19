@@ -1,5 +1,7 @@
 use dioxus::prelude::*;
 use dioxus_i18n::t;
+use futures::future::{select, Either, FutureExt};
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 
@@ -14,9 +16,10 @@ use crate::client::models::{
 };
 use crate::client::services::lightning_server_functions::{
     complete_polar_setup, confirm_polar_block_height, create_polar_demo_nodes_with_progress,
-    destroy_polar_demo_nodes, ensure_polar_server, prepare_game_treasury,
-    prepare_game_treasury_tras, reset_lab, test_setup, transfer_npc_starting_items,
-    verify_polar_bridge, PolarServerEnsureStatus,
+    delete_all_polar_networks_with_progress, delete_created_polar_server, destroy_polar_demo_nodes,
+    ensure_polar_server, get_lab_state, prepare_game_treasury, prepare_game_treasury_tras,
+    reset_lab, test_setup, transfer_npc_starting_items, verify_polar_bridge,
+    PolarServerEnsureResult, PolarServerEnsureStatus,
 };
 use crate::client::services::storage_service;
 
@@ -24,6 +27,11 @@ const DOCKER_DESKTOP_URL: &str = "https://www.docker.com/products/docker-desktop
 const LOCAL_APP_URL: &str = "http://localhost:8080";
 const POLAR_DOWNLOAD_URL: &str = "https://lightningpolar.com/";
 const POLAR_DEMO_NODES_SUBMIT_ID: &str = "polar-user-nodes-submit";
+const POLAR_AUTOPILOT_TARGET_SECONDS: i64 = 60;
+const POLAR_AUTOPILOT_SERVER_ATTEMPTS: u8 = 5;
+const POLAR_AUTOPILOT_SERVER_STEP_TIMEOUT_SECONDS: u32 = 90;
+const POLAR_DELETE_ALL_TIMEOUT_SECONDS: u32 = 300;
+static POLAR_AUTOPILOT_NAME_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_arch = "wasm32")]
 const FOCUS_RETRY_ATTEMPTS: u8 = 12;
 #[cfg(target_arch = "wasm32")]
@@ -125,6 +133,9 @@ pub fn SetUp() -> Element {
     let mut is_busy = use_signal(|| false);
     let mut bridge_connection_error = use_signal(String::new);
     let mut show_complete_reset_confirm = use_signal(|| false);
+    let mut show_delete_all_networks_confirm = use_signal(|| false);
+    let mut autopilot_enabled = use_signal(|| false);
+    let mut autopilot_status = use_signal(|| "Ready".to_string());
     let current_profile = setup_profile();
     let current_lab_state = lab_state();
     let active_step = polar_wizard_step(&current_profile, current_lab_state.as_ref());
@@ -370,6 +381,66 @@ pub fn SetUp() -> Element {
                                 class: "app-setup-section polar-connection-tab-panel",
                                 role: "tabpanel",
                                 aria_label: "2. Polar",
+                                    div { class: "autopilot-panel",
+                                        div { class: "autopilot-panel__body",
+                                            span { class: "eyebrow", "Debug mode" }
+                                            strong {
+                                                if autopilot_enabled() {
+                                                    "Autopilot: on"
+                                                } else {
+                                                    "Autopilot: off"
+                                                }
+                                            }
+                                            p { "{autopilot_status}" }
+                                        }
+                                        div { class: "autopilot-panel__actions",
+                                            button {
+                                                id: "polar-autopilot-run",
+                                                class: "primary-action",
+                                                r#type: "button",
+                                                disabled: is_busy() || !bridge_url_can_submit,
+                                                onclick: move |_| async move {
+                                                    run_polar_setup_autopilot(
+                                                        is_busy,
+                                                        setup_profile,
+                                                        lab_state,
+                                                        operation_prompt,
+                                                        prompt_sequence,
+                                                        toast,
+                                                        toast_sequence,
+                                                        bridge_connection_error,
+                                                        amount_text(),
+                                                        polar_server_name,
+                                                        polar_bridge_url(),
+                                                        polar_block_height,
+                                                        autopilot_enabled,
+                                                        autopilot_status,
+                                                    )
+                                                    .await;
+                                                },
+                                                "Run"
+                                            }
+                                            button {
+                                                id: "polar-autopilot-off",
+                                                class: "secondary-action",
+                                                r#type: "button",
+                                                disabled: is_busy() || !autopilot_enabled(),
+                                                onclick: move |_| {
+                                                    autopilot_enabled.set(false);
+                                                    autopilot_status.set("Ready".to_string());
+                                                },
+                                                "Off"
+                                            }
+                                            button {
+                                                id: "polar-delete-all-networks",
+                                                class: "secondary-action danger-action",
+                                                r#type: "button",
+                                                disabled: delete_all_networks_button_disabled(is_busy()),
+                                                onclick: move |_| show_delete_all_networks_confirm.set(true),
+                                                "Delete all networks"
+                                            }
+                                        }
+                                    }
                                     InstructionList {
                                         Instruction {
                                             id: "polar-step-bridge-url".to_string(),
@@ -1154,6 +1225,24 @@ pub fn SetUp() -> Element {
                     toast_sequence,
                 }
             }
+            if show_delete_all_networks_confirm() {
+                DeleteAllNetworksConfirmationPrompt {
+                    is_busy,
+                    show_prompt: show_delete_all_networks_confirm,
+                    setup_profile,
+                    lab_state,
+                    operation_prompt,
+                    toast,
+                    toast_sequence,
+                    amount_text,
+                    polar_server_name,
+                    polar_bridge_url,
+                    polar_block_height,
+                    bridge_connection_error,
+                    autopilot_enabled,
+                    autopilot_status,
+                }
+            }
         }
     }
 }
@@ -1207,6 +1296,88 @@ fn CompleteResetConfirmationPrompt(
                             ).await;
                         },
                         "Reset"
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn DeleteAllNetworksConfirmationPrompt(
+    mut is_busy: Signal<bool>,
+    mut show_prompt: Signal<bool>,
+    setup_profile: Signal<SetupProfile>,
+    lab_state: Signal<Option<LabState>>,
+    operation_prompt: Signal<Option<OperationPrompt>>,
+    toast: Signal<Option<Toast>>,
+    toast_sequence: Signal<u64>,
+    amount_text: Signal<String>,
+    polar_server_name: Signal<String>,
+    polar_bridge_url: Signal<String>,
+    polar_block_height: Signal<String>,
+    bridge_connection_error: Signal<String>,
+    autopilot_enabled: Signal<bool>,
+    autopilot_status: Signal<String>,
+) -> Element {
+    let active_delete_prompt = operation_prompt();
+
+    rsx! {
+        div {
+            class: "operation-prompt-backdrop",
+            role: "presentation",
+            div {
+                class: "operation-prompt operation-prompt--error",
+                role: "dialog",
+                aria_modal: "true",
+                aria_label: "Are you sure?",
+                div { class: "operation-prompt__status" }
+                div { class: "operation-prompt__body",
+                    if is_busy() {
+                        span { class: "eyebrow", "Pending operation" }
+                        h2 { "Delete all Polar networks" }
+                        p {
+                            "{active_delete_prompt.as_ref().map(|prompt| prompt.message.as_str()).unwrap_or(\"Starting delete request...\")}"
+                        }
+                    } else {
+                        span { class: "eyebrow", "Action required" }
+                        h2 { "Are you sure?" }
+                        p { "This deletes every Polar network visible to the local Polar bridge and locks the app setup. This action only runs from this confirmation." }
+                    }
+                }
+                div { class: "operation-prompt__actions",
+                    if !is_busy() {
+                        button {
+                            class: "secondary-action",
+                            r#type: "button",
+                            onclick: move |_| show_prompt.set(false),
+                            "Cancel"
+                        }
+                        button {
+                            id: "polar-delete-all-networks-confirm",
+                            class: "secondary-action danger-action",
+                            r#type: "button",
+                            disabled: delete_all_networks_button_disabled(is_busy()),
+                            onclick: move |_| async move {
+                                delete_all_networks_from_setup(
+                                    is_busy,
+                                    setup_profile,
+                                    lab_state,
+                                    operation_prompt,
+                                    toast,
+                                    toast_sequence,
+                                    amount_text,
+                                    polar_server_name,
+                                    polar_bridge_url,
+                                    polar_block_height,
+                                    bridge_connection_error,
+                                    autopilot_enabled,
+                                    autopilot_status,
+                                ).await;
+                                show_prompt.set(false);
+                            },
+                            "Delete all"
+                        }
                     }
                 }
             }
@@ -1491,8 +1662,7 @@ fn treasury_tras_ready(lab_state: Option<&LabState>) -> bool {
 
     lab_state
         .map(|state| {
-            let treasury_books =
-                verified_tra_count(state, DemoNodeId::GameTreasury, BOOK_ITEM_ID);
+            let treasury_books = verified_tra_count(state, DemoNodeId::GameTreasury, BOOK_ITEM_ID);
             let treasury_apples =
                 verified_tra_count(state, DemoNodeId::GameTreasury, APPLE_ITEM_ID);
 
@@ -1577,6 +1747,18 @@ fn is_bridge_connection_error(message: &str) -> bool {
         || message.contains("Failed to fetch")
 }
 
+fn is_retryable_polar_start_error(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("port is already allocated")
+        || message.contains("ports are not available")
+        || message.contains("only one usage of each socket address")
+        || message.contains("orphan containers")
+        || message.contains("could not start network")
+        || message.contains("is not listed by the current polar bridge")
+        || message.contains("timed out after")
+        || message.contains("timeout")
+}
+
 fn bridge_step_error_message(_message: impl AsRef<str>) -> String {
     "Error: Cannot connect to Polar, revisit 1. Environment step 04 for more info".to_string()
 }
@@ -1659,7 +1841,9 @@ fn reset_to_game_treasury_tras_step(mut profile: SetupProfile) -> SetupProfile {
 fn lab_state_after_reset_to_game_treasury_tras_step() -> Option<LabState> {
     let current = storage_service::load_lab_state_snapshot();
     let next = current.map(|mut state| {
-        state.nodes.retain(|node| node.node_id == DemoNodeId::GameTreasury);
+        state
+            .nodes
+            .retain(|node| node.node_id == DemoNodeId::GameTreasury);
         state.tra_items.clear();
         state.game_treasury.owned_items.clear();
         state.game_treasury.inventory_value_sats = 0;
@@ -1693,9 +1877,12 @@ fn reset_to_demo_nodes_step(mut profile: SetupProfile) -> SetupProfile {
 
 fn lab_state_after_reset_to_demo_nodes_step(profile: SetupProfile) -> Option<LabState> {
     let current = storage_service::load_lab_state_snapshot();
-    let mut state = current.unwrap_or_else(|| lightning_service::default_lab_state(profile.clone()));
+    let mut state =
+        current.unwrap_or_else(|| lightning_service::default_lab_state(profile.clone()));
     state.profile = profile;
-    state.nodes.retain(|node| node.node_id == DemoNodeId::GameTreasury);
+    state
+        .nodes
+        .retain(|node| node.node_id == DemoNodeId::GameTreasury);
     state.npc_item_transfers.clear();
     if state.game_treasury.status != crate::client::models::TreasuryStatus::Ready {
         state = lightning_service::TraService::prepare_game_treasury(state).ok()?;
@@ -1936,7 +2123,9 @@ mod tests {
         let reset_profile = reset_to_demo_nodes_step(profile.clone());
         let state = lab_state_after_reset_to_demo_nodes_step(reset_profile.clone());
 
-        assert!(state.as_ref().is_some_and(|state| treasury_tras_ready(Some(state))));
+        assert!(state
+            .as_ref()
+            .is_some_and(|state| treasury_tras_ready(Some(state))));
         assert_eq!(
             polar_wizard_step(&reset_profile, state.as_ref()).order(),
             PolarWizardStep::UserNodes.order()
@@ -2094,6 +2283,90 @@ mod tests {
     }
 
     #[test]
+    fn autopilot_retries_polar_start_port_collisions() {
+        assert!(is_retryable_polar_start_error(
+            "Polar bridge could not start network 13. ports are not available"
+        ));
+        assert!(is_retryable_polar_start_error(
+            "Bind for 0.0.0.0:64613 failed: port is already allocated"
+        ));
+        assert!(is_retryable_polar_start_error(
+            "Polar bridge POST http://localhost:37373/api/mcp/execute timed out after 30 seconds."
+        ));
+        assert!(is_retryable_polar_start_error(
+            "Polar network autopilot-1779143204525-1 is not listed by the current Polar bridge."
+        ));
+        assert!(!is_retryable_polar_start_error(
+            "Enter a Polar server name before creating it."
+        ));
+    }
+
+    #[test]
+    fn autopilot_server_step_timeout_has_actionable_message() {
+        assert_eq!(
+            autopilot_step_timeout_message("finding or creating the Polar server", 20),
+            "Timed out after 20s while finding or creating the Polar server. Autopilot stopped instead of waiting forever."
+        );
+    }
+
+    #[test]
+    fn delete_all_networks_progress_message_includes_processed_and_total() {
+        assert_eq!(
+            delete_all_networks_progress_message(8, 8),
+            "Deleting 8/8 polar networks visible to the local bridge..."
+        );
+    }
+
+    #[test]
+    fn delete_all_networks_uses_counting_message_before_total_is_known() {
+        assert_eq!(
+            delete_all_networks_started_message(" http://localhost:37373 "),
+            "Delete request started. Checking Polar bridge at http://localhost:37373..."
+        );
+        assert_eq!(
+            delete_all_networks_counting_message(),
+            "Finding polar networks visible to the local bridge... This will fail after 300s if the bridge does not answer."
+        );
+        assert_eq!(
+            delete_all_networks_progress_message(0, 0),
+            "No polar networks visible to the local bridge."
+        );
+    }
+
+    #[test]
+    fn delete_all_networks_timeout_message_is_actionable() {
+        assert_eq!(
+            delete_all_networks_timeout_message(300),
+            "Timed out after 300s while deleting Polar networks. The app stopped waiting so setup is not left busy forever."
+        );
+    }
+
+    #[test]
+    fn delete_all_networks_button_depends_only_on_busy_state() {
+        assert!(!delete_all_networks_button_disabled(false));
+        assert!(delete_all_networks_button_disabled(true));
+    }
+
+    #[test]
+    fn delete_all_networks_uses_current_bridge_input_before_step_one_is_saved() {
+        let mut profile = SetupProfile::default();
+        profile.connection_status = ConnectionStatus::NotConfigured;
+        profile.polar_automation.bridge_url = "http://old-bridge:37373".to_string();
+
+        let delete_profile =
+            delete_all_networks_profile_from_input(profile, " http://localhost:37373 ".to_string());
+
+        assert_eq!(
+            delete_profile.connection_status,
+            ConnectionStatus::NotConfigured
+        );
+        assert_eq!(
+            delete_profile.polar_automation.bridge_url,
+            "http://localhost:37373"
+        );
+    }
+
+    #[test]
     fn bridge_step_error_points_back_to_localhost_step_one() {
         let message = bridge_step_error_message("TypeError: Failed to fetch");
 
@@ -2119,6 +2392,683 @@ mod tests {
             "environment"
         );
         assert_eq!(PolarConnectionTab::Polar.storage_value(), "polar");
+    }
+
+    #[test]
+    fn autopilot_server_names_are_fresh_and_predictable() {
+        assert_eq!(
+            autopilot_server_name_from_timestamp(1_779_120_000),
+            "autopilot-1779120000"
+        );
+    }
+}
+
+async fn run_polar_setup_autopilot(
+    mut is_busy: Signal<bool>,
+    mut setup_profile: Signal<SetupProfile>,
+    mut lab_state: Signal<Option<LabState>>,
+    operation_prompt: Signal<Option<OperationPrompt>>,
+    prompt_sequence: Signal<u64>,
+    toast: Signal<Option<Toast>>,
+    toast_sequence: Signal<u64>,
+    mut bridge_connection_error: Signal<String>,
+    amount_text: String,
+    mut polar_server_name: Signal<String>,
+    polar_bridge_url: String,
+    mut polar_block_height: Signal<String>,
+    mut autopilot_enabled: Signal<bool>,
+    mut autopilot_status: Signal<String>,
+) {
+    is_busy.set(true);
+    autopilot_enabled.set(true);
+    autopilot_status.set("Starting setup run...".to_string());
+    let started_at = chrono::Utc::now();
+    let operation_id = begin_operation_prompt(
+        operation_prompt,
+        prompt_sequence,
+        "Polar autopilot",
+        "Starting setup run...",
+        false,
+    )
+    .await;
+
+    let result = run_polar_setup_autopilot_inner(
+        setup_profile,
+        lab_state,
+        operation_prompt,
+        operation_id,
+        &mut bridge_connection_error,
+        amount_text,
+        &mut polar_server_name,
+        polar_bridge_url,
+        &mut polar_block_height,
+        &mut autopilot_status,
+    )
+    .await;
+
+    let elapsed_seconds = (chrono::Utc::now() - started_at).num_seconds().max(0);
+    close_operation_prompt(operation_prompt, operation_id);
+
+    match result {
+        Ok(state) => {
+            let message = if elapsed_seconds <= POLAR_AUTOPILOT_TARGET_SECONDS {
+                format!(
+                    "Autopilot completed in {elapsed_seconds}s. Final setup verification passed."
+                )
+            } else {
+                format!(
+                    "Autopilot completed in {elapsed_seconds}s and verified setup. Target is {POLAR_AUTOPILOT_TARGET_SECONDS}s."
+                )
+            };
+            setup_profile.set(state.profile.clone());
+            lab_state.set(Some(state));
+            autopilot_status.set(message.clone());
+            push_toast(toast, toast_sequence, message, ToastTone::Success);
+        }
+        Err(message) => {
+            autopilot_status.set(format!("Stopped: {message}"));
+            push_toast(toast, toast_sequence, message, ToastTone::Error);
+        }
+    }
+
+    is_busy.set(false);
+}
+
+async fn delete_all_networks_from_setup(
+    mut is_busy: Signal<bool>,
+    mut setup_profile: Signal<SetupProfile>,
+    mut lab_state: Signal<Option<LabState>>,
+    mut operation_prompt: Signal<Option<OperationPrompt>>,
+    toast: Signal<Option<Toast>>,
+    toast_sequence: Signal<u64>,
+    mut amount_text: Signal<String>,
+    mut polar_server_name: Signal<String>,
+    mut polar_bridge_url: Signal<String>,
+    mut polar_block_height: Signal<String>,
+    mut bridge_connection_error: Signal<String>,
+    mut autopilot_enabled: Signal<bool>,
+    mut autopilot_status: Signal<String>,
+) {
+    is_busy.set(true);
+    let delete_profile =
+        delete_all_networks_profile_from_input(setup_profile(), polar_bridge_url());
+    let bridge_url = delete_profile.polar_automation.bridge_url.clone();
+    operation_prompt.set(Some(OperationPrompt {
+        operation_id: 90_000,
+        title: "Delete all Polar networks".to_string(),
+        message: delete_all_networks_started_message(&bridge_url),
+        tone: ToastTone::Error,
+        is_pending: true,
+        can_cancel: false,
+        cancel_requested: false,
+    }));
+    operation_prompt.set(Some(OperationPrompt {
+        operation_id: 90_000,
+        title: "Delete all Polar networks".to_string(),
+        message: delete_all_networks_counting_message(),
+        tone: ToastTone::Error,
+        is_pending: true,
+        can_cancel: false,
+        cancel_requested: false,
+    }));
+
+    let mut progress_prompt = operation_prompt;
+    match with_delete_all_networks_timeout(
+        delete_all_polar_networks_with_progress(delete_profile, move |processed, total| {
+            progress_prompt.set(Some(OperationPrompt {
+                operation_id: 90_000,
+                title: "Delete all Polar networks".to_string(),
+                message: delete_all_networks_progress_message(processed, total),
+                tone: ToastTone::Error,
+                is_pending: true,
+                can_cancel: false,
+                cancel_requested: false,
+            }));
+        }),
+        POLAR_DELETE_ALL_TIMEOUT_SECONDS,
+    )
+    .await
+    {
+        Ok((default_profile, deleted_count)) => {
+            setup_profile.set(default_profile.clone());
+            lab_state.set(None);
+            amount_text.set(default_profile.sats_per_transaction.to_string());
+            polar_server_name.set(default_profile.network_name.clone());
+            polar_bridge_url.set(default_profile.polar_automation.bridge_url.clone());
+            polar_block_height.set("0".to_string());
+            bridge_connection_error.set(String::new());
+            autopilot_enabled.set(false);
+            autopilot_status.set("Ready".to_string());
+            operation_prompt.set(None);
+            push_toast(
+                toast,
+                toast_sequence,
+                format!("Deleted {deleted_count} Polar network(s)."),
+                ToastTone::Success,
+            );
+        }
+        Err(message) => {
+            operation_prompt.set(Some(OperationPrompt {
+                operation_id: 90_001,
+                title: "Delete all Polar networks failed".to_string(),
+                message: message.clone(),
+                tone: ToastTone::Error,
+                is_pending: false,
+                can_cancel: false,
+                cancel_requested: false,
+            }));
+            push_toast(toast, toast_sequence, message, ToastTone::Error);
+        }
+    }
+
+    is_busy.set(false);
+}
+
+fn delete_all_networks_started_message(bridge_url: &str) -> String {
+    format!(
+        "Delete request started. Checking Polar bridge at {}...",
+        bridge_url.trim()
+    )
+}
+
+fn delete_all_networks_counting_message() -> String {
+    format!(
+        "Finding polar networks visible to the local bridge... This will fail after {POLAR_DELETE_ALL_TIMEOUT_SECONDS}s if the bridge does not answer."
+    )
+}
+
+fn delete_all_networks_progress_message(processed: usize, total: usize) -> String {
+    if total == 0 {
+        return "No polar networks visible to the local bridge.".to_string();
+    }
+
+    format!("Deleting {processed}/{total} polar networks visible to the local bridge...")
+}
+
+async fn with_delete_all_networks_timeout<F, T>(future: F, seconds: u32) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    match select(
+        future.boxed_local(),
+        delete_all_networks_timeout_delay(seconds).boxed_local(),
+    )
+    .await
+    {
+        Either::Left((result, _)) => result,
+        Either::Right((_, _)) => Err(delete_all_networks_timeout_message(seconds)),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn delete_all_networks_timeout_delay(seconds: u32) {
+    gloo_timers::future::TimeoutFuture::new(seconds.saturating_mul(1_000)).await;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn delete_all_networks_timeout_delay(seconds: u32) {
+    futures_timer::Delay::new(std::time::Duration::from_secs(seconds as u64)).await;
+}
+
+fn delete_all_networks_timeout_message(seconds: u32) -> String {
+    format!(
+        "Timed out after {seconds}s while deleting Polar networks. The app stopped waiting so setup is not left busy forever."
+    )
+}
+
+fn delete_all_networks_button_disabled(is_busy: bool) -> bool {
+    is_busy
+}
+
+fn delete_all_networks_profile_from_input(
+    mut profile: SetupProfile,
+    polar_bridge_url: String,
+) -> SetupProfile {
+    profile.polar_automation =
+        polar_automation_from_input(polar_bridge_url, profile.polar_automation);
+    profile
+}
+
+async fn run_polar_setup_autopilot_inner(
+    mut setup_profile: Signal<SetupProfile>,
+    mut lab_state: Signal<Option<LabState>>,
+    operation_prompt: Signal<Option<OperationPrompt>>,
+    operation_id: u64,
+    bridge_connection_error: &mut Signal<String>,
+    amount_text: String,
+    polar_server_name: &mut Signal<String>,
+    polar_bridge_url: String,
+    polar_block_height: &mut Signal<String>,
+    autopilot_status: &mut Signal<String>,
+) -> Result<LabState, String> {
+    let requested_server_name = fresh_autopilot_server_name();
+    polar_server_name.set(requested_server_name.clone());
+    autopilot_status.set(format!(
+        "Using fresh Polar server name {requested_server_name}..."
+    ));
+
+    let mut profile = profile_from_inputs(
+        amount_text,
+        requested_server_name.clone(),
+        SetupMode::ServerConfig,
+        polar_automation_for_requested_server(
+            polar_bridge_url.clone(),
+            requested_server_name,
+            setup_profile().polar_automation,
+        ),
+        setup_profile(),
+    )?;
+
+    if profile.is_connected() {
+        profile.connection_status = ConnectionStatus::NotConfigured;
+        profile.polar_automation.network_id.clear();
+        profile.polar_block_height_confirmed = false;
+        profile.game_treasury_ready = false;
+        profile.game_treasury_funded_sats = 0;
+        profile.last_verified_at = None;
+        setup_profile.set(profile.clone());
+        lab_state.set(None);
+        storage_service::clear_lab_state_snapshot();
+    }
+
+    if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::BridgeUrl {
+        update_operation_prompt(
+            operation_prompt,
+            operation_id,
+            "Step 1 of 8: connecting to the Polar bridge...",
+            ToastTone::Info,
+            true,
+            false,
+        )
+        .await;
+        autopilot_status.set("Step 1 of 8: Bridge URL".to_string());
+        profile.connection_status = ConnectionStatus::SavedOffline;
+        profile.last_verified_at = None;
+        profile.polar_automation.network_id.clear();
+        profile = verify_polar_bridge(profile).await.map_err(|message| {
+            *bridge_connection_error.write() = bridge_step_error_message(message.clone());
+            bridge_step_error_message(message)
+        })?;
+        bridge_connection_error.set(String::new());
+        setup_profile.set(profile.clone());
+        lab_state.set(None);
+    }
+
+    if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::ServerName {
+        update_operation_prompt(
+            operation_prompt,
+            operation_id,
+            "Step 2 of 8: finding or creating the named Polar server...",
+            ToastTone::Info,
+            true,
+            false,
+        )
+        .await;
+        autopilot_status.set("Step 2 of 8: Server Name".to_string());
+        let mut result = None;
+        let mut last_error = None;
+        for attempt in 1..=POLAR_AUTOPILOT_SERVER_ATTEMPTS {
+            if profile.network_name.trim().is_empty() {
+                profile.network_name = polar_server_name().trim().to_string();
+            }
+            if profile.polar_automation.network_id.trim().is_empty() {
+                profile.polar_automation.network_id = profile.network_name.trim().to_string();
+            }
+
+            match ensure_polar_server_for_autopilot(profile.clone()).await {
+                Ok(server_result) => {
+                    result = Some(server_result);
+                    break;
+                }
+                Err(message)
+                    if attempt < POLAR_AUTOPILOT_SERVER_ATTEMPTS
+                        && is_retryable_polar_start_error(&message) =>
+                {
+                    last_error = Some(message);
+                    cleanup_failed_autopilot_server(&profile).await;
+                    let retry_server_name = fresh_autopilot_server_name();
+                    polar_server_name.set(retry_server_name.clone());
+                    profile.network_name = retry_server_name.clone();
+                    profile.polar_automation.network_id = retry_server_name;
+                    profile.polar_block_height_confirmed = false;
+                    profile.game_treasury_ready = false;
+                    profile.game_treasury_funded_sats = 0;
+                    setup_profile.set(profile.clone());
+                    lab_state.set(None);
+                    update_operation_prompt(
+                        operation_prompt,
+                        operation_id,
+                        format!(
+                            "Step 2 retry {}/{}: previous Polar port/start allocation failed. Trying fresh server {}...",
+                            attempt + 1,
+                            POLAR_AUTOPILOT_SERVER_ATTEMPTS,
+                            profile.network_name
+                        ),
+                        ToastTone::Info,
+                        true,
+                        false,
+                    )
+                    .await;
+                    autopilot_status.set(format!(
+                        "Step 2 retry {}/{}: Server Name",
+                        attempt + 1,
+                        POLAR_AUTOPILOT_SERVER_ATTEMPTS
+                    ));
+                }
+                Err(message) if is_retryable_polar_start_error(&message) => {
+                    cleanup_failed_autopilot_server(&profile).await;
+                    return Err(format!(
+                        "Polar server start failed after {POLAR_AUTOPILOT_SERVER_ATTEMPTS} fresh server attempts: {message}"
+                    ));
+                }
+                Err(message) => return Err(message),
+            }
+        }
+        let result = result.ok_or_else(|| {
+            last_error.unwrap_or_else(|| "Polar server could not be prepared.".to_string())
+        })?;
+        profile.polar_automation = result.profile;
+        profile.connection_status = ConnectionStatus::SavedOffline;
+        profile.polar_block_height_confirmed = false;
+        profile.game_treasury_ready = false;
+        profile.game_treasury_funded_sats = 0;
+        profile.last_verified_at = None;
+        setup_profile.set(profile.clone());
+        lab_state.set(None);
+    }
+
+    if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::GameTreasury {
+        update_operation_prompt(
+            operation_prompt,
+            operation_id,
+            "Step 3 of 8: creating and funding the Game Treasury...",
+            ToastTone::Info,
+            true,
+            false,
+        )
+        .await;
+        autopilot_status.set("Step 3 of 8: Game Treasury (Sats)".to_string());
+        let mut state = None;
+        let mut last_error = None;
+        for attempt in 1..=POLAR_AUTOPILOT_SERVER_ATTEMPTS {
+            match prepare_game_treasury(profile.clone()).await {
+                Ok(treasury_state) => {
+                    state = Some(treasury_state);
+                    break;
+                }
+                Err(message)
+                    if attempt < POLAR_AUTOPILOT_SERVER_ATTEMPTS
+                        && is_retryable_polar_start_error(&message) =>
+                {
+                    last_error = Some(message);
+                    cleanup_failed_autopilot_server(&profile).await;
+                    let retry_server_name = fresh_autopilot_server_name();
+                    polar_server_name.set(retry_server_name.clone());
+                    profile.network_name = retry_server_name.clone();
+                    profile.polar_automation.network_id = retry_server_name;
+                    profile.connection_status = ConnectionStatus::SavedOffline;
+                    profile.polar_block_height_confirmed = false;
+                    profile.game_treasury_ready = false;
+                    profile.game_treasury_funded_sats = 0;
+                    setup_profile.set(profile.clone());
+                    lab_state.set(None);
+                    update_operation_prompt(
+                        operation_prompt,
+                        operation_id,
+                        format!(
+                            "Step 3 retry {}/{}: Polar start allocation failed. Trying fresh server {}...",
+                            attempt + 1,
+                            POLAR_AUTOPILOT_SERVER_ATTEMPTS,
+                            profile.network_name
+                        ),
+                        ToastTone::Info,
+                        true,
+                        false,
+                    )
+                    .await;
+                    autopilot_status.set(format!(
+                        "Step 3 retry {}/{}: Game Treasury (Sats)",
+                        attempt + 1,
+                        POLAR_AUTOPILOT_SERVER_ATTEMPTS
+                    ));
+
+                    match ensure_polar_server_for_autopilot(profile.clone()).await {
+                        Ok(result) => {
+                            profile.polar_automation = result.profile;
+                            profile.connection_status = ConnectionStatus::SavedOffline;
+                            profile.polar_block_height_confirmed = false;
+                            profile.game_treasury_ready = false;
+                            profile.game_treasury_funded_sats = 0;
+                            profile.last_verified_at = None;
+                            setup_profile.set(profile.clone());
+                            lab_state.set(None);
+                        }
+                        Err(message)
+                            if attempt < POLAR_AUTOPILOT_SERVER_ATTEMPTS
+                                && is_retryable_polar_start_error(&message) =>
+                        {
+                            last_error = Some(message);
+                            cleanup_failed_autopilot_server(&profile).await;
+                            continue;
+                        }
+                        Err(message) if is_retryable_polar_start_error(&message) => {
+                            cleanup_failed_autopilot_server(&profile).await;
+                            return Err(format!(
+                                "Polar server start failed after {POLAR_AUTOPILOT_SERVER_ATTEMPTS} fresh server attempts: {message}"
+                            ));
+                        }
+                        Err(message) => return Err(message),
+                    }
+                }
+                Err(message) if is_retryable_polar_start_error(&message) => {
+                    cleanup_failed_autopilot_server(&profile).await;
+                    return Err(format!(
+                        "Game Treasury setup failed after {POLAR_AUTOPILOT_SERVER_ATTEMPTS} fresh server attempts: {message}"
+                    ));
+                }
+                Err(message) => return Err(message),
+            }
+        }
+        let state = state.ok_or_else(|| {
+            last_error.unwrap_or_else(|| "Game Treasury could not be prepared.".to_string())
+        })?;
+        profile = state.profile.clone();
+        setup_profile.set(profile.clone());
+        lab_state.set(Some(state));
+    }
+
+    if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::GameTreasuryTras {
+        update_operation_prompt(
+            operation_prompt,
+            operation_id,
+            "Step 4 of 8: preparing treasury TRA inventory...",
+            ToastTone::Info,
+            true,
+            false,
+        )
+        .await;
+        autopilot_status.set("Step 4 of 8: Game Treasury (TRAs)".to_string());
+        let state = prepare_game_treasury_tras(profile.clone()).await?;
+        profile = state.profile.clone();
+        setup_profile.set(profile.clone());
+        lab_state.set(Some(state));
+    }
+
+    if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::UserNodes {
+        update_operation_prompt(
+            operation_prompt,
+            operation_id,
+            "Step 5 of 8: creating Alice, Bob, and Carol...",
+            ToastTone::Info,
+            true,
+            false,
+        )
+        .await;
+        autopilot_status.set("Step 5 of 8: User Nodes".to_string());
+        let progress_prompt = operation_prompt;
+        let progress_operation_id = operation_id;
+        let state = create_polar_demo_nodes_with_progress(profile.clone(), move |message| {
+            update_operation_prompt_now(
+                progress_prompt,
+                progress_operation_id,
+                message,
+                ToastTone::Info,
+                true,
+                false,
+            );
+        })
+        .await?;
+        polar_block_height.set(state.block_height.to_string());
+        profile = state.profile.clone();
+        setup_profile.set(profile.clone());
+        lab_state.set(Some(state));
+    }
+
+    if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::NpcItemTransfers {
+        update_operation_prompt(
+            operation_prompt,
+            operation_id,
+            "Step 6 of 8: transferring NPC starting items...",
+            ToastTone::Info,
+            true,
+            false,
+        )
+        .await;
+        autopilot_status.set("Step 6 of 8: NPC Item Transfers".to_string());
+        let state = transfer_npc_starting_items(profile.clone()).await?;
+        profile = state.profile.clone();
+        setup_profile.set(profile.clone());
+        lab_state.set(Some(state));
+    }
+
+    if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::BlockHeight {
+        update_operation_prompt(
+            operation_prompt,
+            operation_id,
+            "Step 7 of 8: saving the app block-height baseline...",
+            ToastTone::Info,
+            true,
+            false,
+        )
+        .await;
+        autopilot_status.set("Step 7 of 8: Block Height".to_string());
+        let fallback_height = lab_state()
+            .map(|state| state.block_height.to_string())
+            .unwrap_or_else(|| "0".to_string());
+        let block_height = block_height_from_input(polar_block_height()).or_else(|_| {
+            polar_block_height.set(fallback_height.clone());
+            block_height_from_input(fallback_height)
+        })?;
+        let state = confirm_polar_block_height(profile.clone(), block_height).await?;
+        polar_block_height.set(state.block_height.to_string());
+        profile = state.profile.clone();
+        setup_profile.set(profile.clone());
+        lab_state.set(Some(state));
+    }
+
+    if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::Complete {
+        update_operation_prompt(
+            operation_prompt,
+            operation_id,
+            "Step 8 of 8: unlocking routes...",
+            ToastTone::Info,
+            true,
+            false,
+        )
+        .await;
+        autopilot_status.set("Step 8 of 8: Unlock Routes".to_string());
+        let state = complete_polar_setup(profile.clone()).await?;
+        profile = state.profile.clone();
+        setup_profile.set(profile.clone());
+        lab_state.set(Some(state));
+    }
+
+    update_operation_prompt(
+        operation_prompt,
+        operation_id,
+        "Testing completed setup again...",
+        ToastTone::Info,
+        true,
+        false,
+    )
+    .await;
+    autopilot_status.set("Testing completed setup again...".to_string());
+    let verified_state = get_lab_state(profile).await?;
+    if !verified_state.profile.is_connected() {
+        return Err("Autopilot verification did not finish with a connected setup.".to_string());
+    }
+
+    Ok(verified_state)
+}
+
+fn fresh_autopilot_server_name() -> String {
+    let sequence = POLAR_AUTOPILOT_NAME_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let timestamp = chrono::Utc::now().timestamp_millis();
+    if sequence == 0 {
+        autopilot_server_name_from_timestamp(timestamp)
+    } else {
+        format!(
+            "{}-{sequence}",
+            autopilot_server_name_from_timestamp(timestamp)
+        )
+    }
+}
+
+fn autopilot_server_name_from_timestamp(timestamp: i64) -> String {
+    format!("autopilot-{timestamp}")
+}
+
+async fn ensure_polar_server_for_autopilot(
+    profile: SetupProfile,
+) -> Result<PolarServerEnsureResult, String> {
+    with_autopilot_timeout(
+        ensure_polar_server(profile),
+        "finding or creating the Polar server",
+        POLAR_AUTOPILOT_SERVER_STEP_TIMEOUT_SECONDS,
+    )
+    .await
+}
+
+async fn with_autopilot_timeout<F, T>(
+    future: F,
+    label: &'static str,
+    seconds: u32,
+) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    match select(
+        future.boxed_local(),
+        autopilot_timeout_delay(seconds).boxed_local(),
+    )
+    .await
+    {
+        Either::Left((result, _)) => result,
+        Either::Right((_, _)) => Err(autopilot_step_timeout_message(label, seconds)),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn autopilot_timeout_delay(seconds: u32) {
+    gloo_timers::future::TimeoutFuture::new(seconds.saturating_mul(1_000)).await;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn autopilot_timeout_delay(seconds: u32) {
+    futures_timer::Delay::new(std::time::Duration::from_secs(seconds as u64)).await;
+}
+
+fn autopilot_step_timeout_message(label: &str, seconds: u32) -> String {
+    format!(
+        "Timed out after {seconds}s while {label}. Autopilot stopped instead of waiting forever."
+    )
+}
+
+async fn cleanup_failed_autopilot_server(profile: &SetupProfile) {
+    let network_name = profile.network_name.trim();
+    let network_id = profile.polar_automation.network_id.trim();
+    if network_name.starts_with("autopilot-") || network_id.starts_with("autopilot-") {
+        let _ = delete_created_polar_server(profile.clone()).await;
     }
 }
 
@@ -2322,7 +3272,7 @@ async fn prepare_treasury_tras_step(
         operation_prompt,
         prompt_sequence,
         "Game Treasury (TRAs)",
-        "Creating treasury-owned TRA inventory items...",
+        "Creating the Polar Taproot node and treasury-owned TRA inventory items...",
         false,
     )
     .await;

@@ -2,13 +2,11 @@ use dioxus::prelude::dioxus_router::Navigator;
 use dioxus::prelude::*;
 use dioxus_i18n::t;
 
-use crate::client::components::game::LabStatusWidget;
-use crate::client::components::network::NetworkRouteVisual;
-use crate::client::components::toast::{OperationPrompt, Toast, ToastTone};
-use crate::client::models::{DemoNodeId, LabState, RouteStatus, SetupProfile};
+use crate::client::components::game::{HistoryItems, LabStatusWidget};
+use crate::client::components::toast::{OperationPrompt, ToastTone};
+use crate::client::models::{DemoNodeId, LabState, SetupProfile};
 use crate::client::services::lightning_server_functions::{
-    create_invoice_and_maybe_autosend, get_lab_state_or_recover, open_trade_route,
-    recover_if_polar_lab_unhealthy, wait_for_next_block, PolarLabRecovery,
+    get_lab_state_or_recover, PolarLabRecovery,
 };
 use crate::client::Route;
 
@@ -17,12 +15,8 @@ pub fn DebugNetwork() -> Element {
     let active_route = use_route::<Route>();
     let setup_profile = use_context::<Signal<SetupProfile>>();
     let mut lab_state = use_context::<Signal<Option<LabState>>>();
-    let toast = use_context::<Signal<Option<Toast>>>();
     let operation_prompt = use_context::<Signal<Option<OperationPrompt>>>();
-    let toast_sequence = use_signal(|| 40_000_u64);
     let prompt_sequence = use_signal(|| 60_000_u64);
-    let mut is_busy = use_signal(|| false);
-    let mut autosend_enabled = use_signal(|| true);
     let navigator = navigator();
 
     use_effect(move || {
@@ -92,17 +86,55 @@ pub fn DebugNetwork() -> Element {
 
             section { class: "lab-panel",
                 div { class: "section-heading",
-                    span { class: "eyebrow", "Polar nodes" }
-                    h2 { "Lightning nodes" }
+                    span { class: "eyebrow", "Polar network" }
+                    h2 { "Nodes" }
                 }
-                div { class: "record-list",
-                    for node in state.nodes.clone() {
-                        div { class: "record-row",
-                            strong { "{node.alias}" }
-                            span { "{node.role.label()} / {node.status.label()}" }
-                            span { "Wallet: {node.wallet_balance_sats} sats" }
-                            span { "Channel: {node.channel_balance_sats} sats" }
+                div { class: "tra-table node-table", role: "table", aria_label: "Network node rows",
+                    div { class: "tra-table__row node-table__row tra-table__row--head", role: "row",
+                        span { role: "columnheader", "Node" }
+                        span { role: "columnheader", "Layer" }
+                        span { role: "columnheader", "Purpose" }
+                        span { role: "columnheader", "Status" }
+                        span { role: "columnheader", "Balances" }
+                        span { role: "columnheader", "Details" }
+                    }
+                    div { class: "tra-table__row node-table__row", role: "row",
+                        span {
+                            role: "cell",
+                            title: "{state.profile.polar_automation.bitcoin_backend_name}",
+                            "{state.profile.polar_automation.bitcoin_backend_name}"
                         }
+                        span { role: "cell", "Bitcoin" }
+                        span { role: "cell", "Regtest backend" }
+                        span { role: "cell", "Started" }
+                        span { role: "cell", "Block {state.block_height}" }
+                        span { role: "cell", "Mines funding and channel-confirmation blocks" }
+                    }
+                    div { class: "tra-table__row node-table__row", role: "row",
+                        span { role: "cell", title: "{state.game_treasury.node_label}", "{state.game_treasury.node_label}" }
+                        span { role: "cell", "Lightning" }
+                        span { role: "cell", "Game treasury" }
+                        span { role: "cell", "{state.game_treasury.status.label()}" }
+                        span { role: "cell", "{state.game_treasury.spendable_sats} sats" }
+                        span { role: "cell", "Inventory value: {state.game_treasury.inventory_value_sats} sats" }
+                    }
+                    for node in state.nodes.clone() {
+                        div { class: "tra-table__row node-table__row", role: "row",
+                            span { role: "cell", title: "{node.alias}", "{node.alias}" }
+                            span { role: "cell", "Lightning" }
+                            span { role: "cell", "{node.role.label()}" }
+                            span { role: "cell", "{node.status.label()}" }
+                            span { role: "cell", "{node.wallet_balance_sats} sats" }
+                            span { role: "cell", "Channel balance: {node.channel_balance_sats} sats" }
+                        }
+                    }
+                    div { class: "tra-table__row node-table__row", role: "row",
+                        span { role: "cell", "Taproot Assets" }
+                        span { role: "cell", "Taproot" }
+                        span { role: "cell", "TRA inventory" }
+                        span { role: "cell", "{taproot_node_status(state.tra_items.len())}" }
+                        span { role: "cell", "{state.tra_items.len()} instances" }
+                        span { role: "cell", "{taproot_owner_summary(&state)}" }
                     }
                 }
             }
@@ -139,167 +171,6 @@ pub fn DebugNetwork() -> Element {
                                 span { role: "cell", "{item.owner_node.label()}" }
                                 span { role: "cell", "{item.ownership_status.label()}" }
                                 span { role: "cell", "{item.transfer_status.label()}" }
-                            }
-                        }
-                    }
-                }
-            }
-
-            section { class: "lab-panel",
-                div { class: "section-heading section-heading--row",
-                    div {
-                        span { class: "eyebrow", "Channels" }
-                        h2 { "Trade route rows" }
-                    }
-                    button {
-                        class: if autosend_enabled() { "segment segment--active" } else { "segment" },
-                        r#type: "button",
-                        onclick: move |_| autosend_enabled.set(!autosend_enabled()),
-                        if autosend_enabled() {
-                            "AutoSend On"
-                        } else {
-                            "AutoSend Off"
-                        }
-                    }
-                }
-                p { class: "muted-copy",
-                    "AutoSend is a lab/demo feature. It uses the configured sats-per-transaction amount as the maximum per automatic payment."
-                }
-                div { class: "network-route-list",
-                    for route in state.trade_routes.clone() {
-                        article { class: "network-route-card",
-                            NetworkRouteVisual { route: route.clone() }
-                            div { class: "route-metrics",
-                                span { "Capacity: {route.capacity_sats} sats" }
-                                span { "Local: {route.local_balance_sats} sats" }
-                                span { "Remote: {route.remote_balance_sats} sats" }
-                                span {
-                                    if route.requires_next_block {
-                                        "Block required: yes"
-                                    } else {
-                                        "Block required: no"
-                                    }
-                                }
-                            }
-                            div { class: "button-row",
-                                if route.status == RouteStatus::Missing {
-                                    button {
-                                        class: "primary-action",
-                                        r#type: "button",
-                                        disabled: is_busy(),
-                                        onclick: move |_| {
-                                            let to_node = route.to_node;
-                                            async move {
-                                                is_busy.set(true);
-                                                match open_trade_route(setup_profile(), to_node).await {
-                                                    Ok(next_state) => {
-                                                        lab_state.set(Some(next_state));
-                                                        push_toast(toast, toast_sequence, "Trade route is under construction.", ToastTone::Success);
-                                                    }
-                                                    Err(message) => handle_lab_action_error(
-                                                        setup_profile(),
-                                                        setup_profile,
-                                                        lab_state,
-                                                        toast,
-                                                        toast_sequence,
-                                                        operation_prompt,
-                                                        prompt_sequence,
-                                                        navigator,
-                                                        message,
-                                                    )
-                                                    .await,
-                                                }
-                                                is_busy.set(false);
-                                            }
-                                        },
-                                        "Open Trade Route"
-                                    }
-                                } else if route.requires_next_block {
-                                    button {
-                                        class: "primary-action",
-                                        r#type: "button",
-                                        disabled: is_busy(),
-                                        onclick: move |_| {
-                                            let route_id = route.route_id.clone();
-                                            async move {
-                                                is_busy.set(true);
-                                                match wait_for_next_block(setup_profile(), Some(route_id)).await {
-                                                    Ok(next_state) => {
-                                                        lab_state.set(Some(next_state));
-                                                        push_toast(toast, toast_sequence, "Regtest mined the next block.", ToastTone::Success);
-                                                    }
-                                                    Err(message) => handle_lab_action_error(
-                                                        setup_profile(),
-                                                        setup_profile,
-                                                        lab_state,
-                                                        toast,
-                                                        toast_sequence,
-                                                        operation_prompt,
-                                                        prompt_sequence,
-                                                        navigator,
-                                                        message,
-                                                    )
-                                                    .await,
-                                                }
-                                                is_busy.set(false);
-                                            }
-                                        },
-                                        "Wait for Block {state.block_height.saturating_add(1)}"
-                                    }
-                                } else if route.status == RouteStatus::Active {
-                                    button {
-                                        class: "primary-action",
-                                        r#type: "button",
-                                        disabled: is_busy(),
-                                        onclick: move |_| {
-                                            let merchant = route.to_node;
-                                            let autosend = autosend_enabled();
-                                            async move {
-                                                is_busy.set(true);
-                                                let memo = format!("{} creates an AutoSend lab invoice", merchant.label());
-                                                match create_invoice_and_maybe_autosend(
-                                                    setup_profile(),
-                                                    merchant,
-                                                    DemoNodeId::Alice,
-                                                    autosend,
-                                                    memo,
-                                                )
-                                                .await
-                                                {
-                                                    Ok(next_state) => {
-                                                        lab_state.set(Some(next_state));
-                                                        push_toast(toast, toast_sequence, autosend_result_message(autosend), ToastTone::Success);
-                                                    }
-                                                    Err(message) => handle_lab_action_error(
-                                                        setup_profile(),
-                                                        setup_profile,
-                                                        lab_state,
-                                                        toast,
-                                                        toast_sequence,
-                                                        operation_prompt,
-                                                        prompt_sequence,
-                                                        navigator,
-                                                        message,
-                                                    )
-                                                    .await,
-                                                }
-                                                is_busy.set(false);
-                                            }
-                                        },
-                                        if autosend_enabled() {
-                                            "Create Invoice + AutoSend"
-                                        } else {
-                                            "Create Invoice"
-                                        }
-                                    }
-                                } else {
-                                    button {
-                                        class: "secondary-action",
-                                        r#type: "button",
-                                        disabled: true,
-                                        "Waiting on route status"
-                                    }
-                                }
                             }
                         }
                     }
@@ -347,6 +218,8 @@ pub fn DebugNetwork() -> Element {
                 }
             }
 
+            HistoryItems { entries: state.action_log.clone() }
+
         }
     }
 }
@@ -379,12 +252,23 @@ fn yes_no(value: bool) -> &'static str {
     }
 }
 
-fn autosend_result_message(autosend: bool) -> &'static str {
-    if autosend {
-        "AutoSend flow complete."
+fn taproot_node_status(tra_count: usize) -> &'static str {
+    if tra_count == 0 {
+        "Waiting for inventory"
     } else {
-        "Invoice created."
+        "Inventory indexed"
     }
+}
+
+fn taproot_owner_summary(state: &LabState) -> String {
+    let treasury_items = state
+        .tra_items
+        .iter()
+        .filter(|item| item.owner_node == DemoNodeId::GameTreasury)
+        .count();
+    let user_items = state.tra_items.len().saturating_sub(treasury_items);
+
+    format!("Treasury: {treasury_items} / Users: {user_items}")
 }
 
 fn tra_catalog_detail(item_id: u32) -> String {
@@ -396,46 +280,6 @@ fn tra_catalog_detail(item_id: u32) -> String {
             )
         })
         .unwrap_or_else(|| "Unsupported item_id".to_string())
-}
-
-fn push_toast(
-    mut toast: Signal<Option<Toast>>,
-    mut sequence: Signal<u64>,
-    message: impl Into<String>,
-    tone: ToastTone,
-) {
-    let next_id = *sequence.peek() + 1;
-    sequence.set(next_id);
-    toast.set(Some(Toast {
-        id: next_id,
-        message: message.into(),
-        tone,
-    }));
-}
-
-async fn handle_lab_action_error(
-    profile: SetupProfile,
-    setup_profile: Signal<SetupProfile>,
-    lab_state: Signal<Option<LabState>>,
-    toast: Signal<Option<Toast>>,
-    toast_sequence: Signal<u64>,
-    operation_prompt: Signal<Option<OperationPrompt>>,
-    prompt_sequence: Signal<u64>,
-    navigator: Navigator,
-    message: String,
-) {
-    if let Some(recovery) = recover_if_polar_lab_unhealthy(profile).await {
-        apply_lab_recovery(
-            setup_profile,
-            lab_state,
-            operation_prompt,
-            prompt_sequence,
-            navigator,
-            recovery,
-        );
-    } else {
-        push_toast(toast, toast_sequence, message, ToastTone::Error);
-    }
 }
 
 fn apply_lab_recovery(

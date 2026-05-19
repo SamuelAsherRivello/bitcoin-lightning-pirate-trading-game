@@ -1,305 +1,216 @@
-You are an expert [0.7 Dioxus](https://dioxuslabs.com/learn/0.7) assistant. Dioxus 0.7 changes every api in dioxus. Only use this up to date documentation. `cx`, `Scope`, and `use_state` are gone
+# AGENTS.md
 
-Provide concise code examples with detailed descriptions
+This file is the shared operating guide for AI agents working in this repository. Keep it small, concrete, and current. Prefer real paths, command formats, and examples over broad advice.
 
-# Project Workflow
+## Mission
 
-* Inspect the current files before editing; keep changes scoped to the requested behavior.
-* Preserve the workspace split between `packages/ui`, `packages/web`, and `packages/desktop`.
-* Prefer repository scripts for repeat workflows:
-	* `.\Scripts\Common\InstallDependencies.ps1`
-	* `.\Scripts\Common\RunWeb.ps1`
-	* `.\Scripts\Common\StopWeb.ps1`
-	* `.\Scripts\Common\RunDesktop.ps1`
-	* `.\Scripts\Other\RunTests.ps1`
-* Keep both web and desktop support intact unless the request is explicitly platform-specific.
-* For browser-visible changes, serve the real web app and verify the page when practical.
-* Preserve visible loading or toast-style status feedback during template data loading, cache reads, cache writes, database creation, setup testing, route opening, block waits, invoice creation, and payment attempts.
-* Template data cache behavior currently lives in `packages/ui/src/client/services`: browser builds use localStorage snapshots, and non-wasm builds use native SQLite.
-* Lightning lab behavior lives behind `packages/ui/src/client/services/lightning_server_functions.rs` and `packages/lightning-service`; browser builds persist only non-sensitive setup preferences and demo lab snapshots.
-* Keep first-time native database/schema/seed setup in the clearly named `create_database_if_missing()` service method. Normal reads should not recreate or reseed an existing database.
-* Do not introduce browser SQLite or OPFS worker startup for template data caching.
-* The primary product routes, from left to right, are `Home`, `Set Up`, `Play Game`, and `Network Dashboard`. `Home` owns why the demo exists and the FAQ/concepts content.
-* Polar setup steps have a required visual order, and the execution/progression logic must match that same order exactly: `User Auth`, `Bridge URL`, `Server Name`, `Game Treasury (Sats)`, `Game Treasury (TRAs)`, `User Nodes`, `NPC Item Transfers`, `Block Height`, and `Unlock Routes`.
-* Keep `Documentation/DioxusFeatureMatrix.md` updated as development continues whenever Dioxus feature usage, routes, cache behavior, platform support, or suggested future work changes.
+Build and maintain the Dioxus Bitcoin Lightning Game demo as a Rust 2021 workspace with shared Dioxus 0.7 UI, web and desktop entrypoints, local/regtest Lightning lab behavior, and durable documentation.
 
-# AI Agent Safety Rules
+This repo is not a place for speculative rewrites. Inspect the relevant files first, make focused diffs, preserve web and desktop support, and verify with the narrowest command that proves the change.
 
-* Do not read, create, edit, move, rename, delete, or otherwise operate on files outside this project repository unless the user explicitly names another repository as part of the current request.
-* Keep all generated files, scratch files, downloaded assets, caches, and temporary outputs inside this project repository.
-* Do not run destructive git operations. This includes `git reset --hard`, `git clean`, forced checkout that discards work, deleting branches or tags, force-pushing, rewriting history, or deleting commits.
-* Normal git commits are allowed when the user asks for them. Do not rebase, squash, amend existing commits, or rewrite commit history; if the user wants rebase or squash work, the user must do it himself.
-* Do not delete a repository or remove an existing commit from any repository. If a request requires history rewriting or destructive cleanup, stop and explain that the user must perform that operation manually.
+## First Context To Load
 
-# Dioxus Dependency
+- `AGENTS.md`: this file.
+- `.codex/rules/dioxus-0.7-workflow.md`: Dioxus implementation workflow.
+- `specs/008-qr-lightning-auth/plan.md`: current Spec Kit implementation plan and feature constraints.
+- The files directly involved in the request.
 
-You can add Dioxus to your `Cargo.toml` like this:
+## Project Map
 
-```toml
-[dependencies]
-dioxus = { version = "0.7.1" }
+- `packages/ui/src/client/mod.rs`: route enum, app-level context providers, shared app wiring.
+- `packages/ui/src/client/app.rs`: shared app shell entry component.
+- `packages/ui/src/client/pages`: routed pages.
+- `packages/ui/src/client/components`: shared Dioxus components.
+- `packages/ui/src/client/components/setup`: setup wizard components.
+- `packages/ui/src/client/components/game`: gameplay components.
+- `packages/ui/src/client/components/network`: dashboard/network components.
+- `packages/ui/src/client/services`: Dioxus-facing services, browser localStorage snapshots, native SQLite template data adapters, server-function wrappers.
+- `packages/ui/src/client/models.rs`: UI-facing model exports and app models.
+- `packages/ui/assets`: shared CSS and localization/flag assets.
+- `packages/web/src/main.rs`: web entrypoint.
+- `packages/desktop/src/main.rs`: desktop entrypoint.
+- `packages/lightning-service`: reusable Lightning lab, TRA, auth, and policy service boundary.
+- `Documentation/DioxusFeatureMatrix.md`: current Dioxus feature/platform matrix; update it when feature usage, routes, cache behavior, platform support, or suggested future work changes.
+- `Scripts`: Windows PowerShell setup, run, and test workflows.
 
-[features]
-default = ["web", "webview", "server"]
-web = ["dioxus/web"]
-webview = ["dioxus/desktop"]
-server = ["dioxus/server"]
+## Preferred Commands
+
+Use repository scripts for repeat workflows:
+
+```powershell
+.\Scripts\Common\InstallDependencies.ps1
+.\Scripts\Common\RunWeb.ps1
+.\Scripts\Common\StopWeb.ps1
+.\Scripts\Common\RunDesktop.ps1
+.\Scripts\Other\RunTests.ps1
 ```
 
-# Launching your application
+Use focused checks first:
 
-You need to create a main function that sets up the Dioxus runtime and mounts your root component.
-
-```rust
-use dioxus::prelude::*;
-
-fn main() {
-	dioxus::launch(App);
-}
-
-#[component]
-fn App() -> Element {
-	rsx! { "Hello, Dioxus!" }
-}
+```powershell
+cargo check -p ui --target wasm32-unknown-unknown
+cargo check -p web --target wasm32-unknown-unknown
+cargo check -p desktop
+cargo test -p lightning-service
 ```
 
-Then serve with `dx serve`:
+For browser-visible changes, serve the real web app and verify the page when practical. Use a concrete local IPv4 address instead of `0.0.0.0` for Dioxus fullstack web testing on Windows; wildcard binding can make backend readiness fail with `os error 10049`.
 
-```sh
-curl -sSL http://dioxus.dev/install.sh | sh
-dx serve --platform web --addr <this-laptop-ipv4> --port 8080
-```
+If a dev server is already running on the target port, stop that server and restart this project so the browser points at the latest build.
 
-> Note: Use a concrete local IPv4 address instead of `0.0.0.0` for fullstack web testing on Windows. The wildcard address can make backend readiness fail with `os error 10049`.
+## Dioxus 0.7 Rules
 
-If you need to build or serve the app and a dev server is already running on the target port, stop that server and restart it so the browser is always pointed at the latest build for this project.
+- Treat the Dioxus 0.7 docs as authoritative: https://dioxuslabs.com/learn/0.7/
+- Dioxus 0.7 changed every API. Do not use older APIs such as `cx`, `Scope`, or `use_state`.
+- Components rendered from RSX use `#[component] fn Name(...) -> Element`.
+- Component names must start with a capital letter or contain an underscore.
+- Props must be owned, `Clone`, and `PartialEq`. Prefer `String`, `Vec<T>`, `Option<T>`, `ReadOnlySignal<T>`, or local model types over `&str` and borrowed slices.
+- Use `use_signal`, `use_memo`, `use_resource`, context signals, and signal `.read()`, `.write()`, `.with_mut()`, `.set()`, `.peek()`, or call syntax as appropriate.
+- Use `.peek()` for cache writes, toast deduplication, and background persistence logic where a reactive subscription would create a feedback loop.
+- Use direct `for` loops and `if` blocks in `rsx!` when they are clearer than iterator chains.
+- Use `Router::<Route> {}`, `#[derive(Routable, Clone, PartialEq)]`, `#[layout(...)]`, and `#[route("/path")]` for routing.
+- Use `asset!("/assets/...")` for local assets relative to the package root.
+- Inject styles with the existing Dioxus document pattern.
 
-# UI with RSX
+## Product And Route Rules
 
-```rust
-rsx! {
-	div {
-		class: "container", // Attribute
-		color: "red", // Inline styles
-		width: if condition { "100%" }, // Conditional attributes
-		"Hello, Dioxus!"
-	}
-	// Prefer loops over iterators
-	for i in 0..5 {
-		div { "{i}" } // use elements or components directly in loops
-	}
-	if condition {
-		div { "Condition is true!" } // use elements or components directly in conditionals
-	}
+- Preserve the workspace split: shared UI and business logic in `packages/ui`, web entrypoint in `packages/web`, desktop entrypoint in `packages/desktop`.
+- Keep both web and desktop support intact unless a request is explicitly platform-specific.
+- The primary product routes, from left to right, are `Home`, `Set Up`, `Play Game`, and `Network Dashboard`.
+- `Home` owns why the demo exists and the FAQ/concepts content.
+- Keep route locking connection-based through `SetupProfile::is_connected()` unless a request explicitly changes that contract.
+- Do not block Play Game navigation just because LNAuth login is missing; Play Game owns the login QR modal on first arrival.
 
-	{children} // Expressions are wrapped in brace
-	{(0..5).map(|i| rsx! { span { "Item {i}" } })} // Iterators must be wrapped in braces
-}
-```
+## Setup Flow Rules
 
-# Assets
+Polar setup steps have a required visual order, and execution/progression logic must match the same order exactly:
 
-The asset macro can be used to link to local files to use in your project. All links start with `/` and are relative to the root of your project.
+1. `User Auth`
+2. `Bridge URL`
+3. `Server Name`
+4. `Game Treasury (Sats)`
+5. `Game Treasury (TRAs)`
+6. `User Nodes`
+7. `NPC Item Transfers`
+8. `Block Height`
+9. `Unlock Routes`
 
-```rust
-rsx! {
-	img {
-		src: asset!("/assets/image.png"),
-		alt: "An image",
-	}
-}
-```
+Keep the existing `Connection`/environment tabs unless the task explicitly asks to change them. `User Auth` is a user authorization selector, not a replacement for the Polar bridge flow.
 
-## Styles
+## Cache, Storage, And Loading
 
-The `document::Stylesheet` component will inject the stylesheet into the `<head>` of the document
+- Preserve visible loading or toast-style status feedback during template data loading, cache reads, cache writes, database creation, setup testing, route opening, block waits, invoice creation, and payment attempts.
+- Browser builds use localStorage snapshots for template data cache behavior.
+- Non-wasm builds use native SQLite for template data.
+- Keep template data cache behavior in `packages/ui/src/client/services`.
+- Keep first-time native database/schema/seed setup in the clearly named `create_database_if_missing()` service method.
+- Normal reads must not recreate, clear, or reseed an existing database.
+- Do not introduce browser SQLite or OPFS worker startup for template data caching.
+- Lightning lab behavior lives behind `packages/ui/src/client/services/lightning_server_functions.rs` and `packages/lightning-service`.
+- Browser builds persist only non-sensitive setup preferences and demo lab snapshots.
+- Never persist wallet secrets, macaroons, seed material, private keys, cookies, API tokens, or database credentials in browser storage, generated docs, logs, commits, screenshots, or PR text.
 
-```rust
-rsx! {
-	document::Stylesheet {
-		href: asset!("/assets/styles.css"),
-	}
-}
-```
+## Good Patterns To Copy
 
-# Components
+- Routes and context: `packages/ui/src/client/mod.rs`.
+- Page layout composition: `packages/ui/src/client/components/page.rs`, `page_header.rs`, and `page_footer.rs`.
+- Toast/status UX: `packages/ui/src/client/components/toast.rs`.
+- Setup field help and wizard patterns: `packages/ui/src/client/pages/setup.rs` and `packages/ui/src/client/components/setup`.
+- Gameplay state display and actions: `packages/ui/src/client/pages/play_game.rs` and `packages/ui/src/client/components/game`.
+- Network/dashboard display: `packages/ui/src/client/pages/debug_network.rs` and `packages/ui/src/client/components/network`.
+- Browser/native storage split: `packages/ui/src/client/services/storage_service.rs`, `template_data_service.rs`, and `database_service.rs`.
+- Lightning service boundary: `packages/lightning-service/src`.
 
-Components are the building blocks of apps
+## Avoid
 
-* Component are functions annotated with the `#[component]` macro.
-* The function name must start with a capital letter or contain an underscore.
-* A component re-renders only under two conditions:
-	1.  Its props change (as determined by `PartialEq`).
-	2.  An internal reactive state it depends on is updated.
+- Do not copy old Dioxus examples that use `cx`, `Scope`, borrowed props, or `use_state`.
+- Do not put reusable business logic directly in page components when it belongs in `packages/lightning-service` or `packages/ui/src/client/services`.
+- Do not add new heavy dependencies without clear need and user-visible benefit.
+- Do not introduce platform-specific code into shared modules without `cfg` gates or an existing abstraction.
+- Do not make broad repo-wide rewrites for a local behavior change.
+- Do not remove visible loading, progress, toast, or error states around async work.
 
-```rust
-#[component]
-fn Input(mut value: Signal<String>) -> Element {
-	rsx! {
-		input {
-            value,
-			oninput: move |e| {
-				*value.write() = e.value();
-			},
-			onkeydown: move |e| {
-				if e.key() == Key::Enter {
-					value.write().clear();
-				}
-			},
-		}
-	}
-}
-```
+## Test-First Guidance
 
-Each component accepts function arguments (props)
+- For regressions, add or update a test that reproduces the bug before fixing it when practical.
+- For new service behavior, prefer unit tests in the owning service crate.
+- For Dioxus UI behavior, use focused Rust checks plus browser-visible verification when the change affects rendered routes, assets, cache reads/writes, or user flows.
+- Broaden to `.\Scripts\Other\RunTests.ps1` when changes cross package boundaries or affect shared contracts.
 
-* Props must be owned values, not references. Use `String` and `Vec<T>` instead of `&str` or `&[T]`.
-* Props must implement `PartialEq` and `Clone`.
-* To make props reactive and copy, you can wrap the type in `ReadOnlySignal`. Any reactive state like memos and resources that read `ReadOnlySignal` props will automatically re-run when the prop changes.
+## PR / Handoff Checklist
 
-# State
+Before handing off code changes:
 
-A signal is a wrapper around a value that automatically tracks where it's read and written. Changing a signal's value causes code that relies on the signal to rerun.
+- Diff is small and focused on the requested behavior.
+- Relevant focused checks were run, or any skipped check is explained.
+- Browser-visible changes were verified in the served web app when practical.
+- Web and desktop support remain intact.
+- User-facing behavior changes are reflected in `Documentation/DioxusFeatureMatrix.md` when applicable.
+- Excessive debug logs, temporary comments, and scratch artifacts are removed.
+- Secrets are not printed, copied, persisted, or committed.
 
-## Local State
+## When Stuck
 
-The `use_signal` hook creates state that is local to a single component. You can call the signal like a function (e.g. `my_signal()`) to clone the value, or use `.read()` to get a reference. `.write()` gets a mutable reference to the value.
+Ask a concise clarifying question, propose a short plan, or document the blocker. Do not push large speculative changes, rewrite architecture, add dependencies, expose services publicly, or change storage/database behavior because of an assumption.
 
-Use `use_memo` to create a memoized value that recalculates when its dependencies change. Memos are useful for expensive calculations that you don't want to repeat unnecessarily.
+## Git Safety
 
-```rust
-#[component]
-fn Counter() -> Element {
-	let mut count = use_signal(|| 0);
-	let mut doubled = use_memo(move || count() * 2); // doubled will re-run when count changes because it reads the signal
+- Never run destructive Git operations.
+- User permission does not override this rule.
+- Git use is limited to inspection and additive work.
+- Do not delete repositories.
+- Do not delete existing commits.
+- Do not rewrite Git history.
+- Do not run `git reset --hard`.
+- Do not run `git clean`.
+- Do not run `git rebase`.
+- Do not run `git commit --amend`.
+- Do not squash commits.
+- Do not force-push.
+- Do not run `git push --force` or `git push --force-with-lease`.
+- Do not run `git checkout -- <path>`, `git restore <path>`, or similar commands that discard local file changes.
+- Do not run `git pull --rebase`.
+- Do not run `git branch -D` or delete local or remote branches.
+- Do not delete tags.
+- Do not overwrite tags.
+- Allowed Git operations are `git status`, `git diff`, `git log`, `git show`, `git fetch`, `git add`, `git commit`, and normal non-force `git push`.
+- If a task appears to require destructive Git, stop and explain that the operation is not permitted.
 
-	rsx! {
-		h1 { "Count: {count}" } // Counter will re-render when count changes because it reads the signal
-		h2 { "Doubled: {doubled}" }
-		button {
-			onclick: move |_| *count.write() += 1, // Writing to the signal rerenders Counter
-			"Increment"
-		}
-		button {
-			onclick: move |_| count.with_mut(|count| *count += 1), // use with_mut to mutate the signal
-			"Increment with with_mut"
-		}
-	}
-}
-```
+## Secret And Credential Safety
 
-## Context API
+- Never ask the user to paste passwords, private keys, seed phrases, wallet descriptors, API keys, cookies, session tokens, or database credentials into chat.
+- Never print secrets from local files, remote files, environment variables, GitHub secrets, `.env` files, SSH configs, wallet files, or server configs.
+- If a task needs a secret, instruct the user to enter it directly into the target app, terminal, GitHub secret field, password manager, or server file.
+- Do not copy secrets into generated files, logs, commits, pull requests, screenshots, or Markdown notes.
+- Do not commit `.env` files, SSH private keys, wallet files, database dumps, or backup archives.
+- When handling public repositories, assume all committed workflow files, scripts, README text, and config examples are public.
 
-The Context API allows you to share state down the component tree. A parent provides the state using `use_context_provider`, and any child can access it with `use_context`
+## Workspace And Server Scope
 
-```rust
-#[component]
-fn App() -> Element {
-	let mut theme = use_signal(|| "light".to_string());
-	use_context_provider(|| theme); // Provide a type to children
-	rsx! { Child {} }
-}
+- Stay inside this repository unless the user explicitly names another path or repository in the current request.
+- Do not read, create, edit, move, rename, delete, or otherwise operate on files outside this project repository unless the user explicitly names another repository as part of the current request.
+- Keep generated files, scratch files, downloaded assets, caches, and temporary outputs inside this repository.
+- Do not delete folders outside this repository.
+- Do not change global Codex config, SSH config, Git config, Windows services, or remote server firewall rules unless the user explicitly asks for that class of change.
+- Do not expose local-only services, admin dashboards, Bitcoin RPC, Lightning RPC, databases, Docker sockets, or app internals to the public internet without explicit approval.
+- Prefer localhost, SSH tunnels, VPN, or Tor hidden services for private admin access.
+- Before opening public ports, state the port, service, purpose, and risk.
 
-#[component]
-fn Child() -> Element {
-	let theme = use_context::<Signal<String>>(); // Consume the same type
-	rsx! {
-		div {
-			"Current theme: {theme}"
-		}
-	}
-}
-```
+## Database Safety
 
-# Async
-
-For state that depends on an asynchronous operation (like a network request), Dioxus provides a hook called `use_resource`. This hook manages the lifecycle of the async task and provides the result to your component.
-
-* The `use_resource` hook takes an `async` closure. It re-runs this closure whenever any signals it depends on (reads) are updated
-* The `Resource` object returned can be in several states when read:
-1. `None` if the resource is still loading
-2. `Some(value)` if the resource has successfully loaded
-
-```rust
-let mut dog = use_resource(move || async move {
-	// api request
-});
-
-match dog() {
-	Some(dog_info) => rsx! { Dog { dog_info } },
-	None => rsx! { "Loading..." },
-}
-```
-
-# Routing
-
-All possible routes are defined in a single Rust `enum` that derives `Routable`. Each variant represents a route and is annotated with `#[route("/path")]`. Dynamic Segments can capture parts of the URL path as parameters by using `:name` in the route string. These become fields in the enum variant.
-
-The `Router<Route> {}` component is the entry point that manages rendering the correct component for the current URL.
-
-You can use the `#[layout(NavBar)]` to create a layout shared between pages and place an `Outlet<Route> {}` inside your layout component. The child routes will be rendered in the outlet.
-
-```rust
-#[derive(Routable, Clone, PartialEq)]
-enum Route {
-	#[layout(NavBar)] // This will use NavBar as the layout for all routes
-		#[route("/")]
-		Page01 {},
-		#[route("/blog/:id")] // Dynamic segment
-		BlogPost { id: i32 },
-}
-
-#[component]
-fn NavBar() -> Element {
-	rsx! {
-		a { href: "/", "Page01" }
-		Outlet<Route> {} // Renders Page01 or BlogPost
-	}
-}
-
-#[component]
-fn App() -> Element {
-	rsx! { Router::<Route> {} }
-}
-```
-
-```toml
-dioxus = { version = "0.7.1", features = ["router"] }
-```
-
-# Fullstack
-
-Fullstack enables server rendering and ipc calls. It uses Cargo features (`server` and a client feature like `web`) to split the code into a server and client binaries.
-
-```toml
-dioxus = { version = "0.7.1", features = ["fullstack"] }
-```
-
-## Server Functions
-
-Use the `#[post]` / `#[get]` macros to define an `async` function that will only run on the server. On the server, this macro generates an API endpoint. On the client, it generates a function that makes an HTTP request to that endpoint.
-
-```rust
-#[post("/api/double/:path/&query")]
-async fn double_server(number: i32, path: String, query: i32) -> Result<i32, ServerFnError> {
-	tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-	Ok(number * 2)
-}
-```
-
-## Hydration
-
-Hydration is the process of making a server-rendered HTML page interactive on the client. The server sends the initial HTML, and then the client-side runs, attaches event listeners, and takes control of future rendering.
-
-### Errors
-The initial UI rendered by the component on the client must be identical to the UI rendered on the server.
-
-* Use the `use_server_future` hook instead of `use_resource`. It runs the future on the server, serializes the result, and sends it to the client, ensuring the client has the data immediately for its first render.
-* Any code that relies on browser-specific APIs (like accessing `localStorage`) must be run *after* hydration. Place this code inside a `use_effect` hook.
+- Never perform destructive database operations.
+- User permission does not override this rule.
+- Reads, inserts, and non-destructive updates are allowed when scoped to the task.
+- Do not delete rows.
+- Do not delete tables.
+- Do not drop databases.
+- Do not truncate tables.
+- Do not run destructive schema migrations.
+- Do not run SQL containing `DELETE`, `DROP`, `TRUNCATE`, destructive `ALTER`, or equivalent ORM/migration operations.
+- If a task appears to require destructive database work, provide the exact command or SQL for the user to review and run manually.
 
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
 `specs/008-qr-lightning-auth/plan.md`
 <!-- SPECKIT END -->
-

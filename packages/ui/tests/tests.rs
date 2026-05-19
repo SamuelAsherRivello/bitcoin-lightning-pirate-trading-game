@@ -120,7 +120,10 @@ fn setup_profile_defaults_to_polar_connection() {
         profile.polar_automation.bridge_url,
         "http://localhost:37373"
     );
-    assert_eq!(profile.polar_automation.bitcoin_backend_name, "backend1");
+    assert_eq!(
+        profile.polar_automation.bitcoin_backend_name,
+        "My Bitcoin Node"
+    );
     assert!(profile.polar_automation.is_complete());
 }
 
