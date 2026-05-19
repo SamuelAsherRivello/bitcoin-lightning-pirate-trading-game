@@ -23,6 +23,15 @@ pub enum LightningError {
     #[error("The Polar automation bridge must be a local localhost or 127.0.0.1 URL.")]
     NonLocalPolarBridge,
 
+    #[error("The Polar MCP connector is unavailable. Start Polar and run .\\Scripts\\Common\\RunPolarMcp.ps1, then retry.")]
+    PolarConnectorUnavailable,
+
+    #[error("The Polar MCP connector does not expose the required tool: {0}.")]
+    PolarConnectorMissingTool(String),
+
+    #[error("Polar MCP connector operation {operation} failed: {message}")]
+    PolarConnectorOperationFailed { operation: String, message: String },
+
     #[error("Setup must be connected before this action can run.")]
     SetupIncomplete,
 
@@ -74,6 +83,15 @@ pub enum LightningError {
         "Treasury history cannot include wallet secrets, macaroons, seeds, or proof material."
     )]
     SensitiveTreasuryDetail,
+
+    #[error("The selected auth mode does not require a wallet auth challenge.")]
+    AuthModeNotEnabled,
+
+    #[error("The wallet auth service is unavailable.")]
+    AuthServiceUnavailable,
+
+    #[error("The wallet auth callback base URL is invalid.")]
+    InvalidCallbackBaseUrl,
 
     #[error("Cannot load the local server profile: {0}")]
     ConfigLoadFailed(String),

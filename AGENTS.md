@@ -72,6 +72,11 @@ If a dev server is already running on the target port, stop that server and rest
 - Use `asset!("/assets/...")` for local assets relative to the package root.
 - Inject styles with the existing Dioxus document pattern.
 
+## API Docs
+
+- Dioxus API docs: https://docs.rs/dioxus/latest/dioxus/
+- Rust API design reference: https://github.com/apollographql/rust-best-practices
+
 ## Product And Route Rules
 
 - Preserve the workspace split: shared UI and business logic in `packages/ui`, web entrypoint in `packages/web`, desktop entrypoint in `packages/desktop`.
@@ -85,15 +90,38 @@ If a dev server is already running on the target port, stop that server and rest
 
 Polar setup steps have a required visual order, and execution/progression logic must match the same order exactly:
 
-1. `User Auth`
-2. `Bridge URL`
-3. `Server Name`
+1. `Bridge URL`
+2. `Server Name`
+3. `Create Nodes`
 4. `Game Treasury (Sats)`
 5. `Game Treasury (TRAs)`
-6. `User Nodes`
-7. `NPC Item Transfers`
+6. `User Nodes (Sats)`
+7. `User Nodes (TRAs)`
 8. `Block Height`
 9. `Unlock Routes`
+
+`Create Nodes` finds or creates every Polar node needed by later steps: the Bitcoin backend, Game Treasury LND node, Taproot Assets node, two NPC LND nodes, and one player LND node. It requests creation first, then checks all node start/status readiness. If several readiness retries still show unstable nodes, restart the Polar network once and re-check.
+
+Required Polar node names are exact and case-sensitive in app requests:
+
+- `GAME_BITCOIN`: the Polar Bitcoin backend / bitcoind node.
+- `GAME_LND`: the Game Treasury LND node.
+- `GAME_TAPROOT`: the Taproot Assets node attached to `GAME_LND` and `GAME_BITCOIN`.
+- `Alice`: the player LND node.
+- `Bob`: NPC LND node 1.
+- `Carol`: NPC LND node 2.
+
+`Server Name` only finds, creates, and starts the named Polar server. It must not delete, rename, or add non-server nodes.
+
+`Create Nodes` owns topology reconciliation:
+
+1. Get the full Polar node list for the selected server.
+2. Delete any node whose name is not one of `GAME_BITCOIN`, `GAME_LND`, `GAME_TAPROOT`, `Alice`, `Bob`, or `Carol`.
+3. Create any required node from that exact list that does not exist yet.
+4. After the exact required list exists, request start for all required nodes.
+5. Poll all required nodes every 3 seconds until they are started. If there is no progress after 6 polls, stop/start the network once as the Polar stability workaround, then continue polling.
+
+`User Nodes (Sats)` and `User Nodes (TRAs)` rebalance existing or newly created networks by transferring value to or from Game Treasury until the player/NPC user nodes match the requested demo balances and inventory. Game Treasury may retain extra sats or TRAs after rebalancing; do not require exact treasury depletion.
 
 Keep the existing `Connection`/environment tabs unless the task explicitly asks to change them. `User Auth` is a user authorization selector, not a replacement for the Polar bridge flow.
 
@@ -157,7 +185,7 @@ Ask a concise clarifying question, propose a short plan, or document the blocker
 
 - Never run destructive Git operations.
 - User permission does not override this rule.
-- Git use is limited to inspection and additive work.
+- Git use is limited to inspection, additive work, and branch creation/switching.
 - Do not delete repositories.
 - Do not delete existing commits.
 - Do not rewrite Git history.
@@ -169,11 +197,12 @@ Ask a concise clarifying question, propose a short plan, or document the blocker
 - Do not force-push.
 - Do not run `git push --force` or `git push --force-with-lease`.
 - Do not run `git checkout -- <path>`, `git restore <path>`, or similar commands that discard local file changes.
+- `git checkout` is allowed only for creating or switching branches.
 - Do not run `git pull --rebase`.
 - Do not run `git branch -D` or delete local or remote branches.
 - Do not delete tags.
 - Do not overwrite tags.
-- Allowed Git operations are `git status`, `git diff`, `git log`, `git show`, `git fetch`, `git add`, `git commit`, and normal non-force `git push`.
+- Allowed Git operations are `git status`, `git diff`, `git log`, `git show`, `git fetch`, `git branch` for creating/listing branches, `git checkout` for creating/switching branches, `git add`, `git commit`, and normal non-force `git push`.
 - If a task appears to require destructive Git, stop and explain that the operation is not permitted.
 
 ## Secret And Credential Safety

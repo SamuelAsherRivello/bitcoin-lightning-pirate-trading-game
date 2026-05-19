@@ -2,14 +2,14 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_NETWORK_NAME: &str = "Dioxus Bitcoin Lightning Game";
-pub const DEFAULT_BITCOIN_BACKEND_NAME: &str = "My Bitcoin Node";
+pub const DEFAULT_BITCOIN_BACKEND_NAME: &str = "GAME_BITCOIN";
 pub const DEFAULT_SATS_PER_TRANSACTION: u64 = 1_000;
 pub const MAX_SATS_PER_TRANSACTION: u64 = 100_000;
 pub const DEFAULT_ROUTE_CAPACITY_SATS: u64 = 250_000;
 pub const MAX_TRA_ITEMS_PER_NODE: usize = 3;
 pub const BOOK_ITEM_ID: u32 = 1;
 pub const APPLE_ITEM_ID: u32 = 2;
-pub const GAME_TREASURY_NODE_LABEL: &str = "GAME_TREASURY";
+pub const GAME_TREASURY_NODE_LABEL: &str = "GAME_LND";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum DemoNodeId {
@@ -99,6 +99,401 @@ impl SetupMode {
         match self {
             Self::ServerConfig => "Polar Connection (Networked)",
             Self::BrowserRegtestOnly => "Mock Connection (Offline)",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum UserAuthMode {
+    App,
+    MockLnAuth,
+    LnAuth,
+}
+
+impl UserAuthMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::App => "App",
+            Self::MockLnAuth => "Mock LNAuth",
+            Self::LnAuth => "LNAuth",
+        }
+    }
+
+    pub fn is_development_only(self) -> bool {
+        self == Self::App
+    }
+
+    pub fn is_mock(self) -> bool {
+        self == Self::MockLnAuth
+    }
+
+    pub fn requires_player_auth(self) -> bool {
+        matches!(self, Self::MockLnAuth | Self::LnAuth)
+    }
+
+    pub fn requires_authorization_event_approval(self) -> bool {
+        matches!(self, Self::MockLnAuth | Self::LnAuth)
+    }
+}
+
+impl Default for UserAuthMode {
+    fn default() -> Self {
+        Self::App
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum WalletCompatibilityStatus {
+    PendingValidation,
+    Validated,
+    Blocked,
+}
+
+impl Default for WalletCompatibilityStatus {
+    fn default() -> Self {
+        Self::PendingValidation
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct WalletRecommendationTip {
+    pub wallet_name: String,
+    pub platforms: Vec<String>,
+    pub recommendation_reason: String,
+    pub official_links: Vec<String>,
+    pub fallback_note: Option<String>,
+    pub compatibility_status: WalletCompatibilityStatus,
+}
+
+impl Default for WalletRecommendationTip {
+    fn default() -> Self {
+        Self {
+            wallet_name: "Alby Go".to_string(),
+            platforms: vec!["Android".to_string(), "iOS".to_string()],
+            recommendation_reason:
+                "Works with Alby Hub or another NWC wallet service for mobile testing."
+                    .to_string(),
+            official_links: vec![
+                "https://getalby.com/alby-go".to_string(),
+                "https://guides.getalby.com/user-guide/alby-go".to_string(),
+            ],
+            fallback_note: Some(
+                "Validate the exact LNAuth QR callback before treating this wallet as fully supported."
+                    .to_string(),
+            ),
+            compatibility_status: WalletCompatibilityStatus::PendingValidation,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PlayerIdentity {
+    pub linking_key_fingerprint: String,
+    pub display_label: String,
+    pub authenticated_at: DateTime<Utc>,
+    pub last_seen_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum AuthSessionStatus {
+    Created,
+    Displayed,
+    Approved,
+    Expired,
+    Rejected,
+    Failed,
+    Canceled,
+}
+
+impl Default for AuthSessionStatus {
+    fn default() -> Self {
+        Self::Created
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum AuthAction {
+    Login,
+    Register,
+    Link,
+    Auth,
+}
+
+impl Default for AuthAction {
+    fn default() -> Self {
+        Self::Login
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PlayerAuthSession {
+    pub session_id: String,
+    pub challenge_id: String,
+    pub lnurl: String,
+    pub qr_payload: String,
+    pub action: AuthAction,
+    pub status: AuthSessionStatus,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub player_identity: Option<PlayerIdentity>,
+    pub failure_reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum AuthorizationEventKind {
+    PlayerLogin,
+    SendSats,
+    PayInvoice,
+    OpenRoute,
+    CloseRoute,
+    TransferAsset,
+    OtherValueMovingAction,
+}
+
+impl Default for AuthorizationEventKind {
+    fn default() -> Self {
+        Self::PlayerLogin
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum AuthorizationRiskLevel {
+    Low,
+    ValueMoving,
+    DurableStateChange,
+}
+
+impl Default for AuthorizationRiskLevel {
+    fn default() -> Self {
+        Self::Low
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AuthorizationEvent {
+    pub event_id: String,
+    pub event_kind: AuthorizationEventKind,
+    pub summary: String,
+    pub requires_qr_approval: bool,
+    pub risk_level: AuthorizationRiskLevel,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ApprovalOperationKind {
+    SendSats,
+    PayInvoice,
+    OpenRoute,
+    CloseRoute,
+    TransferAsset,
+    ChannelFunding,
+    OtherPlayerChainAction,
+}
+
+impl Default for ApprovalOperationKind {
+    fn default() -> Self {
+        Self::SendSats
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum TransactionApprovalStatus {
+    NotRequired,
+    Required,
+    Pending,
+    Approved,
+    Expired,
+    Rejected,
+    Failed,
+    Canceled,
+}
+
+impl Default for TransactionApprovalStatus {
+    fn default() -> Self {
+        Self::NotRequired
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TransactionApproval {
+    pub approval_id: String,
+    pub operation_kind: ApprovalOperationKind,
+    pub operation_summary: String,
+    pub player_identity: Option<PlayerIdentity>,
+    pub amount_sats: Option<u64>,
+    pub status: TransactionApprovalStatus,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub approved_at: Option<DateTime<Utc>>,
+    pub failure_reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum QrAuthorizationKind {
+    Login,
+    SendSats,
+}
+
+impl Default for QrAuthorizationKind {
+    fn default() -> Self {
+        Self::Login
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum QrAuthorizationStatus {
+    Open,
+    MockCompleting,
+    Approved,
+    Canceled,
+    Expired,
+    Failed,
+}
+
+impl Default for QrAuthorizationStatus {
+    fn default() -> Self {
+        Self::Open
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct QrAuthorizationModal {
+    pub modal_id: String,
+    pub title: String,
+    pub description: String,
+    pub qr_payload: String,
+    pub qr_kind: QrAuthorizationKind,
+    pub amount_sats: Option<u64>,
+    pub status: QrAuthorizationStatus,
+    pub can_cancel: bool,
+    pub opened_at: DateTime<Utc>,
+    pub auto_complete_after_ms: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum LightningOperationKind {
+    Auth,
+    SendSats,
+    PayInvoice,
+    OpenRoute,
+    CloseRoute,
+    TransferAsset,
+    Setup,
+}
+
+impl Default for LightningOperationKind {
+    fn default() -> Self {
+        Self::Setup
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum LightningOperationStatus {
+    Succeeded,
+    ApprovalRequired,
+    Pending,
+    RecoverableFailure,
+    Failed,
+}
+
+impl Default for LightningOperationStatus {
+    fn default() -> Self {
+        Self::Pending
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct LightningOperationResult {
+    pub operation_id: String,
+    pub operation_kind: LightningOperationKind,
+    pub status: LightningOperationStatus,
+    pub updated_lab_state: Option<Box<LabState>>,
+    pub auth_session: Option<PlayerAuthSession>,
+    pub approval: Option<TransactionApproval>,
+    pub message: String,
+    pub error_code: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum PolarSetupStepId {
+    BridgeUrl,
+    ServerName,
+    CreateNodes,
+    GameTreasurySats,
+    GameTreasuryTras,
+    UserNodesSats,
+    UserNodesTras,
+    BlockHeight,
+    UnlockRoutes,
+}
+
+impl PolarSetupStepId {
+    pub fn order(self) -> u8 {
+        match self {
+            Self::BridgeUrl => 1,
+            Self::ServerName => 2,
+            Self::CreateNodes => 3,
+            Self::GameTreasurySats => 4,
+            Self::GameTreasuryTras => 5,
+            Self::UserNodesSats => 6,
+            Self::UserNodesTras => 7,
+            Self::BlockHeight => 8,
+            Self::UnlockRoutes => 9,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::BridgeUrl => "Bridge URL",
+            Self::ServerName => "Server Name",
+            Self::CreateNodes => "Create Nodes",
+            Self::GameTreasurySats => "Game Treasury (Sats)",
+            Self::GameTreasuryTras => "Game Treasury (TRAs)",
+            Self::UserNodesSats => "User Nodes (Sats)",
+            Self::UserNodesTras => "User Nodes (TRAs)",
+            Self::BlockHeight => "Block Height",
+            Self::UnlockRoutes => "Unlock Routes",
+        }
+    }
+}
+
+impl Default for PolarSetupStepId {
+    fn default() -> Self {
+        Self::BridgeUrl
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum PolarSetupStepStatus {
+    Locked,
+    Current,
+    Complete,
+    NeedsRetry,
+    Failed,
+}
+
+impl Default for PolarSetupStepStatus {
+    fn default() -> Self {
+        Self::Locked
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PolarSetupStep {
+    pub step_id: PolarSetupStepId,
+    pub order: u8,
+    pub status: PolarSetupStepStatus,
+    pub readiness_summary: String,
+    pub last_error: Option<String>,
+}
+
+impl Default for PolarSetupStep {
+    fn default() -> Self {
+        let step_id = PolarSetupStepId::BridgeUrl;
+        Self {
+            step_id,
+            order: step_id.order(),
+            status: PolarSetupStepStatus::Locked,
+            readiness_summary: String::new(),
+            last_error: None,
         }
     }
 }
@@ -230,11 +625,98 @@ impl Default for PolarAutomationProfile {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum PolarConnectorHealthStatus {
+    Unknown,
+    Healthy,
+    Unavailable,
+    Unsupported,
+}
+
+impl Default for PolarConnectorHealthStatus {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum PolarOperationStatus {
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+    Retrying,
+}
+
+impl Default for PolarOperationStatus {
+    fn default() -> Self {
+        Self::Pending
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PolarConnectorHealth {
+    pub status: PolarConnectorHealthStatus,
+    pub bridge_url: String,
+    pub package_name: String,
+    pub message: String,
+    pub checked_at: Option<DateTime<Utc>>,
+}
+
+impl Default for PolarConnectorHealth {
+    fn default() -> Self {
+        Self {
+            status: PolarConnectorHealthStatus::Unknown,
+            bridge_url: PolarAutomationProfile::default().bridge_url,
+            package_name: "@lightningpolar/mcp".to_string(),
+            message: "Polar connector health has not been checked.".to_string(),
+            checked_at: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PolarOperationRecord {
+    pub operation: String,
+    pub status: PolarOperationStatus,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub attempts: u16,
+    pub message: Option<String>,
+}
+
+impl PolarOperationRecord {
+    pub fn pending(operation: impl Into<String>) -> Self {
+        Self {
+            operation: operation.into(),
+            status: PolarOperationStatus::Pending,
+            started_at: None,
+            completed_at: None,
+            attempts: 0,
+            message: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PolarConnectorFailure {
+    pub operation: String,
+    pub status: PolarConnectorHealthStatus,
+    pub message: String,
+    pub recovery_hint: String,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct SetupProfile {
     pub sats_per_transaction: u64,
     pub network_name: String,
     pub setup_mode: SetupMode,
+    #[serde(default)]
+    pub user_auth_mode: UserAuthMode,
+    #[serde(default)]
+    pub player_identity: Option<PlayerIdentity>,
+    #[serde(default)]
+    pub last_auth_status: Option<AuthSessionStatus>,
     #[serde(default)]
     pub polar_connection: PolarConnectionProfile,
     #[serde(default)]
@@ -261,6 +743,9 @@ impl Default for SetupProfile {
             sats_per_transaction: DEFAULT_SATS_PER_TRANSACTION,
             network_name: DEFAULT_NETWORK_NAME.to_string(),
             setup_mode: SetupMode::ServerConfig,
+            user_auth_mode: UserAuthMode::default(),
+            player_identity: None,
+            last_auth_status: None,
             polar_connection: PolarConnectionProfile::default(),
             polar_automation: PolarAutomationProfile::default(),
             polar_block_height_confirmed: false,
@@ -664,6 +1149,12 @@ pub struct LabState {
     pub game_treasury: GameTreasury,
     #[serde(default)]
     pub npc_item_transfers: Vec<NpcItemTransfer>,
+    #[serde(default)]
+    pub player_auth_session: Option<PlayerAuthSession>,
+    #[serde(default)]
+    pub recent_transaction_approvals: Vec<TransactionApproval>,
+    #[serde(default)]
+    pub auth_warnings: Vec<String>,
     pub operation_faq: Vec<OperationFaqRow>,
     pub block_height: u64,
     #[serde(default)]
@@ -674,7 +1165,11 @@ pub struct LabState {
 
 #[cfg(test)]
 mod tests {
-    use super::PolarAutomationProfile;
+    use super::{
+        PolarAutomationProfile, PolarConnectorHealth, PolarConnectorHealthStatus,
+        PolarOperationRecord, PolarOperationStatus, SetupProfile, UserAuthMode,
+        DEFAULT_NETWORK_NAME, DEFAULT_SATS_PER_TRANSACTION,
+    };
 
     #[test]
     fn polar_bridge_url_accepts_localhost_and_loopback_with_ports() {
@@ -704,5 +1199,85 @@ mod tests {
                 "{bridge_url} should be rejected"
             );
         }
+    }
+
+    #[test]
+    fn setup_profile_defaults_user_auth_mode_to_app_for_old_snapshots() {
+        let value = serde_json::json!({
+            "sats_per_transaction": DEFAULT_SATS_PER_TRANSACTION,
+            "network_name": DEFAULT_NETWORK_NAME,
+            "setup_mode": "ServerConfig",
+            "last_verified_at": null,
+            "connection_status": "NotConfigured"
+        });
+
+        let profile: SetupProfile = serde_json::from_value(value).expect("old profile snapshot");
+
+        assert_eq!(profile.user_auth_mode, UserAuthMode::App);
+        assert_eq!(profile.player_identity, None);
+        assert_eq!(profile.last_auth_status, None);
+    }
+
+    #[test]
+    fn lab_state_defaults_auth_fields_for_old_snapshots() {
+        let profile = SetupProfile::default();
+        let state = crate::default_lab_state(profile);
+        let mut value = serde_json::to_value(state).expect("lab state json");
+        let object = value.as_object_mut().expect("lab state object");
+        object.remove("player_auth_session");
+        object.remove("recent_transaction_approvals");
+        object.remove("auth_warnings");
+
+        let state: super::LabState = serde_json::from_value(value).expect("old lab snapshot");
+
+        assert_eq!(state.player_auth_session, None);
+        assert!(state.recent_transaction_approvals.is_empty());
+        assert!(state.auth_warnings.is_empty());
+    }
+
+    #[test]
+    fn user_auth_mode_reports_policy_flags() {
+        assert!(UserAuthMode::App.is_development_only());
+        assert!(!UserAuthMode::App.requires_player_auth());
+        assert!(UserAuthMode::MockLnAuth.is_mock());
+        assert!(UserAuthMode::MockLnAuth.requires_player_auth());
+        assert!(UserAuthMode::LnAuth.requires_authorization_event_approval());
+    }
+
+    #[test]
+    fn polar_connector_health_defaults_to_unknown_local_package() {
+        let health = PolarConnectorHealth::default();
+
+        assert_eq!(health.status, PolarConnectorHealthStatus::Unknown);
+        assert_eq!(health.bridge_url, "http://localhost:37373");
+        assert_eq!(health.package_name, "@lightningpolar/mcp");
+        assert!(health.checked_at.is_none());
+    }
+
+    #[test]
+    fn polar_operation_record_pending_starts_without_attempts() {
+        let record = PolarOperationRecord::pending("list_networks");
+
+        assert_eq!(record.operation, "list_networks");
+        assert_eq!(record.status, PolarOperationStatus::Pending);
+        assert_eq!(record.attempts, 0);
+        assert!(record.message.is_none());
+    }
+
+    #[test]
+    fn polar_connector_models_round_trip_json() {
+        let health = PolarConnectorHealth {
+            status: PolarConnectorHealthStatus::Healthy,
+            bridge_url: "http://localhost:37373".to_string(),
+            package_name: "@lightningpolar/mcp".to_string(),
+            message: "ok".to_string(),
+            checked_at: None,
+        };
+
+        let value = serde_json::to_value(&health).expect("serialize connector health");
+        let parsed: PolarConnectorHealth =
+            serde_json::from_value(value).expect("deserialize connector health");
+
+        assert_eq!(parsed, health);
     }
 }

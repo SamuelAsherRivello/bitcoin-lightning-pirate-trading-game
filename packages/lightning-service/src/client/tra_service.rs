@@ -179,7 +179,7 @@ impl TraService {
                 None,
                 Some(request.item_id),
                 Some(request.unique_name.clone()),
-                "Polar setup: NPC Item Transfers",
+                "Polar setup: User Nodes (TRAs)",
             )?;
             state.npc_item_transfers.push(NpcItemTransfer {
                 transfer_id: format!("npc-transfer-{}", index + 1),

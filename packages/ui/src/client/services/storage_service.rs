@@ -65,6 +65,7 @@ pub fn load_setup_profile() -> SetupProfile {
 }
 
 pub fn save_setup_profile(profile: &SetupProfile) {
+    debug_assert_setup_profile_is_non_sensitive(profile);
     platform::save_setup_profile(profile);
 }
 
@@ -86,6 +87,9 @@ pub fn clear_lab_state_snapshot() {
 }
 
 fn debug_assert_tra_snapshot_is_non_sensitive(state: &LabState) {
+    debug_assert_setup_profile_is_non_sensitive(&state.profile);
+    debug_assert_auth_snapshot_is_non_sensitive(state);
+
     for item in &state.tra_items {
         debug_assert!(
             !looks_sensitive(&item.tra_id)
@@ -108,6 +112,61 @@ fn debug_assert_tra_snapshot_is_non_sensitive(state: &LabState) {
     }
 }
 
+fn debug_assert_setup_profile_is_non_sensitive(profile: &SetupProfile) {
+    if let Some(identity) = &profile.player_identity {
+        debug_assert_player_identity_is_non_sensitive(identity);
+    }
+}
+
+fn debug_assert_auth_snapshot_is_non_sensitive(state: &LabState) {
+    if let Some(session) = &state.player_auth_session {
+        debug_assert!(
+            !looks_sensitive(&session.session_id)
+                && !looks_sensitive(&session.challenge_id)
+                && !looks_sensitive(&session.lnurl)
+                && !looks_sensitive(&session.qr_payload)
+                && session
+                    .failure_reason
+                    .as_ref()
+                    .is_none_or(|reason| !looks_sensitive(reason)),
+            "Auth session snapshots may store only non-sensitive challenge IDs, QR payloads, statuses, and recoverable failure summaries"
+        );
+        if let Some(identity) = &session.player_identity {
+            debug_assert_player_identity_is_non_sensitive(identity);
+        }
+    }
+
+    for approval in &state.recent_transaction_approvals {
+        debug_assert!(
+            !looks_sensitive(&approval.approval_id)
+                && !looks_sensitive(&approval.operation_summary)
+                && approval
+                    .failure_reason
+                    .as_ref()
+                    .is_none_or(|reason| !looks_sensitive(reason)),
+            "Approval history snapshots may not store wallet secrets, credentials, seeds, macaroons, or proof material"
+        );
+        if let Some(identity) = &approval.player_identity {
+            debug_assert_player_identity_is_non_sensitive(identity);
+        }
+    }
+
+    for warning in &state.auth_warnings {
+        debug_assert!(
+            !looks_sensitive(warning),
+            "Auth warning snapshots may not store wallet secrets, credentials, seeds, macaroons, or proof material"
+        );
+    }
+}
+
+fn debug_assert_player_identity_is_non_sensitive(identity: &crate::client::models::PlayerIdentity) {
+    debug_assert!(
+        !looks_sensitive(&identity.linking_key_fingerprint)
+            && !looks_sensitive(&identity.display_label),
+        "Player identity snapshots may store only non-sensitive public fingerprints and display labels"
+    );
+}
+
 fn looks_sensitive(value: &str) -> bool {
     let value = value.to_ascii_lowercase();
     [
@@ -115,6 +174,71 @@ fn looks_sensitive(value: &str) -> bool {
     ]
     .iter()
     .any(|marker| value.contains(marker))
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use crate::client::models::{
+        ApprovalOperationKind, DemoNodeId, SetupProfile, TransactionApproval,
+        TransactionApprovalStatus,
+    };
+
+    use super::*;
+
+    #[test]
+    fn setup_profile_auth_identity_allows_public_fingerprint() {
+        let mut profile = SetupProfile::default();
+        profile.player_identity = Some(crate::client::models::PlayerIdentity {
+            linking_key_fingerprint: "pubkey-fingerprint-123".to_string(),
+            display_label: "Player wallet".to_string(),
+            authenticated_at: Utc::now(),
+            last_seen_at: None,
+        });
+
+        debug_assert_setup_profile_is_non_sensitive(&profile);
+    }
+
+    #[test]
+    #[should_panic(expected = "Player identity snapshots may store only non-sensitive")]
+    fn setup_profile_auth_identity_rejects_secret_like_values() {
+        let mut profile = SetupProfile::default();
+        profile.player_identity = Some(crate::client::models::PlayerIdentity {
+            linking_key_fingerprint: "private-key-material".to_string(),
+            display_label: "Player wallet".to_string(),
+            authenticated_at: Utc::now(),
+            last_seen_at: None,
+        });
+
+        debug_assert_setup_profile_is_non_sensitive(&profile);
+    }
+
+    #[test]
+    #[should_panic(expected = "Approval history snapshots may not store wallet secrets")]
+    fn approval_history_rejects_secret_like_values() {
+        let profile = SetupProfile::default();
+        let mut state = lightning_service::default_lab_state(profile);
+        state
+            .recent_transaction_approvals
+            .push(TransactionApproval {
+                approval_id: "approval-1".to_string(),
+                operation_kind: ApprovalOperationKind::SendSats,
+                operation_summary: "pay with macaroon".to_string(),
+                player_identity: None,
+                amount_sats: Some(1_000),
+                status: TransactionApprovalStatus::Pending,
+                created_at: Utc::now(),
+                expires_at: None,
+                approved_at: None,
+                failure_reason: None,
+            });
+        state
+            .nodes
+            .retain(|node| node.node_id != DemoNodeId::GameTreasury);
+
+        debug_assert_auth_snapshot_is_non_sensitive(&state);
+    }
 }
 
 pub fn load_setup_polar_tab() -> Option<String> {

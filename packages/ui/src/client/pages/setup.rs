@@ -12,13 +12,14 @@ use crate::client::components::toast::{
 };
 use crate::client::models::{
     ConnectionStatus, DemoNodeId, LabState, PolarAutomationProfile, SetupMode, SetupProfile,
-    APPLE_ITEM_ID, BOOK_ITEM_ID, DEFAULT_BITCOIN_BACKEND_NAME,
+    UserAuthMode, APPLE_ITEM_ID, BOOK_ITEM_ID, DEFAULT_BITCOIN_BACKEND_NAME,
 };
 use crate::client::services::lightning_server_functions::{
-    complete_polar_setup, confirm_polar_block_height, create_polar_demo_nodes_with_progress,
-    delete_all_polar_networks_with_progress, delete_created_polar_server, destroy_polar_demo_nodes,
-    ensure_polar_server, get_lab_state, prepare_game_treasury, prepare_game_treasury_tras,
-    reset_lab, test_setup, transfer_npc_starting_items, verify_polar_bridge,
+    complete_polar_setup, confirm_polar_block_height, count_polar_networks,
+    create_required_polar_nodes_with_progress, delete_all_polar_networks_with_progress,
+    delete_created_polar_server, destroy_polar_demo_nodes, ensure_polar_server, get_lab_state,
+    prepare_game_treasury, prepare_game_treasury_tras, prepare_user_node_sats,
+    prepare_user_node_tras, reset_lab, test_setup, verify_polar_bridge, PolarDeleteAllProgress,
     PolarServerEnsureResult, PolarServerEnsureStatus,
 };
 use crate::client::services::storage_service;
@@ -27,9 +28,11 @@ const DOCKER_DESKTOP_URL: &str = "https://www.docker.com/products/docker-desktop
 const LOCAL_APP_URL: &str = "http://localhost:8080";
 const POLAR_DOWNLOAD_URL: &str = "https://lightningpolar.com/";
 const POLAR_DEMO_NODES_SUBMIT_ID: &str = "polar-user-nodes-submit";
+const POLAR_AUTOPILOT_PROMPT_TITLE: &str = "Polar Autopilot";
 const POLAR_AUTOPILOT_TARGET_SECONDS: i64 = 60;
 const POLAR_AUTOPILOT_SERVER_ATTEMPTS: u8 = 5;
 const POLAR_AUTOPILOT_SERVER_STEP_TIMEOUT_SECONDS: u32 = 90;
+const POLAR_DELETE_ALL_COUNT_TIMEOUT_SECONDS: u32 = 60;
 const POLAR_DELETE_ALL_TIMEOUT_SECONDS: u32 = 300;
 static POLAR_AUTOPILOT_NAME_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_arch = "wasm32")]
@@ -41,10 +44,11 @@ const FOCUS_RETRY_DELAY_MS: u32 = 16;
 enum PolarWizardStep {
     BridgeUrl,
     ServerName,
+    CreateNodes,
     GameTreasury,
     GameTreasuryTras,
-    UserNodes,
-    NpcItemTransfers,
+    UserNodesSats,
+    UserNodesTras,
     BlockHeight,
     Complete,
     Done,
@@ -55,12 +59,13 @@ impl PolarWizardStep {
         match self {
             Self::BridgeUrl => 1,
             Self::ServerName => 2,
-            Self::GameTreasury => 3,
-            Self::GameTreasuryTras => 4,
-            Self::UserNodes => 5,
-            Self::NpcItemTransfers => 6,
-            Self::BlockHeight => 7,
-            Self::Complete | Self::Done => 8,
+            Self::CreateNodes => 3,
+            Self::GameTreasury => 4,
+            Self::GameTreasuryTras => 5,
+            Self::UserNodesSats => 6,
+            Self::UserNodesTras => 7,
+            Self::BlockHeight => 8,
+            Self::Complete | Self::Done => 9,
         }
     }
 }
@@ -69,10 +74,11 @@ fn polar_wizard_step_label(step: PolarWizardStep) -> &'static str {
     match step {
         PolarWizardStep::BridgeUrl => "Bridge URL",
         PolarWizardStep::ServerName => "Server Name",
+        PolarWizardStep::CreateNodes => "Create Nodes",
         PolarWizardStep::GameTreasury => "Game Treasury (Sats)",
         PolarWizardStep::GameTreasuryTras => "Game Treasury (TRAs)",
-        PolarWizardStep::UserNodes => "User Nodes",
-        PolarWizardStep::NpcItemTransfers => "NPC Item Transfers",
+        PolarWizardStep::UserNodesSats => "User Nodes (Sats)",
+        PolarWizardStep::UserNodesTras => "User Nodes (TRAs)",
         PolarWizardStep::BlockHeight => "Block Height",
         PolarWizardStep::Complete | PolarWizardStep::Done => "Unlock Routes",
     }
@@ -121,6 +127,7 @@ pub fn SetUp() -> Element {
     let prompt_sequence = use_signal(|| 20_000_u64);
     let mut amount_text = use_signal(|| setup_profile().sats_per_transaction.to_string());
     let mut setup_mode = use_signal(|| setup_profile().setup_mode);
+    let mut user_auth_mode = use_signal(|| setup_profile().user_auth_mode);
     let mut polar_connection_tab = use_signal(PolarConnectionTab::load);
     let mut polar_bridge_url = use_signal(|| setup_profile().polar_automation.bridge_url.clone());
     let mut polar_server_name = use_signal(|| setup_profile().network_name.clone());
@@ -133,7 +140,8 @@ pub fn SetUp() -> Element {
     let mut is_busy = use_signal(|| false);
     let mut bridge_connection_error = use_signal(String::new);
     let mut show_complete_reset_confirm = use_signal(|| false);
-    let mut show_delete_all_networks_confirm = use_signal(|| false);
+    let show_delete_all_networks_confirm = use_signal(|| false);
+    let delete_all_networks_confirmation_count = use_signal(|| None::<usize>);
     let mut autopilot_enabled = use_signal(|| false);
     let mut autopilot_status = use_signal(|| "Ready".to_string());
     let current_profile = setup_profile();
@@ -172,6 +180,61 @@ pub fn SetUp() -> Element {
                     div { class: "section-heading section-heading--subsection",
                         h2 { "General" }
                     }
+
+                        div { class: "field-group",
+                            span { "User Auth" }
+                            div { class: "segmented-control", role: "tablist", aria_label: "User Auth",
+                                button {
+                                    class: if user_auth_mode() == UserAuthMode::App { "segment segment--active" } else { "segment" },
+                                    r#type: "button",
+                                    role: "tab",
+                                    aria_selected: if user_auth_mode() == UserAuthMode::App { "true" } else { "false" },
+                                    onclick: move |_| {
+                                        apply_user_auth_mode(
+                                            UserAuthMode::App,
+                                            &mut user_auth_mode,
+                                            setup_profile,
+                                            lab_state,
+                                        );
+                                    },
+                                    "App"
+                                }
+                                button {
+                                    class: if user_auth_mode() == UserAuthMode::MockLnAuth { "segment segment--active" } else { "segment" },
+                                    r#type: "button",
+                                    role: "tab",
+                                    aria_selected: if user_auth_mode() == UserAuthMode::MockLnAuth { "true" } else { "false" },
+                                    onclick: move |_| {
+                                        apply_user_auth_mode(
+                                            UserAuthMode::MockLnAuth,
+                                            &mut user_auth_mode,
+                                            setup_profile,
+                                            lab_state,
+                                        );
+                                    },
+                                    "Mock LNAuth"
+                                }
+                                button {
+                                    class: if user_auth_mode() == UserAuthMode::LnAuth { "segment segment--active" } else { "segment" },
+                                    r#type: "button",
+                                    role: "tab",
+                                    aria_selected: if user_auth_mode() == UserAuthMode::LnAuth { "true" } else { "false" },
+                                    onclick: move |_| {
+                                        apply_user_auth_mode(
+                                            UserAuthMode::LnAuth,
+                                            &mut user_auth_mode,
+                                            setup_profile,
+                                            lab_state,
+                                        );
+                                    },
+                                    "LNAuth"
+                                    FieldHelpIcon {
+                                        label: "Testing wallet: Alby Go. It works on Android and iOS with Alby Hub or another NWC wallet service. Use it to test LNAuth login and key-event approval QR codes. Your wallet stays outside Polar; Polar only runs the local lab nodes.".to_string()
+                                    }
+                                }
+                            }
+                            p { class: "connection-tab-copy", "{user_auth_mode_description(user_auth_mode())}" }
+                        }
 
                         label { class: "field-group",
                             span { "Sats per transaction" }
@@ -267,6 +330,7 @@ pub fn SetUp() -> Element {
                                                     lab_state.set(None);
                                                     amount_text.set(default_profile.sats_per_transaction.to_string());
                                                     setup_mode.set(default_profile.setup_mode);
+                                                    user_auth_mode.set(default_profile.user_auth_mode);
                                                     polar_bridge_url.set(default_profile.polar_automation.bridge_url.clone());
                                                     polar_server_name.set(default_profile.network_name.clone());
                                                     push_toast(toast, toast_sequence, "Local setup reset.", ToastTone::Success);
@@ -436,7 +500,18 @@ pub fn SetUp() -> Element {
                                                 class: "secondary-action danger-action",
                                                 r#type: "button",
                                                 disabled: delete_all_networks_button_disabled(is_busy()),
-                                                onclick: move |_| show_delete_all_networks_confirm.set(true),
+                                                onclick: move |_| async move {
+                                                    prepare_delete_all_networks_confirmation(
+                                                        is_busy,
+                                                        show_delete_all_networks_confirm,
+                                                        delete_all_networks_confirmation_count,
+                                                        setup_profile,
+                                                        operation_prompt,
+                                                        toast,
+                                                        toast_sequence,
+                                                        polar_bridge_url(),
+                                                    ).await;
+                                                },
                                                 "Delete all networks"
                                             }
                                         }
@@ -694,9 +769,68 @@ pub fn SetUp() -> Element {
                                         }
 
                                         Instruction {
+                                            id: "polar-step-create-nodes".to_string(),
+                                            class: wizard_step_class(active_step, PolarWizardStep::CreateNodes).to_string(),
+                                            number: 3,
+                                            info: "Finds or creates the required Polar Bitcoin, Lightning, Taproot, NPC, and player nodes".to_string(),
+                                            name: rsx! { "{polar_wizard_step_label(PolarWizardStep::CreateNodes)}" },
+                                            value: Some(rsx! {
+                                                label { class: "setup-field-row",
+                                                    input {
+                                                        id: "polar-create-nodes-input",
+                                                        r#type: "text",
+                                                        value: "GAME_BITCOIN, GAME_LND, GAME_TAPROOT, Alice, Bob, Carol",
+                                                        readonly: true,
+                                                    }
+                                                }
+                                            }),
+                                            actions: Some(rsx! {
+                                                button {
+                                                    id: POLAR_DEMO_NODES_SUBMIT_ID,
+                                                    class: "primary-action",
+                                                    r#type: "button",
+                                                    disabled: is_busy() || active_step != PolarWizardStep::CreateNodes,
+                                                    onclick: move |_| async move {
+                                                        create_demo_nodes_step(
+                                                            is_busy,
+                                                            setup_profile,
+                                                            lab_state,
+                                                            operation_prompt,
+                                                            prompt_sequence,
+                                                            toast,
+                                                            toast_sequence,
+                                                            bridge_connection_error,
+                                                            amount_text(),
+                                                            polar_server_name(),
+                                                            polar_bridge_url(),
+                                                            polar_block_height,
+                                                        ).await;
+                                                    },
+                                                    "SUBMIT"
+                                                }
+                                                button {
+                                                    id: "polar-create-nodes-reset",
+                                                    class: "secondary-action danger-action",
+                                                    r#type: "button",
+                                                    disabled: is_busy() || active_step != PolarWizardStep::CreateNodes,
+                                                    onclick: move |_| async move {
+                                                        is_busy.set(true);
+                                                        let saved_profile = reset_to_server_name_step(setup_profile());
+                                                        setup_profile.set(saved_profile.clone());
+                                                        lab_state.set(None);
+                                                        push_toast(toast, toast_sequence, "Returned to step 2.", ToastTone::Success);
+                                                        focus_step_control("polar-server-name-input").await;
+                                                        is_busy.set(false);
+                                                    },
+                                                    "RESET"
+                                                }
+                                            }),
+                                        }
+
+                                        Instruction {
                                             id: "polar-step-game-treasury".to_string(),
                                             class: wizard_step_class(active_step, PolarWizardStep::GameTreasury).to_string(),
-                                            number: 3,
+                                            number: 4,
                                             info: "Funds the Game Treasury with sats for gameplay spending".to_string(),
                                             name: rsx! { "{polar_wizard_step_label(PolarWizardStep::GameTreasury)}" },
                                             value: Some(rsx! {
@@ -776,8 +910,8 @@ pub fn SetUp() -> Element {
                                                         let saved_profile = reset_to_server_name_step(setup_profile());
                                                         setup_profile.set(saved_profile.clone());
                                                         lab_state.set(None);
-                                                        push_toast(toast, toast_sequence, "Returned to step 2.", ToastTone::Success);
-                                                        focus_step_control("polar-server-name-input").await;
+                                                        push_toast(toast, toast_sequence, "Returned to step 3.", ToastTone::Success);
+                                                        focus_step_control(POLAR_DEMO_NODES_SUBMIT_ID).await;
                                                         is_busy.set(false);
                                                     },
                                                     "RESET"
@@ -788,7 +922,7 @@ pub fn SetUp() -> Element {
                                         Instruction {
                                             id: "polar-step-game-treasury-tras".to_string(),
                                             class: wizard_step_class(active_step, PolarWizardStep::GameTreasuryTras).to_string(),
-                                            number: 4,
+                                            number: 5,
                                             info: "Gifts the Game Treasury with TRA items for gameplay inventory".to_string(),
                                             name: rsx! { "{polar_wizard_step_label(PolarWizardStep::GameTreasuryTras)}" },
                                             value: Some(rsx! {
@@ -838,7 +972,7 @@ pub fn SetUp() -> Element {
                                                         let saved_profile = reset_to_game_treasury_step(setup_profile());
                                                         setup_profile.set(saved_profile.clone());
                                                         lab_state.set(None);
-                                                        push_toast(toast, toast_sequence, "Returned to step 3.", ToastTone::Success);
+                                                        push_toast(toast, toast_sequence, "Returned to step 4.", ToastTone::Success);
                                                         focus_step_control("polar-game-treasury-submit").await;
                                                         is_busy.set(false);
                                                     },
@@ -848,50 +982,44 @@ pub fn SetUp() -> Element {
                                         }
 
                                         Instruction {
-                                            id: "polar-step-user-nodes".to_string(),
-                                            class: wizard_step_class(active_step, PolarWizardStep::UserNodes).to_string(),
-                                            number: 5,
-                                            info: "App creates the user LND nodes".to_string(),
-                                            name: rsx! { "{polar_wizard_step_label(PolarWizardStep::UserNodes)}" },
+                                            id: "polar-step-user-nodes-sats".to_string(),
+                                            class: wizard_step_class(active_step, PolarWizardStep::UserNodesSats).to_string(),
+                                            number: 6,
+                                            info: "Rebalances sats between Game Treasury and the user nodes".to_string(),
+                                            name: rsx! { "{polar_wizard_step_label(PolarWizardStep::UserNodesSats)}" },
                                             value: Some(rsx! {
                                                 label { class: "setup-field-row",
                                                     input {
-                                                        id: "polar-user-nodes-input",
+                                                        id: "polar-user-nodes-sats-input",
                                                         r#type: "text",
-                                                        value: "Alice, Bob, Carol",
+                                                        value: "Alice, Bob, Carol sats match the demo targets.",
                                                         readonly: true,
                                                     }
                                                 }
                                             }),
                                             actions: Some(rsx! {
                                                 button {
-                                                    id: POLAR_DEMO_NODES_SUBMIT_ID,
+                                                    id: "polar-user-nodes-sats-submit",
                                                     class: "primary-action",
                                                     r#type: "button",
-                                                        disabled: is_busy() || active_step != PolarWizardStep::UserNodes,
+                                                    disabled: is_busy() || active_step != PolarWizardStep::UserNodesSats,
                                                     onclick: move |_| async move {
-                                                        create_demo_nodes_step(
+                                                        rebalance_user_nodes_sats_step(
                                                             is_busy,
                                                             setup_profile,
                                                             lab_state,
-                                                            operation_prompt,
-                                                            prompt_sequence,
                                                             toast,
                                                             toast_sequence,
-                                                            bridge_connection_error,
-                                                            amount_text(),
-                                                            polar_server_name(),
-                                                            polar_bridge_url(),
-                                                            polar_block_height,
-                                                        ).await;
+                                                        )
+                                                        .await;
                                                     },
                                                     "SUBMIT"
                                                 }
                                                 button {
-                                                    id: "polar-user-nodes-reset",
+                                                    id: "polar-user-nodes-sats-reset",
                                                     class: "secondary-action danger-action",
                                                     r#type: "button",
-                                                    disabled: is_busy() || active_step != PolarWizardStep::UserNodes,
+                                                    disabled: is_busy() || active_step != PolarWizardStep::UserNodesSats,
                                                     onclick: move |_| async move {
                                                         is_busy.set(true);
                                                         match profile_from_inputs(
@@ -902,7 +1030,7 @@ pub fn SetUp() -> Element {
                                                                 polar_bridge_url(),
                                                                 setup_profile().polar_automation,
                                                             ),
-                                                            setup_profile(),
+                                                                setup_profile(),
                                                         ) {
                                                             Ok(profile) => {
                                                                 let saved_profile = reset_to_game_treasury_tras_step(profile);
@@ -910,7 +1038,7 @@ pub fn SetUp() -> Element {
                                                                 lab_state.set(lab_state_after_reset_to_game_treasury_tras_step());
                                                                 polar_bridge_url.set(saved_profile.polar_automation.bridge_url.clone());
                                                                 polar_server_name.set(saved_profile.network_name.clone());
-                                                                push_toast(toast, toast_sequence, "Returned to step 4.", ToastTone::Success);
+                                                                push_toast(toast, toast_sequence, "Returned to step 5.", ToastTone::Success);
                                                                 focus_step_control("polar-game-treasury-tras-submit").await;
                                                             }
                                                             Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
@@ -924,11 +1052,11 @@ pub fn SetUp() -> Element {
                                         }
 
                                         Instruction {
-                                            id: "polar-step-tra-assets".to_string(),
-                                            class: wizard_step_class(active_step, PolarWizardStep::NpcItemTransfers).to_string(),
-                                            number: 6,
-                                            info: "Transfers starting items from Game Treasury to Bob and Carol".to_string(),
-                                            name: rsx! { "{polar_wizard_step_label(PolarWizardStep::NpcItemTransfers)}" },
+                                            id: "polar-step-user-nodes-tras".to_string(),
+                                            class: wizard_step_class(active_step, PolarWizardStep::UserNodesTras).to_string(),
+                                            number: 7,
+                                            info: "Rebalances TRAs between Game Treasury and the user nodes".to_string(),
+                                            name: rsx! { "{polar_wizard_step_label(PolarWizardStep::UserNodesTras)}" },
                                             value: Some(rsx! {
                                                 if let Some(state) = current_lab_state.as_ref() {
                                                     NpcItemTransferStatus { transfers: state.npc_item_transfers.clone() }
@@ -937,9 +1065,9 @@ pub fn SetUp() -> Element {
                                                         input {
                                                             id: "polar-tra-assets-input",
                                                             r#type: "text",
-                                                            value: "Bob and Carol starting items come from Game Treasury.",
+                                                            value: "Alice, Bob, Carol TRAs match the demo targets.",
                                                             readonly: true,
-                                                            disabled: active_step != PolarWizardStep::NpcItemTransfers,
+                                                            disabled: active_step != PolarWizardStep::UserNodesTras,
                                                         }
                                                     }
                                                 }
@@ -949,7 +1077,7 @@ pub fn SetUp() -> Element {
                                                     id: "polar-tra-assets-submit",
                                                     class: "primary-action",
                                                     r#type: "button",
-                                                    disabled: is_busy() || active_step != PolarWizardStep::NpcItemTransfers,
+                                                    disabled: is_busy() || active_step != PolarWizardStep::UserNodesTras,
                                                     onclick: move |_| async move {
                                                         prepare_tra_inventory_step(
                                                             is_busy,
@@ -968,14 +1096,14 @@ pub fn SetUp() -> Element {
                                                     id: "polar-tra-assets-reset",
                                                     class: "secondary-action danger-action",
                                                     r#type: "button",
-                                                    disabled: is_busy() || active_step != PolarWizardStep::NpcItemTransfers,
+                                                    disabled: is_busy() || active_step != PolarWizardStep::UserNodesTras,
                                                     onclick: move |_| async move {
                                                         is_busy.set(true);
                                                         let saved_profile = reset_to_demo_nodes_step(setup_profile());
                                                         setup_profile.set(saved_profile.clone());
                                                         lab_state.set(lab_state_after_reset_to_demo_nodes_step(saved_profile.clone()));
-                                                        push_toast(toast, toast_sequence, "Returned to step 4. NPC item transfers will be recreated on submit.", ToastTone::Success);
-                                                        focus_step_control(POLAR_DEMO_NODES_SUBMIT_ID).await;
+                                                        push_toast(toast, toast_sequence, "Returned to step 6. User node sats will be rechecked on submit.", ToastTone::Success);
+                                                        focus_step_control("polar-user-nodes-sats-submit").await;
                                                         is_busy.set(false);
                                                     },
                                                     "RESET"
@@ -986,7 +1114,7 @@ pub fn SetUp() -> Element {
                                         Instruction {
                                             id: "polar-step-block-height".to_string(),
                                             class: wizard_step_class(active_step, PolarWizardStep::BlockHeight).to_string(),
-                                            number: 7,
+                                            number: 8,
                                             info: "Sets the game block-height baseline".to_string(),
                                             name: rsx! { "{polar_wizard_step_label(PolarWizardStep::BlockHeight)}" },
                                             value: Some(rsx! {
@@ -1086,7 +1214,7 @@ pub fn SetUp() -> Element {
                                                     disabled: is_busy() || active_step != PolarWizardStep::BlockHeight,
                                                     onclick: move |_| async move {
                                                         is_busy.set(true);
-                                                        let saved_profile = reset_to_npc_item_transfers_step(setup_profile());
+                                                        let saved_profile = reset_to_user_nodes_tras_step(setup_profile());
                                                         setup_profile.set(saved_profile.clone());
                                                         if let Some(mut state) = lab_state().or_else(storage_service::load_lab_state_snapshot) {
                                                             state.profile = saved_profile;
@@ -1096,7 +1224,7 @@ pub fn SetUp() -> Element {
                                                             }
                                                             lab_state.set(Some(state));
                                                         }
-                                                        push_toast(toast, toast_sequence, "Returned to step 6. NPC Item Transfers will be recreated on submit.", ToastTone::Success);
+                                                        push_toast(toast, toast_sequence, "Returned to step 7. User node TRAs will be rebalanced on submit.", ToastTone::Success);
                                                         focus_step_control("polar-tra-assets-submit").await;
                                                         is_busy.set(false);
                                                     },
@@ -1108,7 +1236,7 @@ pub fn SetUp() -> Element {
                                         Instruction {
                                             id: "polar-step-complete".to_string(),
                                             class: wizard_step_class(active_step, PolarWizardStep::Complete).to_string(),
-                                            number: 8,
+                                            number: 9,
                                             info: "Saves setup as connected".to_string(),
                                             name: rsx! { "{polar_wizard_step_label(PolarWizardStep::Complete)}" },
                                             value: Some(rsx! {
@@ -1233,6 +1361,7 @@ pub fn SetUp() -> Element {
                     operation_prompt,
                     toast,
                     toast_sequence,
+                    delete_all_networks_confirmation_count,
                     amount_text,
                     polar_server_name,
                     polar_bridge_url,
@@ -1308,9 +1437,10 @@ fn DeleteAllNetworksConfirmationPrompt(
     mut show_prompt: Signal<bool>,
     setup_profile: Signal<SetupProfile>,
     lab_state: Signal<Option<LabState>>,
-    operation_prompt: Signal<Option<OperationPrompt>>,
+    mut operation_prompt: Signal<Option<OperationPrompt>>,
     toast: Signal<Option<Toast>>,
     toast_sequence: Signal<u64>,
+    delete_all_networks_confirmation_count: Signal<Option<usize>>,
     amount_text: Signal<String>,
     polar_server_name: Signal<String>,
     polar_bridge_url: Signal<String>,
@@ -1332,20 +1462,32 @@ fn DeleteAllNetworksConfirmationPrompt(
                 aria_label: "Are you sure?",
                 div { class: "operation-prompt__status" }
                 div { class: "operation-prompt__body",
-                    if is_busy() {
-                        span { class: "eyebrow", "Pending operation" }
-                        h2 { "Delete all Polar networks" }
-                        p {
-                            "{active_delete_prompt.as_ref().map(|prompt| prompt.message.as_str()).unwrap_or(\"Starting delete request...\")}"
+                    if let Some(prompt) = active_delete_prompt.as_ref() {
+                        if prompt.is_pending {
+                            span { class: "eyebrow", "Pending operation" }
+                        } else {
+                            span { class: "eyebrow", "Action required" }
                         }
+                        h2 { "{prompt.title}" }
+                        p { "{prompt.message}" }
                     } else {
                         span { class: "eyebrow", "Action required" }
                         h2 { "Are you sure?" }
-                        p { "This deletes every Polar network visible to the local Polar bridge and locks the app setup. This action only runs from this confirmation." }
+                        p { "{delete_all_networks_confirmation_message(delete_all_networks_confirmation_count())}" }
                     }
                 }
                 div { class: "operation-prompt__actions",
-                    if !is_busy() {
+                    if active_delete_prompt.as_ref().map(|prompt| !prompt.is_pending).unwrap_or(false) {
+                        button {
+                            class: "primary-action",
+                            r#type: "button",
+                            onclick: move |_| {
+                                operation_prompt.set(None);
+                                show_prompt.set(false);
+                            },
+                            "Continue"
+                        }
+                    } else if !is_busy() {
                         button {
                             class: "secondary-action",
                             r#type: "button",
@@ -1358,7 +1500,7 @@ fn DeleteAllNetworksConfirmationPrompt(
                             r#type: "button",
                             disabled: delete_all_networks_button_disabled(is_busy()),
                             onclick: move |_| async move {
-                                delete_all_networks_from_setup(
+                                let delete_succeeded = delete_all_networks_from_setup(
                                     is_busy,
                                     setup_profile,
                                     lab_state,
@@ -1372,8 +1514,11 @@ fn DeleteAllNetworksConfirmationPrompt(
                                     bridge_connection_error,
                                     autopilot_enabled,
                                     autopilot_status,
+                                    delete_all_networks_confirmation_count,
                                 ).await;
-                                show_prompt.set(false);
+                                if delete_succeeded {
+                                    show_prompt.set(false);
+                                }
                             },
                             "Delete all"
                         }
@@ -1496,11 +1641,12 @@ async fn focus_step_control(_id: &'static str) {}
 fn submit_focus_target(step: PolarWizardStep) -> Option<&'static str> {
     match step {
         PolarWizardStep::BridgeUrl => Some("polar-server-name-input"),
-        PolarWizardStep::ServerName => Some("polar-game-treasury-submit"),
+        PolarWizardStep::ServerName => Some(POLAR_DEMO_NODES_SUBMIT_ID),
+        PolarWizardStep::CreateNodes => Some("polar-game-treasury-submit"),
         PolarWizardStep::GameTreasury => Some("polar-game-treasury-tras-submit"),
-        PolarWizardStep::GameTreasuryTras => Some(POLAR_DEMO_NODES_SUBMIT_ID),
-        PolarWizardStep::UserNodes => Some("polar-tra-assets-submit"),
-        PolarWizardStep::NpcItemTransfers => Some("polar-block-height-input"),
+        PolarWizardStep::GameTreasuryTras => Some("polar-user-nodes-sats-submit"),
+        PolarWizardStep::UserNodesSats => Some("polar-tra-assets-submit"),
+        PolarWizardStep::UserNodesTras => Some("polar-block-height-input"),
         PolarWizardStep::BlockHeight => Some("polar-complete-submit"),
         PolarWizardStep::Complete | PolarWizardStep::Done => None,
     }
@@ -1509,10 +1655,11 @@ fn submit_focus_target(step: PolarWizardStep) -> Option<&'static str> {
 fn reset_focus_target(step: PolarWizardStep) -> &'static str {
     match step {
         PolarWizardStep::BridgeUrl | PolarWizardStep::ServerName => "polar-bridge-url-input",
-        PolarWizardStep::GameTreasury => "polar-server-name-input",
+        PolarWizardStep::CreateNodes => "polar-server-name-input",
+        PolarWizardStep::GameTreasury => POLAR_DEMO_NODES_SUBMIT_ID,
         PolarWizardStep::GameTreasuryTras => "polar-game-treasury-submit",
-        PolarWizardStep::UserNodes => "polar-game-treasury-tras-submit",
-        PolarWizardStep::NpcItemTransfers => POLAR_DEMO_NODES_SUBMIT_ID,
+        PolarWizardStep::UserNodesSats => "polar-game-treasury-tras-submit",
+        PolarWizardStep::UserNodesTras => "polar-user-nodes-sats-submit",
         PolarWizardStep::BlockHeight => "polar-tra-assets-submit",
         PolarWizardStep::Complete | PolarWizardStep::Done => "polar-block-height-input",
     }
@@ -1557,6 +1704,54 @@ fn profile_from_inputs(
     profile.polar_automation = polar_automation;
 
     Ok(profile)
+}
+
+fn user_auth_mode_description(mode: UserAuthMode) -> &'static str {
+    match mode {
+        UserAuthMode::App => {
+            "Development mode: the app acts on behalf of the player without QR approvals."
+        }
+        UserAuthMode::MockLnAuth => {
+            "Development QR mode: the app shows LNAuth-style prompts and auto-completes them for testing."
+        }
+        UserAuthMode::LnAuth => {
+            "Wallet authorization mode: Play Game asks the player wallet to approve login and value-moving actions."
+        }
+    }
+}
+
+fn apply_user_auth_mode(
+    mode: UserAuthMode,
+    user_auth_mode: &mut Signal<UserAuthMode>,
+    mut setup_profile: Signal<SetupProfile>,
+    mut lab_state: Signal<Option<LabState>>,
+) {
+    user_auth_mode.set(mode);
+
+    let mut profile = setup_profile();
+    if profile.user_auth_mode == mode {
+        return;
+    }
+
+    profile.user_auth_mode = mode;
+    profile.player_identity = None;
+    profile.last_auth_status = None;
+    if profile.is_connected() {
+        profile.connection_status = ConnectionStatus::PartiallyConnected;
+        profile.last_verified_at = None;
+    }
+
+    setup_profile.set(profile.clone());
+    storage_service::save_setup_profile(&profile);
+
+    if let Some(mut state) = lab_state() {
+        state.profile = profile;
+        state.player_auth_session = None;
+        state.recent_transaction_approvals.clear();
+        state.auth_warnings.clear();
+        storage_service::save_lab_state_snapshot(&state);
+        lab_state.set(Some(state));
+    }
 }
 
 fn block_height_from_input(block_height: String) -> Result<u64, String> {
@@ -1606,6 +1801,10 @@ fn polar_wizard_step(profile: &SetupProfile, lab_state: Option<&LabState>) -> Po
         return PolarWizardStep::ServerName;
     }
 
+    if !user_nodes_ready(lab_state) {
+        return PolarWizardStep::CreateNodes;
+    }
+
     if !profile.game_treasury_ready {
         return PolarWizardStep::GameTreasury;
     }
@@ -1614,12 +1813,12 @@ fn polar_wizard_step(profile: &SetupProfile, lab_state: Option<&LabState>) -> Po
         return PolarWizardStep::GameTreasuryTras;
     }
 
-    if !user_nodes_ready(lab_state) {
-        return PolarWizardStep::UserNodes;
+    if !user_nodes_sats_ready(lab_state) {
+        return PolarWizardStep::UserNodesSats;
     }
 
     if !npc_item_transfers_ready(lab_state) {
-        return PolarWizardStep::NpcItemTransfers;
+        return PolarWizardStep::UserNodesTras;
     }
 
     if !profile.polar_block_height_confirmed {
@@ -1634,6 +1833,10 @@ fn lab_state_has_status(lab_state: Option<&LabState>, status: ConnectionStatus) 
         Some(state) => state.profile.connection_status == status,
         None => false,
     }
+}
+
+fn user_nodes_sats_ready(lab_state: Option<&LabState>) -> bool {
+    user_nodes_ready(lab_state)
 }
 
 fn npc_item_transfers_ready(lab_state: Option<&LabState>) -> bool {
@@ -1723,16 +1926,22 @@ fn is_valid_local_bridge_url(bridge_url: &str) -> bool {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn browser_origin_allows_polar_bridge() -> bool {
+fn current_browser_hostname() -> Option<String> {
     web_sys::window()
         .and_then(|window| window.location().hostname().ok())
+        .map(|hostname| hostname.to_ascii_lowercase())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn browser_origin_allows_polar_bridge() -> bool {
+    current_browser_hostname()
         .map(|hostname| browser_hostname_allows_polar_bridge(&hostname))
         .unwrap_or(false)
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
 fn browser_hostname_allows_polar_bridge(hostname: &str) -> bool {
-    hostname.eq_ignore_ascii_case("localhost") || hostname == "127.0.0.1"
+    hostname.eq_ignore_ascii_case("localhost")
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1893,7 +2102,7 @@ fn reset_to_block_height_step(mut profile: SetupProfile) -> SetupProfile {
     profile
 }
 
-fn reset_to_npc_item_transfers_step(mut profile: SetupProfile) -> SetupProfile {
+fn reset_to_user_nodes_tras_step(mut profile: SetupProfile) -> SetupProfile {
     profile.connection_status = ConnectionStatus::PartiallyConnected;
     profile.polar_block_height_confirmed = false;
     profile.last_verified_at = None;
@@ -1942,23 +2151,34 @@ mod tests {
         );
         assert_eq!(
             polar_wizard_step(&server_ready, None).order(),
+            PolarWizardStep::CreateNodes.order()
+        );
+        let create_nodes_state = user_nodes_ready_state(server_ready.clone());
+        assert_eq!(
+            polar_wizard_step(&server_ready, Some(&create_nodes_state)).order(),
             PolarWizardStep::GameTreasury.order()
         );
         assert_eq!(
-            polar_wizard_step(&treasury_ready, None).order(),
+            polar_wizard_step(&treasury_ready, Some(&create_nodes_state)).order(),
             PolarWizardStep::GameTreasuryTras.order()
         );
         let mut treasury_tras_state = lightning_service::default_lab_state(treasury_ready.clone());
+        for node in treasury_tras_state.nodes.iter_mut() {
+            if DemoNodeId::ALL.contains(&node.node_id) {
+                node.status = crate::client::models::NodeStatus::Online;
+                node.pubkey = Some(format!("{}-pubkey", node.alias));
+            }
+        }
         treasury_tras_state.tra_items = treasury_tra_items();
         assert_eq!(
             polar_wizard_step(&treasury_ready, Some(&treasury_tras_state)).order(),
-            PolarWizardStep::UserNodes.order()
+            PolarWizardStep::UserNodesTras.order()
         );
         let mut demo_nodes_state = user_nodes_ready_state(demo_nodes_ready.clone());
         demo_nodes_state.tra_items = treasury_tra_items();
         assert_eq!(
             polar_wizard_step(&demo_nodes_ready, Some(&demo_nodes_state)).order(),
-            PolarWizardStep::NpcItemTransfers.order()
+            PolarWizardStep::UserNodesTras.order()
         );
         demo_nodes_state.tra_items = vec![
             verified_item(DemoNodeId::Bob, "Book", BOOK_ITEM_ID),
@@ -2106,7 +2326,7 @@ mod tests {
     }
 
     #[test]
-    fn npc_item_transfers_reset_clears_snapshot_to_revisit_user_nodes() {
+    fn user_nodes_tras_reset_without_snapshot_revisits_create_nodes() {
         let mut profile = profile_with_status(ConnectionStatus::PartiallyConnected, "network-1");
         profile.game_treasury_ready = true;
         let reset_profile = reset_to_demo_nodes_step(profile.clone());
@@ -2117,12 +2337,12 @@ mod tests {
             .is_some_and(|state| treasury_tras_ready(Some(state))));
         assert_eq!(
             polar_wizard_step(&reset_profile, state.as_ref()).order(),
-            PolarWizardStep::UserNodes.order()
+            PolarWizardStep::CreateNodes.order()
         );
     }
 
     #[test]
-    fn block_height_reset_returns_to_npc_item_transfers() {
+    fn block_height_reset_returns_to_user_nodes_tras() {
         let mut profile = profile_with_status(ConnectionStatus::Connected, "network-1");
         profile.game_treasury_ready = true;
         profile.polar_block_height_confirmed = true;
@@ -2136,14 +2356,14 @@ mod tests {
         ];
         state.npc_item_transfers = successful_npc_transfers();
 
-        let reset_profile = reset_to_npc_item_transfers_step(profile);
+        let reset_profile = reset_to_user_nodes_tras_step(profile);
         state.tra_items = treasury_tra_items();
         state.npc_item_transfers.clear();
         state.profile = reset_profile.clone();
 
         assert_eq!(
             polar_wizard_step(&reset_profile, Some(&state)).order(),
-            PolarWizardStep::NpcItemTransfers.order()
+            PolarWizardStep::UserNodesTras.order()
         );
         assert!(!reset_profile.polar_block_height_confirmed);
     }
@@ -2156,6 +2376,10 @@ mod tests {
         );
         assert_eq!(
             submit_focus_target(PolarWizardStep::ServerName),
+            Some(POLAR_DEMO_NODES_SUBMIT_ID)
+        );
+        assert_eq!(
+            submit_focus_target(PolarWizardStep::CreateNodes),
             Some("polar-game-treasury-submit")
         );
         assert_eq!(
@@ -2164,14 +2388,14 @@ mod tests {
         );
         assert_eq!(
             submit_focus_target(PolarWizardStep::GameTreasuryTras),
-            Some(POLAR_DEMO_NODES_SUBMIT_ID)
+            Some("polar-user-nodes-sats-submit")
         );
         assert_eq!(
-            submit_focus_target(PolarWizardStep::UserNodes),
+            submit_focus_target(PolarWizardStep::UserNodesSats),
             Some("polar-tra-assets-submit")
         );
         assert_eq!(
-            submit_focus_target(PolarWizardStep::NpcItemTransfers),
+            submit_focus_target(PolarWizardStep::UserNodesTras),
             Some("polar-block-height-input")
         );
         assert_eq!(
@@ -2186,10 +2410,11 @@ mod tests {
         let labels = [
             polar_wizard_step_label(PolarWizardStep::BridgeUrl),
             polar_wizard_step_label(PolarWizardStep::ServerName),
+            polar_wizard_step_label(PolarWizardStep::CreateNodes),
             polar_wizard_step_label(PolarWizardStep::GameTreasury),
             polar_wizard_step_label(PolarWizardStep::GameTreasuryTras),
-            polar_wizard_step_label(PolarWizardStep::UserNodes),
-            polar_wizard_step_label(PolarWizardStep::NpcItemTransfers),
+            polar_wizard_step_label(PolarWizardStep::UserNodesSats),
+            polar_wizard_step_label(PolarWizardStep::UserNodesTras),
             polar_wizard_step_label(PolarWizardStep::BlockHeight),
             polar_wizard_step_label(PolarWizardStep::Complete),
         ];
@@ -2199,10 +2424,11 @@ mod tests {
             [
                 "Bridge URL",
                 "Server Name",
+                "Create Nodes",
                 "Game Treasury (Sats)",
                 "Game Treasury (TRAs)",
-                "User Nodes",
-                "NPC Item Transfers",
+                "User Nodes (Sats)",
+                "User Nodes (TRAs)",
                 "Block Height",
                 "Unlock Routes"
             ]
@@ -2217,19 +2443,23 @@ mod tests {
         );
         assert_eq!(
             reset_focus_target(PolarWizardStep::GameTreasury),
-            "polar-server-name-input"
+            POLAR_DEMO_NODES_SUBMIT_ID
         );
         assert_eq!(
-            reset_focus_target(PolarWizardStep::UserNodes),
-            "polar-game-treasury-tras-submit"
+            reset_focus_target(PolarWizardStep::CreateNodes),
+            "polar-server-name-input"
         );
         assert_eq!(
             reset_focus_target(PolarWizardStep::GameTreasuryTras),
             "polar-game-treasury-submit"
         );
         assert_eq!(
-            reset_focus_target(PolarWizardStep::NpcItemTransfers),
-            POLAR_DEMO_NODES_SUBMIT_ID
+            reset_focus_target(PolarWizardStep::UserNodesSats),
+            "polar-game-treasury-tras-submit"
+        );
+        assert_eq!(
+            reset_focus_target(PolarWizardStep::UserNodesTras),
+            "polar-user-nodes-sats-submit"
         );
         assert_eq!(
             reset_focus_target(PolarWizardStep::BlockHeight),
@@ -2254,7 +2484,7 @@ mod tests {
     #[test]
     fn local_browser_hostname_allows_loopback_hosts() {
         assert!(browser_hostname_allows_polar_bridge("localhost"));
-        assert!(browser_hostname_allows_polar_bridge("127.0.0.1"));
+        assert!(!browser_hostname_allows_polar_bridge("127.0.0.1"));
         assert!(!browser_hostname_allows_polar_bridge("192.168.0.10"));
     }
 
@@ -2299,10 +2529,14 @@ mod tests {
     }
 
     #[test]
-    fn delete_all_networks_progress_message_includes_processed_and_total() {
+    fn delete_all_networks_progress_message_includes_deleted_and_total() {
         assert_eq!(
-            delete_all_networks_progress_message(8, 8),
+            delete_all_networks_progress_message_for_counts(8, 8),
             "Deleting 8/8 polar networks visible to the local bridge..."
+        );
+        assert_eq!(
+            delete_all_networks_progress_message_for_counts(0, 21),
+            "Deleting 0/21 polar networks visible to the local bridge..."
         );
     }
 
@@ -2313,12 +2547,28 @@ mod tests {
             "Delete request started. Checking Polar bridge at http://localhost:37373..."
         );
         assert_eq!(
+            delete_all_networks_count_started_message(" http://localhost:37373 "),
+            "Checking how many Polar networks are visible at http://localhost:37373..."
+        );
+        assert_eq!(
             delete_all_networks_counting_message(),
             "Finding polar networks visible to the local bridge... This will fail after 300s if the bridge does not answer."
         );
         assert_eq!(
-            delete_all_networks_progress_message(0, 0),
+            delete_all_networks_progress_message_for_counts(0, 0),
             "No polar networks visible to the local bridge."
+        );
+    }
+
+    #[test]
+    fn delete_all_networks_confirmation_message_includes_network_count() {
+        assert_eq!(
+            delete_all_networks_confirmation_message(Some(3)),
+            "The local Polar bridge reports 3 Polar network(s). Delete all 3 network(s) and lock the app setup?"
+        );
+        assert_eq!(
+            delete_all_networks_confirmation_message(Some(0)),
+            "The local Polar bridge reports 0 networks. Confirming will verify setup is already clear and keep the app locked."
         );
     }
 
@@ -2390,6 +2640,33 @@ mod tests {
             "autopilot-1779120000"
         );
     }
+
+    #[test]
+    fn autopilot_fresh_retry_profile_rewinds_to_server_ready_state() {
+        let mut profile = profile_with_status(ConnectionStatus::Connected, "stale-network");
+        profile.network_name = "stale-network".to_string();
+        profile.polar_block_height_confirmed = true;
+        profile.game_treasury_ready = true;
+        profile.game_treasury_funded_sats = 10_000;
+        profile.last_verified_at = Some(chrono::Utc::now());
+
+        let retry_profile =
+            autopilot_profile_for_fresh_server_retry(profile, "autopilot-1779210731555");
+
+        assert_eq!(retry_profile.network_name, "autopilot-1779210731555");
+        assert_eq!(
+            retry_profile.polar_automation.network_id,
+            "autopilot-1779210731555"
+        );
+        assert_eq!(
+            retry_profile.connection_status,
+            ConnectionStatus::SavedOffline
+        );
+        assert!(!retry_profile.polar_block_height_confirmed);
+        assert!(!retry_profile.game_treasury_ready);
+        assert_eq!(retry_profile.game_treasury_funded_sats, 0);
+        assert_eq!(retry_profile.last_verified_at, None);
+    }
 }
 
 async fn run_polar_setup_autopilot(
@@ -2415,7 +2692,7 @@ async fn run_polar_setup_autopilot(
     let operation_id = begin_operation_prompt(
         operation_prompt,
         prompt_sequence,
-        "Polar autopilot",
+        POLAR_AUTOPILOT_PROMPT_TITLE,
         "Starting setup run...",
         false,
     )
@@ -2477,24 +2754,19 @@ async fn delete_all_networks_from_setup(
     mut bridge_connection_error: Signal<String>,
     mut autopilot_enabled: Signal<bool>,
     mut autopilot_status: Signal<String>,
-) {
+    delete_all_networks_confirmation_count: Signal<Option<usize>>,
+) -> bool {
     is_busy.set(true);
     let delete_profile =
         delete_all_networks_profile_from_input(setup_profile(), polar_bridge_url());
-    let bridge_url = delete_profile.polar_automation.bridge_url.clone();
+    let initial_total = delete_all_networks_confirmation_count();
     operation_prompt.set(Some(OperationPrompt {
         operation_id: 90_000,
         title: "Delete all Polar networks".to_string(),
-        message: delete_all_networks_started_message(&bridge_url),
-        tone: ToastTone::Error,
-        is_pending: true,
-        can_cancel: false,
-        cancel_requested: false,
-    }));
-    operation_prompt.set(Some(OperationPrompt {
-        operation_id: 90_000,
-        title: "Delete all Polar networks".to_string(),
-        message: delete_all_networks_counting_message(),
+        subtitle: None,
+        message: initial_total
+            .map(|total| delete_all_networks_progress_message_for_counts(0, total))
+            .unwrap_or_else(delete_all_networks_counting_message),
         tone: ToastTone::Error,
         is_pending: true,
         can_cancel: false,
@@ -2503,11 +2775,12 @@ async fn delete_all_networks_from_setup(
 
     let mut progress_prompt = operation_prompt;
     match with_delete_all_networks_timeout(
-        delete_all_polar_networks_with_progress(delete_profile, move |processed, total| {
+        delete_all_polar_networks_with_progress(delete_profile, move |progress| {
             progress_prompt.set(Some(OperationPrompt {
                 operation_id: 90_000,
                 title: "Delete all Polar networks".to_string(),
-                message: delete_all_networks_progress_message(processed, total),
+                subtitle: None,
+                message: delete_all_networks_progress_message(&progress),
                 tone: ToastTone::Error,
                 is_pending: true,
                 can_cancel: false,
@@ -2518,7 +2791,7 @@ async fn delete_all_networks_from_setup(
     )
     .await
     {
-        Ok((default_profile, deleted_count)) => {
+        Ok((default_profile, result)) => {
             setup_profile.set(default_profile.clone());
             lab_state.set(None);
             amount_text.set(default_profile.sats_per_transaction.to_string());
@@ -2532,14 +2805,74 @@ async fn delete_all_networks_from_setup(
             push_toast(
                 toast,
                 toast_sequence,
-                format!("Deleted {deleted_count} Polar network(s)."),
+                format!("Deleted {} Polar network(s).", result.deleted_count),
                 ToastTone::Success,
             );
+            is_busy.set(false);
+            true
         }
         Err(message) => {
             operation_prompt.set(Some(OperationPrompt {
                 operation_id: 90_001,
                 title: "Delete all Polar networks failed".to_string(),
+                subtitle: None,
+                message: message.clone(),
+                tone: ToastTone::Error,
+                is_pending: false,
+                can_cancel: false,
+                cancel_requested: false,
+            }));
+            push_toast(toast, toast_sequence, message, ToastTone::Error);
+            is_busy.set(false);
+            false
+        }
+    }
+}
+
+async fn prepare_delete_all_networks_confirmation(
+    mut is_busy: Signal<bool>,
+    mut show_prompt: Signal<bool>,
+    mut confirmation_count: Signal<Option<usize>>,
+    setup_profile: Signal<SetupProfile>,
+    mut operation_prompt: Signal<Option<OperationPrompt>>,
+    toast: Signal<Option<Toast>>,
+    toast_sequence: Signal<u64>,
+    polar_bridge_url: String,
+) {
+    is_busy.set(true);
+    confirmation_count.set(None);
+    show_prompt.set(false);
+
+    let delete_profile = delete_all_networks_profile_from_input(setup_profile(), polar_bridge_url);
+    let bridge_url = delete_profile.polar_automation.bridge_url.clone();
+    operation_prompt.set(Some(OperationPrompt {
+        operation_id: 89_999,
+        title: "Count Polar networks".to_string(),
+        subtitle: None,
+        message: delete_all_networks_count_started_message(&bridge_url),
+        tone: ToastTone::Error,
+        is_pending: true,
+        can_cancel: false,
+        cancel_requested: false,
+    }));
+
+    let result = with_delete_all_networks_timeout(
+        count_polar_networks(delete_profile),
+        POLAR_DELETE_ALL_COUNT_TIMEOUT_SECONDS,
+    )
+    .await;
+
+    match result {
+        Ok(count) => {
+            operation_prompt.set(None);
+            confirmation_count.set(Some(count));
+            show_prompt.set(true);
+        }
+        Err(message) => {
+            operation_prompt.set(Some(OperationPrompt {
+                operation_id: 89_998,
+                title: "Could not count Polar networks".to_string(),
+                subtitle: None,
                 message: message.clone(),
                 tone: ToastTone::Error,
                 is_pending: false,
@@ -2553,6 +2886,28 @@ async fn delete_all_networks_from_setup(
     is_busy.set(false);
 }
 
+fn delete_all_networks_count_started_message(bridge_url: &str) -> String {
+    format!(
+        "Checking how many Polar networks are visible at {}...",
+        bridge_url.trim()
+    )
+}
+
+fn delete_all_networks_confirmation_message(count: Option<usize>) -> String {
+    match count {
+        Some(0) => {
+            "The local Polar bridge reports 0 networks. Confirming will verify setup is already clear and keep the app locked.".to_string()
+        }
+        Some(count) => format!(
+            "The local Polar bridge reports {count} Polar network(s). Delete all {count} network(s) and lock the app setup?"
+        ),
+        None => {
+            "The app is still counting Polar networks. Wait for the count before confirming.".to_string()
+        }
+    }
+}
+
+#[cfg(test)]
 fn delete_all_networks_started_message(bridge_url: &str) -> String {
     format!(
         "Delete request started. Checking Polar bridge at {}...",
@@ -2566,12 +2921,16 @@ fn delete_all_networks_counting_message() -> String {
     )
 }
 
-fn delete_all_networks_progress_message(processed: usize, total: usize) -> String {
+fn delete_all_networks_progress_message(progress: &PolarDeleteAllProgress) -> String {
+    delete_all_networks_progress_message_for_counts(progress.deleted, progress.total)
+}
+
+fn delete_all_networks_progress_message_for_counts(deleted: usize, total: usize) -> String {
     if total == 0 {
         return "No polar networks visible to the local bridge.".to_string();
     }
 
-    format!("Deleting {processed}/{total} polar networks visible to the local bridge...")
+    format!("Deleting {deleted}/{total} polar networks visible to the local bridge...")
 }
 
 async fn with_delete_all_networks_timeout<F, T>(future: F, seconds: u32) -> Result<T, String>
@@ -2681,16 +3040,17 @@ async fn run_polar_setup_autopilot_inner(
     }
 
     if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::BridgeUrl {
-        update_operation_prompt(
+        update_autopilot_operation_prompt(
             operation_prompt,
             operation_id,
-            "Step 1 of 8: connecting to the Polar bridge...",
+            PolarWizardStep::BridgeUrl,
+            "Connecting to the Polar bridge...",
             ToastTone::Info,
             true,
             false,
         )
         .await;
-        autopilot_status.set("Step 1 of 8: Bridge URL".to_string());
+        autopilot_status.set("Step 1 of 9: Bridge URL".to_string());
         profile.connection_status = ConnectionStatus::SavedOffline;
         profile.last_verified_at = None;
         profile.polar_automation.network_id.clear();
@@ -2704,16 +3064,17 @@ async fn run_polar_setup_autopilot_inner(
     }
 
     if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::ServerName {
-        update_operation_prompt(
+        update_autopilot_operation_prompt(
             operation_prompt,
             operation_id,
-            "Step 2 of 8: finding or creating the named Polar server...",
+            PolarWizardStep::ServerName,
+            "Finding or creating the named Polar server...",
             ToastTone::Info,
             true,
             false,
         )
         .await;
-        autopilot_status.set("Step 2 of 8: Server Name".to_string());
+        autopilot_status.set("Step 2 of 9: Server Name".to_string());
         let mut result = None;
         let mut last_error = None;
         for attempt in 1..=POLAR_AUTOPILOT_SERVER_ATTEMPTS {
@@ -2744,11 +3105,12 @@ async fn run_polar_setup_autopilot_inner(
                     profile.game_treasury_funded_sats = 0;
                     setup_profile.set(profile.clone());
                     lab_state.set(None);
-                    update_operation_prompt(
+                    update_autopilot_operation_prompt(
                         operation_prompt,
                         operation_id,
+                        PolarWizardStep::ServerName,
                         format!(
-                            "Step 2 retry {}/{}: previous Polar port/start allocation failed. Trying fresh server {}...",
+                            "Retry {}/{}: previous Polar port/start allocation failed. Trying fresh server {}...",
                             attempt + 1,
                             POLAR_AUTOPILOT_SERVER_ATTEMPTS,
                             profile.network_name
@@ -2786,17 +3148,130 @@ async fn run_polar_setup_autopilot_inner(
         lab_state.set(None);
     }
 
-    if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::GameTreasury {
-        update_operation_prompt(
+    if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::CreateNodes {
+        update_autopilot_operation_prompt(
             operation_prompt,
             operation_id,
-            "Step 3 of 8: creating and funding the Game Treasury...",
+            PolarWizardStep::CreateNodes,
+            "Creating required Polar nodes...",
             ToastTone::Info,
             true,
             false,
         )
         .await;
-        autopilot_status.set("Step 3 of 8: Game Treasury (Sats)".to_string());
+        autopilot_status.set("Step 3 of 9: Create Nodes".to_string());
+        let mut state = None;
+        let mut last_error = None;
+        for attempt in 1..=POLAR_AUTOPILOT_SERVER_ATTEMPTS {
+            let progress_prompt = operation_prompt;
+            let progress_operation_id = operation_id;
+            match create_required_polar_nodes_with_progress(profile.clone(), move |message| {
+                update_autopilot_operation_prompt_now(
+                    progress_prompt,
+                    progress_operation_id,
+                    PolarWizardStep::CreateNodes,
+                    message,
+                    ToastTone::Info,
+                    true,
+                    false,
+                );
+            })
+            .await
+            {
+                Ok(created_state) => {
+                    state = Some(created_state);
+                    break;
+                }
+                Err(message)
+                    if attempt < POLAR_AUTOPILOT_SERVER_ATTEMPTS
+                        && is_retryable_polar_start_error(&message) =>
+                {
+                    last_error = Some(message);
+                    cleanup_failed_autopilot_server(&profile).await;
+                    let retry_server_name = fresh_autopilot_server_name();
+                    polar_server_name.set(retry_server_name.clone());
+                    profile = autopilot_profile_for_fresh_server_retry(profile, &retry_server_name);
+                    setup_profile.set(profile.clone());
+                    lab_state.set(None);
+                    update_autopilot_operation_prompt(
+                        operation_prompt,
+                        operation_id,
+                        PolarWizardStep::CreateNodes,
+                        format!(
+                            "Retry {}/{}: Polar server disappeared or failed during node creation. Trying fresh server {}...",
+                            attempt + 1,
+                            POLAR_AUTOPILOT_SERVER_ATTEMPTS,
+                            profile.network_name
+                        ),
+                        ToastTone::Info,
+                        true,
+                        false,
+                    )
+                    .await;
+                    autopilot_status.set(format!(
+                        "Step 3 retry {}/{}: Create Nodes",
+                        attempt + 1,
+                        POLAR_AUTOPILOT_SERVER_ATTEMPTS
+                    ));
+
+                    match ensure_polar_server_for_autopilot(profile.clone()).await {
+                        Ok(result) => {
+                            profile.polar_automation = result.profile;
+                            profile.connection_status = ConnectionStatus::SavedOffline;
+                            profile.polar_block_height_confirmed = false;
+                            profile.game_treasury_ready = false;
+                            profile.game_treasury_funded_sats = 0;
+                            profile.last_verified_at = None;
+                            setup_profile.set(profile.clone());
+                            lab_state.set(None);
+                        }
+                        Err(message)
+                            if attempt < POLAR_AUTOPILOT_SERVER_ATTEMPTS
+                                && is_retryable_polar_start_error(&message) =>
+                        {
+                            last_error = Some(message);
+                            cleanup_failed_autopilot_server(&profile).await;
+                            continue;
+                        }
+                        Err(message) if is_retryable_polar_start_error(&message) => {
+                            cleanup_failed_autopilot_server(&profile).await;
+                            return Err(format!(
+                                "Polar server start failed after {POLAR_AUTOPILOT_SERVER_ATTEMPTS} fresh server attempts: {message}"
+                            ));
+                        }
+                        Err(message) => return Err(message),
+                    }
+                }
+                Err(message) if is_retryable_polar_start_error(&message) => {
+                    cleanup_failed_autopilot_server(&profile).await;
+                    return Err(format!(
+                        "Create Nodes failed after {POLAR_AUTOPILOT_SERVER_ATTEMPTS} fresh server attempts: {message}"
+                    ));
+                }
+                Err(message) => return Err(message),
+            }
+        }
+        let state = state.ok_or_else(|| {
+            last_error.unwrap_or_else(|| "Required Polar nodes could not be created.".to_string())
+        })?;
+        polar_block_height.set(state.block_height.to_string());
+        profile = state.profile.clone();
+        setup_profile.set(profile.clone());
+        lab_state.set(Some(state));
+    }
+
+    if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::GameTreasury {
+        update_autopilot_operation_prompt(
+            operation_prompt,
+            operation_id,
+            PolarWizardStep::GameTreasury,
+            "Checking Game Treasury sats...",
+            ToastTone::Info,
+            true,
+            false,
+        )
+        .await;
+        autopilot_status.set("Step 4 of 9: Game Treasury (Sats)".to_string());
         let mut state = None;
         let mut last_error = None;
         for attempt in 1..=POLAR_AUTOPILOT_SERVER_ATTEMPTS {
@@ -2821,11 +3296,12 @@ async fn run_polar_setup_autopilot_inner(
                     profile.game_treasury_funded_sats = 0;
                     setup_profile.set(profile.clone());
                     lab_state.set(None);
-                    update_operation_prompt(
+                    update_autopilot_operation_prompt(
                         operation_prompt,
                         operation_id,
+                        PolarWizardStep::GameTreasury,
                         format!(
-                            "Step 3 retry {}/{}: Polar start allocation failed. Trying fresh server {}...",
+                            "Retry {}/{}: Polar start allocation failed. Trying fresh server {}...",
                             attempt + 1,
                             POLAR_AUTOPILOT_SERVER_ATTEMPTS,
                             profile.network_name
@@ -2836,7 +3312,7 @@ async fn run_polar_setup_autopilot_inner(
                     )
                     .await;
                     autopilot_status.set(format!(
-                        "Step 3 retry {}/{}: Game Treasury (Sats)",
+                        "Step 4 retry {}/{}: Game Treasury (Sats)",
                         attempt + 1,
                         POLAR_AUTOPILOT_SERVER_ATTEMPTS
                     ));
@@ -2887,80 +3363,71 @@ async fn run_polar_setup_autopilot_inner(
     }
 
     if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::GameTreasuryTras {
-        update_operation_prompt(
+        update_autopilot_operation_prompt(
             operation_prompt,
             operation_id,
-            "Step 4 of 8: preparing treasury TRA inventory...",
+            PolarWizardStep::GameTreasuryTras,
+            "Checking Game Treasury TRA inventory...",
             ToastTone::Info,
             true,
             false,
         )
         .await;
-        autopilot_status.set("Step 4 of 8: Game Treasury (TRAs)".to_string());
+        autopilot_status.set("Step 5 of 9: Game Treasury (TRAs)".to_string());
         let state = prepare_game_treasury_tras(profile.clone()).await?;
         profile = state.profile.clone();
         setup_profile.set(profile.clone());
         lab_state.set(Some(state));
     }
 
-    if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::UserNodes {
-        update_operation_prompt(
+    if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::UserNodesSats {
+        update_autopilot_operation_prompt(
             operation_prompt,
             operation_id,
-            "Step 5 of 8: creating Alice, Bob, and Carol...",
+            PolarWizardStep::UserNodesSats,
+            "Checking user node sats...",
             ToastTone::Info,
             true,
             false,
         )
         .await;
-        autopilot_status.set("Step 5 of 8: User Nodes".to_string());
-        let progress_prompt = operation_prompt;
-        let progress_operation_id = operation_id;
-        let state = create_polar_demo_nodes_with_progress(profile.clone(), move |message| {
-            update_operation_prompt_now(
-                progress_prompt,
-                progress_operation_id,
-                message,
-                ToastTone::Info,
-                true,
-                false,
-            );
-        })
-        .await?;
-        polar_block_height.set(state.block_height.to_string());
+        autopilot_status.set("Step 6 of 9: User Nodes (Sats)".to_string());
+        let state = prepare_user_node_sats(profile.clone()).await?;
         profile = state.profile.clone();
         setup_profile.set(profile.clone());
         lab_state.set(Some(state));
     }
 
-    if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::NpcItemTransfers {
-        update_operation_prompt(
+    if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::UserNodesTras {
+        update_autopilot_operation_prompt(
             operation_prompt,
             operation_id,
-            "Step 6 of 8: transferring NPC starting items...",
+            PolarWizardStep::UserNodesTras,
+            "Rebalancing user node TRAs...",
             ToastTone::Info,
             true,
             false,
         )
         .await;
-        autopilot_status.set("Step 6 of 8: NPC Item Transfers".to_string());
-        let state = transfer_npc_starting_items(profile.clone()).await?;
+        autopilot_status.set("Step 7 of 9: User Nodes (TRAs)".to_string());
+        let state = prepare_user_node_tras(profile.clone()).await?;
         profile = state.profile.clone();
         setup_profile.set(profile.clone());
         lab_state.set(Some(state));
     }
 
     if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::BlockHeight {
-        update_operation_prompt(
+        update_autopilot_operation_prompt(
             operation_prompt,
             operation_id,
-            "Step 7 of 8: saving the app block-height baseline...",
+            PolarWizardStep::BlockHeight,
+            "Saving the app block-height baseline...",
             ToastTone::Info,
             true,
             false,
         )
         .await;
-        autopilot_status.set("Step 7 of 8: Block Height".to_string());
+        autopilot_status.set("Step 8 of 9: Block Height".to_string());
         let fallback_height = lab_state()
             .map(|state| state.block_height.to_string())
             .unwrap_or_else(|| "0".to_string());
@@ -2976,25 +3443,27 @@ async fn run_polar_setup_autopilot_inner(
     }
 
     if polar_wizard_step(&profile, lab_state().as_ref()) == PolarWizardStep::Complete {
-        update_operation_prompt(
+        update_autopilot_operation_prompt(
             operation_prompt,
             operation_id,
-            "Step 8 of 8: unlocking routes...",
+            PolarWizardStep::Complete,
+            "Unlocking routes...",
             ToastTone::Info,
             true,
             false,
         )
         .await;
-        autopilot_status.set("Step 8 of 8: Unlock Routes".to_string());
+        autopilot_status.set("Step 9 of 9: Unlock Routes".to_string());
         let state = complete_polar_setup(profile.clone()).await?;
         profile = state.profile.clone();
         setup_profile.set(profile.clone());
         lab_state.set(Some(state));
     }
 
-    update_operation_prompt(
+    update_autopilot_operation_prompt(
         operation_prompt,
         operation_id,
+        PolarWizardStep::Complete,
         "Testing completed setup again...",
         ToastTone::Info,
         true,
@@ -3025,6 +3494,21 @@ fn fresh_autopilot_server_name() -> String {
 
 fn autopilot_server_name_from_timestamp(timestamp: i64) -> String {
     format!("autopilot-{timestamp}")
+}
+
+fn autopilot_profile_for_fresh_server_retry(
+    mut profile: SetupProfile,
+    retry_server_name: &str,
+) -> SetupProfile {
+    let retry_server_name = retry_server_name.trim().to_string();
+    profile.network_name = retry_server_name.clone();
+    profile.polar_automation.network_id = retry_server_name;
+    profile.connection_status = ConnectionStatus::SavedOffline;
+    profile.polar_block_height_confirmed = false;
+    profile.game_treasury_ready = false;
+    profile.game_treasury_funded_sats = 0;
+    profile.last_verified_at = None;
+    profile
 }
 
 async fn ensure_polar_server_for_autopilot(
@@ -3101,8 +3585,8 @@ async fn create_demo_nodes_step(
     let operation_id = begin_operation_prompt(
         operation_prompt,
         prompt_sequence,
-        "Create user nodes",
-        "Starting user-node creation...",
+        "Create Nodes",
+        "Finding or creating required Polar nodes...",
         true,
     )
     .await;
@@ -3117,17 +3601,18 @@ async fn create_demo_nodes_step(
         Ok(profile) => {
             let progress_prompt = operation_prompt;
             let progress_operation_id = operation_id;
-            let create_result = create_polar_demo_nodes_with_progress(profile, move |message| {
-                update_operation_prompt_now(
-                    progress_prompt,
-                    progress_operation_id,
-                    message,
-                    ToastTone::Info,
-                    true,
-                    true,
-                );
-            })
-            .await;
+            let create_result =
+                create_required_polar_nodes_with_progress(profile, move |message| {
+                    update_operation_prompt_now(
+                        progress_prompt,
+                        progress_operation_id,
+                        message,
+                        ToastTone::Info,
+                        true,
+                        true,
+                    );
+                })
+                .await;
 
             match create_result {
                 Ok(state) => {
@@ -3140,7 +3625,7 @@ async fn create_demo_nodes_step(
                                 update_operation_prompt(
                                     operation_prompt,
                                     operation_id,
-                                    "User node creation canceled. Alice, Bob, and Carol were removed.",
+                                    "Node creation canceled. Alice, Bob, and Carol were removed.",
                                     ToastTone::Success,
                                     false,
                                     false,
@@ -3150,7 +3635,7 @@ async fn create_demo_nodes_step(
                                 push_toast(
                                     toast,
                                     toast_sequence,
-                                    "User node creation canceled.",
+                                    "Node creation canceled.",
                                     ToastTone::Success,
                                 );
                             }
@@ -3182,8 +3667,13 @@ async fn create_demo_nodes_step(
                         polar_block_height.set(state.block_height.to_string());
                         lab_state.set(Some(state));
                         close_operation_prompt(operation_prompt, operation_id);
-                        push_toast(toast, toast_sequence, "User Nodes sent", ToastTone::Success);
-                        focus_step_control("polar-tra-assets-submit").await;
+                        push_toast(
+                            toast,
+                            toast_sequence,
+                            "Create Nodes sent",
+                            ToastTone::Success,
+                        );
+                        focus_step_control("polar-game-treasury-submit").await;
                     }
                 }
                 Err(message) => {
@@ -3196,7 +3686,7 @@ async fn create_demo_nodes_step(
                         update_operation_prompt(
                             operation_prompt,
                             operation_id,
-                            "Return to step 1 and connect to the Polar bridge before creating user nodes.",
+                            "Return to step 1 and connect to the Polar bridge before creating nodes.",
                             ToastTone::Error,
                             false,
                             false,
@@ -3239,6 +3729,32 @@ async fn create_demo_nodes_step(
     is_busy.set(false);
 }
 
+async fn rebalance_user_nodes_sats_step(
+    mut is_busy: Signal<bool>,
+    setup_profile: Signal<SetupProfile>,
+    mut lab_state: Signal<Option<LabState>>,
+    toast: Signal<Option<Toast>>,
+    toast_sequence: Signal<u64>,
+) {
+    is_busy.set(true);
+    match prepare_user_node_sats(setup_profile()).await {
+        Ok(state) => {
+            lab_state.set(Some(state));
+            push_toast(
+                toast,
+                toast_sequence,
+                "User node sats ready.",
+                ToastTone::Success,
+            );
+            focus_step_control("polar-tra-assets-submit").await;
+        }
+        Err(message) => {
+            push_toast(toast, toast_sequence, message, ToastTone::Error);
+        }
+    }
+    is_busy.set(false);
+}
+
 async fn reset_complete_step(
     mut is_busy: Signal<bool>,
     mut setup_profile: Signal<SetupProfile>,
@@ -3260,7 +3776,7 @@ async fn reset_complete_step(
     push_toast(
         toast,
         toast_sequence,
-        "Returned to step 7. Block Height must be submitted before routes unlock again.",
+        "Returned to step 8. Block Height must be submitted before routes unlock again.",
         ToastTone::Success,
     );
     is_busy.set(false);
@@ -3299,7 +3815,7 @@ async fn prepare_treasury_tras_step(
                 "Game Treasury TRAs ready.",
                 ToastTone::Success,
             );
-            focus_step_control(POLAR_DEMO_NODES_SUBMIT_ID).await;
+            focus_step_control("polar-user-nodes-sats-submit").await;
         }
         Err(message) => {
             update_operation_prompt(
@@ -3332,8 +3848,8 @@ async fn prepare_tra_inventory_step(
     let operation_id = begin_operation_prompt(
         operation_prompt,
         prompt_sequence,
-        "Add NPC Item Transfers",
-        "Recreating NPC Item Transfers from scratch...",
+        "User Nodes (TRAs)",
+        "Rebalancing user node TRAs from Game Treasury...",
         false,
     )
     .await;
@@ -3348,7 +3864,7 @@ async fn prepare_tra_inventory_step(
     )
     .await;
 
-    let result = transfer_npc_starting_items(setup_profile()).await;
+    let result = prepare_user_node_tras(setup_profile()).await;
 
     match result {
         Ok(state) => {
@@ -3358,7 +3874,7 @@ async fn prepare_tra_inventory_step(
             push_toast(
                 toast,
                 toast_sequence,
-                "NPC Item Transfers added.",
+                "User node TRAs ready.",
                 ToastTone::Success,
             );
             focus_step_control("polar-block-height-input").await;
@@ -3393,6 +3909,7 @@ async fn begin_operation_prompt(
     prompt.set(Some(OperationPrompt {
         operation_id,
         title: title.into(),
+        subtitle: None,
         message: message.into(),
         tone: ToastTone::Info,
         is_pending: true,
@@ -3424,6 +3941,50 @@ async fn update_operation_prompt(
     }
 }
 
+async fn update_operation_prompt_with_subtitle(
+    mut prompt: Signal<Option<OperationPrompt>>,
+    operation_id: u64,
+    subtitle: Option<String>,
+    message: impl Into<String>,
+    tone: ToastTone,
+    is_pending: bool,
+    can_cancel: bool,
+) {
+    let active_prompt = { prompt.peek().as_ref().cloned() };
+    if let Some(mut active_prompt) = active_prompt {
+        if active_prompt.operation_id == operation_id {
+            active_prompt.subtitle = subtitle;
+            active_prompt.message = message.into();
+            active_prompt.tone = tone;
+            active_prompt.is_pending = is_pending;
+            active_prompt.can_cancel = can_cancel;
+            prompt.set(Some(active_prompt));
+            wait_for_prompt_message_minimum().await;
+        }
+    }
+}
+
+async fn update_autopilot_operation_prompt(
+    prompt: Signal<Option<OperationPrompt>>,
+    operation_id: u64,
+    step: PolarWizardStep,
+    message: impl Into<String>,
+    tone: ToastTone,
+    is_pending: bool,
+    can_cancel: bool,
+) {
+    update_operation_prompt_with_subtitle(
+        prompt,
+        operation_id,
+        Some(autopilot_step_subtitle(step)),
+        message,
+        tone,
+        is_pending,
+        can_cancel,
+    )
+    .await;
+}
+
 fn update_operation_prompt_now(
     mut prompt: Signal<Option<OperationPrompt>>,
     operation_id: u64,
@@ -3442,6 +4003,52 @@ fn update_operation_prompt_now(
             prompt.set(Some(active_prompt));
         }
     }
+}
+
+fn update_operation_prompt_now_with_subtitle(
+    mut prompt: Signal<Option<OperationPrompt>>,
+    operation_id: u64,
+    subtitle: Option<String>,
+    message: impl Into<String>,
+    tone: ToastTone,
+    is_pending: bool,
+    can_cancel: bool,
+) {
+    let active_prompt = { prompt.peek().as_ref().cloned() };
+    if let Some(mut active_prompt) = active_prompt {
+        if active_prompt.operation_id == operation_id {
+            active_prompt.subtitle = subtitle;
+            active_prompt.message = message.into();
+            active_prompt.tone = tone;
+            active_prompt.is_pending = is_pending;
+            active_prompt.can_cancel = can_cancel;
+            prompt.set(Some(active_prompt));
+        }
+    }
+}
+
+fn update_autopilot_operation_prompt_now(
+    prompt: Signal<Option<OperationPrompt>>,
+    operation_id: u64,
+    step: PolarWizardStep,
+    message: impl Into<String>,
+    tone: ToastTone,
+    is_pending: bool,
+    can_cancel: bool,
+) {
+    update_operation_prompt_now_with_subtitle(
+        prompt,
+        operation_id,
+        Some(autopilot_step_subtitle(step)),
+        message,
+        tone,
+        is_pending,
+        can_cancel,
+    );
+}
+
+fn autopilot_step_subtitle(step: PolarWizardStep) -> String {
+    format!("{}. {}", step.order(), polar_wizard_step_label(step))
 }
 
 fn close_operation_prompt(mut prompt: Signal<Option<OperationPrompt>>, operation_id: u64) {

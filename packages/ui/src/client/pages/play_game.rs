@@ -1014,6 +1014,7 @@ async fn begin_operation_prompt(
     prompt.set(Some(OperationPrompt {
         operation_id,
         title: title.into(),
+        subtitle: None,
         message: message.into(),
         tone: ToastTone::Info,
         is_pending: true,
@@ -1170,6 +1171,7 @@ fn apply_lab_recovery(
     operation_prompt.set(Some(OperationPrompt {
         operation_id: next_id,
         title: "Polar setup needs attention".to_string(),
+        subtitle: None,
         message: recovery.message,
         tone: ToastTone::Error,
         is_pending: false,

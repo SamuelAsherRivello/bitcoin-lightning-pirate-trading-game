@@ -16,7 +16,8 @@ pub fn PageHeader() -> Element {
     let is_play_game = active_route == (Route::PlayGame {});
     let is_debug_network = active_route == (Route::DebugNetwork {});
     let setup_profile = use_context::<Signal<SetupProfile>>();
-    let setup_is_connected = setup_profile().is_connected();
+    let setup_snapshot = setup_profile();
+    let setup_is_connected = setup_snapshot.is_connected();
     let toast = use_context::<Signal<Option<Toast>>>();
     let operation_prompt = use_context::<Signal<Option<OperationPrompt>>>();
 
@@ -100,6 +101,11 @@ pub fn PageHeader() -> Element {
                             span { class: "page-header__label-short", {t!("nav-debug-network-short")} }
                         }
                     }
+                }
+                div {
+                    class: "page-header__auth-status",
+                    aria_label: "User auth mode",
+                    span { "Auth: {setup_snapshot.user_auth_mode.label()}" }
                 }
                 DeveloperTools {}
             }

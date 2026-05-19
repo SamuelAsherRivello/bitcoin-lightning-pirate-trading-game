@@ -145,10 +145,10 @@ pub fn DebugNetwork() -> Element {
                     h2 { "TRA instances" }
                 }
                 if state.tra_items.is_empty() {
-                    p { class: "muted-copy", "TRA instances created by Game Treasury (TRAs) will appear here with GAME_TREASURY as the owner." }
+                    p { class: "muted-copy", "TRA instances created by Game Treasury (TRAs) will appear here with GAME_LND as the owner." }
                 } else {
                     p { class: "muted-copy",
-                        "After setup step 3, treasury inventory should show as concrete TRA instances owned by GAME_TREASURY. NPC transfers move these rows from GAME_TREASURY to Bob and Carol."
+                        "After setup step 5, treasury inventory should show as concrete TRA instances owned by GAME_LND. User Nodes (TRAs) moves these rows from GAME_LND to Bob and Carol."
                     }
                     div { class: "tra-table", role: "table", aria_label: "Tap Root Assets inventory rows",
                         div { class: "tra-table__row tra-table__row--head", role: "row",
@@ -297,6 +297,7 @@ fn apply_lab_recovery(
     operation_prompt.set(Some(OperationPrompt {
         operation_id: next_id,
         title: "Polar setup needs attention".to_string(),
+        subtitle: None,
         message: recovery.message,
         tone: ToastTone::Error,
         is_pending: false,

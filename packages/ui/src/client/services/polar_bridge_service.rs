@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use crate::client::models::{
     DemoNodeId, PolarAutomationProfile, DEFAULT_BITCOIN_BACKEND_NAME, DEFAULT_NETWORK_NAME,
 };
+use crate::client::services::polar_mcp_connector::{self, PolarConnectorLogLevel};
 
 const DEMO_NODE_FUNDING_SATS: u64 = 1_000_000;
 const DEMO_NODE_START_TIMEOUT_SECONDS: u16 = 30;
@@ -20,13 +21,12 @@ const TAPROOT_NODE_START_ATTEMPTS: u16 = 20;
 const GAME_TREASURY_READY_TIMEOUT_SECONDS: u16 = 240;
 const GAME_TREASURY_READY_ATTEMPTS: u16 =
     ((GAME_TREASURY_READY_TIMEOUT_SECONDS as u32 * 1_000) / DEMO_NODE_READY_DELAY_MS) as u16;
-const BRIDGE_REQUEST_TIMEOUT_SECONDS: u64 = 30;
 const DELETE_NETWORK_TIMEOUT_SECONDS: u32 = 12;
 const DELETE_NETWORK_SETTLE_MS: u32 = 5_000;
 const DELETE_NETWORK_ATTEMPTS: u8 = 4;
 const DELETE_NETWORK_STATUS_ATTEMPTS: u8 = 10;
-const DEMO_SERVICE_LOG_LEVEL: DemoLogLevel = DemoLogLevel::On;
-const TAPROOT_ASSETS_NODE_NAME: &str = "GAME_TAP";
+const DELETE_ALL_NETWORK_PASSES: u8 = 3;
+const TAPROOT_ASSETS_NODE_NAME: &str = "GAME_TAPROOT";
 const LEGACY_TAPROOT_ASSETS_NODE_NAME: &str = "tapd";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -42,9 +42,13 @@ pub enum DemoLogLevel {
     Verbose,
 }
 
-impl DemoLogLevel {
-    fn allows(self, required: Self) -> bool {
-        self >= required && self != Self::Off
+impl From<DemoLogLevel> for PolarConnectorLogLevel {
+    fn from(value: DemoLogLevel) -> Self {
+        match value {
+            DemoLogLevel::Off => Self::Off,
+            DemoLogLevel::On => Self::On,
+            DemoLogLevel::Verbose => Self::Verbose,
+        }
     }
 }
 
@@ -174,11 +178,6 @@ pub async fn ensure_server(
 
     let networks = list_networks(profile).await?;
     if let Some(network_id) = find_network_id_by_name(&networks, &requested_name) {
-        ensure_network_running(profile, &network_id).await?;
-        let networks = list_networks(profile).await?;
-        ensure_named_network_running(&networks, &requested_name)?;
-        clean_network_for_step_two(profile, &network_id, &requested_name).await?;
-        let networks = list_networks(profile).await?;
         return Ok(PolarServerEnsureResult {
             profile: automation_profile_from_network(profile, &networks, network_id),
             status: PolarServerEnsureStatus::Existed,
@@ -188,10 +187,6 @@ pub async fn ensure_server(
     create_network(profile, &requested_name).await?;
 
     let network_id = wait_for_network_id_by_name(profile, &requested_name).await?;
-    ensure_network_running(profile, &network_id).await?;
-    let networks = list_networks(profile).await?;
-    ensure_named_network_running(&networks, &requested_name)?;
-    clean_network_for_step_two(profile, &network_id, &requested_name).await?;
     let networks = list_networks(profile).await?;
 
     Ok(PolarServerEnsureResult {
@@ -247,100 +242,226 @@ pub async fn create_demo_nodes(
     profile: &PolarAutomationProfile,
     required_balance_sats: u64,
 ) -> Result<PolarAutomationProfile, String> {
-    create_demo_nodes_with_progress(profile, required_balance_sats, |_| {}).await
+    create_required_nodes_with_progress(profile, required_balance_sats, |_| {}).await
 }
 
 pub async fn create_demo_nodes_with_progress<F>(
     profile: &PolarAutomationProfile,
     required_balance_sats: u64,
+    report_progress: F,
+) -> Result<PolarAutomationProfile, String>
+where
+    F: FnMut(String),
+{
+    create_required_nodes_with_progress(profile, required_balance_sats, report_progress).await
+}
+
+pub async fn create_required_nodes_with_progress<F>(
+    profile: &PolarAutomationProfile,
+    _required_balance_sats: u64,
     mut report_progress: F,
 ) -> Result<PolarAutomationProfile, String>
 where
     F: FnMut(String),
 {
-    let resolved_profile = resolve_started_automation_profile(profile).await?;
+    let resolved_profile = resolve_automation_profile(profile).await?;
     let network_id = clean_network_id(&resolved_profile);
-    let backend_name = clean_backend_name(&resolved_profile);
 
-    let mut node_plans = Vec::new();
-    let mut created_nodes = Vec::new();
+    report_progress("Reading current Polar node list...".to_string());
+    delete_unwanted_required_topology_nodes(&resolved_profile, &network_id, &mut report_progress)
+        .await?;
+
+    report_progress(format!("Ensuring {DEFAULT_BITCOIN_BACKEND_NAME} exists..."));
+    ensure_bitcoin_backend_node(&resolved_profile, &network_id).await?;
+
+    ensure_game_treasury_node_shell(
+        &resolved_profile,
+        &network_id,
+        TreasuryShellPolicy::AllowCreate,
+    )
+    .await?;
+
     for node_id in DemoNodeId::ALL {
-        report_progress(format!("Preparing {} in Polar...", node_id.label()));
-        let preparation = create_or_prepare_demo_node(
+        report_progress(format!(
+            "Ensuring {} exists in Polar...",
+            polar_node_name(node_id)
+        ));
+        create_or_prepare_demo_node(
             &resolved_profile,
             &network_id,
-            &backend_name,
+            DEFAULT_BITCOIN_BACKEND_NAME,
             node_id,
             &mut report_progress,
         )
         .await?;
-        if preparation.created_node {
-            created_nodes.push(node_id);
-        }
-        node_plans.push(node_id);
     }
 
-    if !created_nodes.is_empty() {
-        report_progress(
-            "Restarting Polar network once so new LND nodes start with the configured backend..."
-                .to_string(),
-        );
-        restart_network(&resolved_profile, &network_id).await?;
-    }
-
-    for node_id in node_plans {
-        report_progress(format!("Starting {} in Polar...", node_id.label()));
-        let node_name = polar_node_name(node_id);
+    for node_name in required_polar_base_node_names() {
+        report_progress(format!("Requesting start for {node_name} in Polar..."));
         let networks = list_networks(&resolved_profile).await?;
-        let status = lightning_node_status(&networks, &network_id, node_name)
+        let status = any_node_status(&networks, &network_id, node_name)
             .unwrap_or_else(|| "not started".to_string());
         request_lightning_node_start(&resolved_profile, &network_id, node_name, &status).await?;
     }
 
-    wait_for_lightning_nodes_started(&resolved_profile, &network_id).await?;
+    wait_for_named_polar_nodes_started(
+        &resolved_profile,
+        &network_id,
+        &required_polar_base_node_names(),
+    )
+    .await?;
 
-    for node_id in DemoNodeId::ALL {
-        let funding_plan = determine_demo_node_funding_plan(
-            &resolved_profile,
-            &network_id,
-            &backend_name,
-            node_id,
-            &mut report_progress,
-        )
-        .await?;
-        match funding_plan {
-            DemoNodeFundingPlan::AlreadyFunded => {
-                report_progress(format!(
-                    "{} already matches the step 03 goal. Checking readiness...",
-                    node_id.label()
-                ));
-            }
-            DemoNodeFundingPlan::NeedsFunding(sats) => {
-                report_progress(format!(
-                    "{} needs {sats} sats. Depositing only that amount...",
-                    node_id.label()
-                ));
-                deposit_demo_node_funds(&resolved_profile, &network_id, node_id, sats).await?;
+    report_progress(format!("Ensuring {TAPROOT_ASSETS_NODE_NAME} exists..."));
+    ensure_taproot_assets_node(&PolarAutomationProfile {
+        bitcoin_backend_name: DEFAULT_BITCOIN_BACKEND_NAME.to_string(),
+        ..resolved_profile.clone()
+    })
+    .await?;
 
-                report_progress(format!(
-                    "Mining blocks for {} and checking wallet balance...",
-                    node_id.label()
-                ));
-                mine_demo_blocks(&resolved_profile, &network_id, &backend_name).await?;
-            }
-        }
-
-        wait_for_demo_node_ready(&resolved_profile, required_balance_sats, node_id).await?;
-        report_progress(format!(
-            "{} is running and funded. Continuing...",
-            node_id.label()
-        ));
+    for node_name in required_polar_node_names() {
+        report_progress(format!("Requesting start for {node_name} in Polar..."));
+        let networks = list_networks(&resolved_profile).await?;
+        let status = any_node_status(&networks, &network_id, node_name)
+            .unwrap_or_else(|| "not started".to_string());
+        request_lightning_node_start(&resolved_profile, &network_id, node_name, &status).await?;
     }
 
-    report_progress("Verifying Alice, Bob, and Carol together...".to_string());
-    wait_for_demo_lab_ready(&resolved_profile, required_balance_sats).await?;
+    wait_for_required_polar_nodes_started(&resolved_profile, &network_id).await?;
+    report_progress("Required Polar nodes are created and started.".to_string());
 
-    Ok(resolved_profile)
+    Ok(PolarAutomationProfile {
+        bitcoin_backend_name: DEFAULT_BITCOIN_BACKEND_NAME.to_string(),
+        ..resolved_profile
+    })
+}
+
+fn required_polar_node_names() -> [&'static str; 6] {
+    [
+        DEFAULT_BITCOIN_BACKEND_NAME,
+        polar_node_name(DemoNodeId::GameTreasury),
+        TAPROOT_ASSETS_NODE_NAME,
+        polar_node_name(DemoNodeId::Alice),
+        polar_node_name(DemoNodeId::Bob),
+        polar_node_name(DemoNodeId::Carol),
+    ]
+}
+
+fn required_polar_base_node_names() -> [&'static str; 5] {
+    [
+        DEFAULT_BITCOIN_BACKEND_NAME,
+        polar_node_name(DemoNodeId::GameTreasury),
+        polar_node_name(DemoNodeId::Alice),
+        polar_node_name(DemoNodeId::Bob),
+        polar_node_name(DemoNodeId::Carol),
+    ]
+}
+
+async fn delete_unwanted_required_topology_nodes(
+    profile: &PolarAutomationProfile,
+    network_id: &str,
+    report_progress: &mut impl FnMut(String),
+) -> Result<(), String> {
+    loop {
+        let networks = list_networks(profile).await?;
+        let Some(node) = first_unexpected_required_topology_node(&networks, network_id) else {
+            return Ok(());
+        };
+        let Some(node_name) = node.name else {
+            return Ok(());
+        };
+
+        if node.is_bitcoin
+            && !bitcoin_node_exists(&networks, network_id, DEFAULT_BITCOIN_BACKEND_NAME)
+        {
+            report_progress(format!(
+                "Renaming Bitcoin backend {node_name} to {DEFAULT_BITCOIN_BACKEND_NAME}..."
+            ));
+            rename_demo_node(
+                profile,
+                network_id,
+                &node_name,
+                DEFAULT_BITCOIN_BACKEND_NAME,
+            )
+            .await?;
+            continue;
+        }
+
+        report_progress(format!("Deleting unexpected Polar node {node_name}..."));
+        remove_demo_node_by_name(profile, network_id, &node_name).await?;
+    }
+}
+
+fn first_unexpected_required_topology_node(
+    value: &Value,
+    network_id: &str,
+) -> Option<LightningNodeSummary> {
+    let required = required_polar_node_names();
+    network_node_summaries(value, network_id)
+        .into_iter()
+        .find(|node| {
+            node.name
+                .as_deref()
+                .map(|name| !required.contains(&name))
+                .unwrap_or(false)
+        })
+}
+
+#[cfg(test)]
+fn first_unexpected_required_topology_node_name(value: &Value, network_id: &str) -> Option<String> {
+    first_unexpected_required_topology_node(value, network_id).and_then(|node| node.name)
+}
+
+async fn ensure_bitcoin_backend_node(
+    profile: &PolarAutomationProfile,
+    network_id: &str,
+) -> Result<(), String> {
+    let networks = list_networks(profile).await?;
+    if bitcoin_node_exists(&networks, network_id, DEFAULT_BITCOIN_BACKEND_NAME) {
+        return Ok(());
+    }
+
+    for (tool, arguments) in add_bitcoin_node_attempts(network_id) {
+        match execute_tool(profile, tool, arguments).await {
+            Ok(_) => return Ok(()),
+            Err(_) => {}
+        }
+    }
+
+    let networks = list_networks(profile).await?;
+    if bitcoin_node_exists(&networks, network_id, DEFAULT_BITCOIN_BACKEND_NAME) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Polar bridge could not create Bitcoin backend {DEFAULT_BITCOIN_BACKEND_NAME}."
+        ))
+    }
+}
+
+fn add_bitcoin_node_attempts(network_id: &str) -> Vec<(&'static str, Value)> {
+    vec![
+        (
+            "add_node",
+            json!({
+                "networkId": network_id_argument(network_id),
+                "implementation": "bitcoind",
+                "type": "bitcoin",
+                "nodeType": "bitcoin",
+                "name": DEFAULT_BITCOIN_BACKEND_NAME,
+                "nodeName": DEFAULT_BITCOIN_BACKEND_NAME,
+                "displayName": DEFAULT_BITCOIN_BACKEND_NAME,
+                "alias": DEFAULT_BITCOIN_BACKEND_NAME,
+            }),
+        ),
+        (
+            "add_bitcoin_node",
+            json!({
+                "networkId": network_id_argument(network_id),
+                "implementation": "bitcoind",
+                "name": DEFAULT_BITCOIN_BACKEND_NAME,
+                "nodeName": DEFAULT_BITCOIN_BACKEND_NAME,
+            }),
+        ),
+    ]
 }
 
 pub async fn create_game_treasury_node(
@@ -391,6 +512,37 @@ pub async fn create_game_treasury_node(
         DemoNodeId::GameTreasury,
     )
     .await?;
+
+    Ok(resolved_profile)
+}
+
+pub async fn fund_demo_user_nodes(
+    profile: &PolarAutomationProfile,
+    required_balance_sats: u64,
+) -> Result<PolarAutomationProfile, String> {
+    let resolved_profile =
+        resolve_started_automation_profile_with_log_level(profile, DemoLogLevel::On).await?;
+    let network_id = clean_network_id(&resolved_profile);
+    let backend_name = clean_backend_name(&resolved_profile);
+
+    for node_id in DemoNodeId::ALL {
+        let node_name = polar_node_name(node_id);
+        let balance =
+            wait_for_lightning_wallet_balance(&resolved_profile, &network_id, node_name, node_id)
+                .await?;
+        let target_sats = demo_node_funding_target(node_id, required_balance_sats);
+        if balance < target_sats {
+            deposit_demo_node_funds(
+                &resolved_profile,
+                &network_id,
+                node_id,
+                target_sats - balance,
+            )
+            .await?;
+            mine_demo_blocks(&resolved_profile, &network_id, &backend_name).await?;
+        }
+        wait_for_demo_node_ready(&resolved_profile, target_sats, node_id).await?;
+    }
 
     Ok(resolved_profile)
 }
@@ -569,80 +721,277 @@ pub async fn delete_polar_network(profile: &PolarAutomationProfile) -> Result<()
 }
 
 pub async fn delete_all_polar_networks(profile: &PolarAutomationProfile) -> Result<usize, String> {
-    delete_all_polar_networks_with_progress(profile, |_, _| {}).await
+    delete_all_polar_networks_with_progress(profile, |_| {})
+        .await
+        .map(|result| result.deleted_count)
+}
+
+pub async fn count_polar_networks(profile: &PolarAutomationProfile) -> Result<usize, String> {
+    test_bridge(profile).await?;
+    let networks = list_networks(profile).await?;
+    Ok(top_level_network_ids(&networks).len())
 }
 
 pub async fn delete_all_polar_networks_with_progress<F>(
     profile: &PolarAutomationProfile,
     mut report_progress: F,
-) -> Result<usize, String>
+) -> Result<PolarDeleteAllResult, String>
 where
-    F: FnMut(usize, usize),
+    F: FnMut(PolarDeleteAllProgress),
 {
     test_bridge(profile).await?;
     let networks = list_networks(profile).await?;
-    let network_ids = top_level_network_ids(&networks);
-    let total = network_ids.len();
-    report_progress(0, total);
-    if network_ids.is_empty() {
-        return Ok(0);
-    }
-
+    let networks = top_level_network_records(&networks);
+    let total = networks.len();
     let mut deleted = 0;
-    let mut errors = Vec::new();
-    let mut processed = 0;
+    let mut failed_networks = Vec::new();
+    let mut remaining = networks;
 
-    for network_id in network_ids {
-        match delete_polar_network_by_id_with_retries(profile, &network_id).await {
-            Ok(DeleteNetworkOutcome::Deleted) => deleted += 1,
-            Ok(DeleteNetworkOutcome::AlreadyGone) => {}
-            Err(error) => errors.push(format!("{network_id}: {error}")),
-        }
-        processed += 1;
-        report_progress(processed, total);
+    report_progress(PolarDeleteAllProgress::new(deleted, total));
+    if remaining.is_empty() {
+        return Ok(PolarDeleteAllResult {
+            deleted_count: 0,
+            failed_networks,
+            remaining_networks: Vec::new(),
+        });
     }
 
-    if errors.is_empty() {
-        Ok(deleted)
+    for pass in 1..=DELETE_ALL_NETWORK_PASSES {
+        failed_networks.clear();
+        let pass_networks = remaining;
+        for network in pass_networks {
+            let mut progress = PolarDeleteAllProgress::new(deleted, total);
+            progress.current_network_id = Some(network.id.clone());
+            progress.current_network_name = Some(network.name.clone());
+            progress.failed = failed_networks.len();
+            report_progress(progress);
+
+            match delete_all_network_record(profile, &network).await {
+                Ok(()) => {
+                    deleted += 1;
+                    let mut progress = PolarDeleteAllProgress::new(deleted, total);
+                    progress.current_network_id = Some(network.id.clone());
+                    progress.current_network_name = Some(network.name.clone());
+                    progress.failed = failed_networks.len();
+                    report_progress(progress);
+                }
+                Err(error) => {
+                    failed_networks.push(PolarDeleteAllNetworkFailure {
+                        network: network.clone(),
+                        error,
+                    });
+                    let mut progress = PolarDeleteAllProgress::new(deleted, total);
+                    progress.current_network_id = Some(network.id.clone());
+                    progress.current_network_name = Some(network.name.clone());
+                    progress.failed = failed_networks.len();
+                    report_progress(progress);
+                }
+            }
+        }
+
+        remaining = list_networks(profile)
+            .await
+            .map(|networks| top_level_network_records(&networks))
+            .map_err(|error| {
+                format!(
+                    "Deleted {deleted} Polar network(s), but could not verify the final network list: {error}"
+                )
+            })?;
+
+        if remaining.is_empty() {
+            failed_networks.clear();
+            break;
+        }
+
+        if pass < DELETE_ALL_NETWORK_PASSES {
+            log_to_terminal(&format!(
+                "[polar-service] delete-all-retry pass={}/{DELETE_ALL_NETWORK_PASSES} remaining={}",
+                pass + 1,
+                remaining.len()
+            ));
+            wait_for_delete_network_settle_delay().await;
+        }
+    }
+
+    let result = PolarDeleteAllResult {
+        deleted_count: deleted,
+        failed_networks,
+        remaining_networks: remaining,
+    };
+
+    if result.failed_networks.is_empty() && result.remaining_networks.is_empty() {
+        Ok(result)
     } else {
-        let remaining = match list_networks(profile).await {
-            Ok(networks) => top_level_network_summaries(&networks),
-            Err(_) => Vec::new(),
-        };
-        Err(delete_all_networks_failure_message(
-            deleted, &errors, &remaining,
-        ))
+        Err(delete_all_networks_failure_message(&result))
     }
 }
 
-fn delete_all_networks_failure_message(
-    deleted: usize,
-    errors: &[String],
-    remaining: &[String],
-) -> String {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolarDeleteAllProgress {
+    pub deleted: usize,
+    pub total: usize,
+    pub current_network_id: Option<String>,
+    pub current_network_name: Option<String>,
+    pub failed: usize,
+}
+
+impl PolarDeleteAllProgress {
+    fn new(deleted: usize, total: usize) -> Self {
+        Self {
+            deleted,
+            total,
+            current_network_id: None,
+            current_network_name: None,
+            failed: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolarDeleteAllResult {
+    pub deleted_count: usize,
+    pub failed_networks: Vec<PolarDeleteAllNetworkFailure>,
+    pub remaining_networks: Vec<PolarNetworkRecord>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolarDeleteAllNetworkFailure {
+    pub network: PolarNetworkRecord,
+    pub error: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolarNetworkRecord {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+}
+
+async fn delete_all_network_record(
+    profile: &PolarAutomationProfile,
+    network: &PolarNetworkRecord,
+) -> Result<(), String> {
+    log_to_terminal(&format!(
+        "[polar-service] delete-all-network-start network={} name={} status={}",
+        network.id, network.name, network.status
+    ));
+
+    match delete_network_preparation_for_status(&network.status) {
+        DeleteNetworkPreparation::StopThenDelete => {
+            if let Err(error) = stop_network_for_delete_all_sweep(profile, &network.id).await {
+                log_to_terminal(&format!(
+                    "[polar-service] delete-all-stop-ignored network={} error={}",
+                    network.id,
+                    redact_sensitive_log_text(&error)
+                ));
+            }
+        }
+        DeleteNetworkPreparation::WaitThenDelete | DeleteNetworkPreparation::DeleteNow => {}
+    }
+
+    match delete_all_network_once_with_timeout(profile.clone(), network.id.clone()).await {
+        Ok(()) => Ok(()),
+        Err(error) if is_network_already_gone_error(&error) => Ok(()),
+        Err(error) => Err(delete_network_error_message(&network.id, error)),
+    }
+}
+
+async fn stop_network_for_delete_all_sweep(
+    profile: &PolarAutomationProfile,
+    network_id: &str,
+) -> Result<(), String> {
+    let stop = stop_network(profile, network_id);
+    let timeout = delete_network_timeout_delay();
+    futures::pin_mut!(stop);
+    futures::pin_mut!(timeout);
+
+    match futures::future::select(stop, timeout).await {
+        futures::future::Either::Left((result, _)) => result,
+        futures::future::Either::Right((_, _)) => Err(format!(
+            "Timed out after {DELETE_NETWORK_TIMEOUT_SECONDS}s while requesting stop for Polar network {network_id}."
+        )),
+    }
+}
+
+async fn delete_all_network_once_with_timeout(
+    profile: PolarAutomationProfile,
+    network_id: String,
+) -> Result<(), String> {
+    let (_, result) = delete_polar_network_by_id_once_with_timeout(profile, network_id).await;
+    result
+}
+
+fn delete_all_networks_failure_message(result: &PolarDeleteAllResult) -> String {
+    if result.failed_networks.is_empty() {
+        let mut message = format!(
+            "Deleted {deleted} Polar network(s), but {} network(s) are still visible to the local Polar bridge.",
+            result.remaining_networks.len(),
+            deleted = result.deleted_count,
+        );
+
+        if !result.remaining_networks.is_empty() {
+            message.push_str(" Remaining networks: ");
+            message.push_str(&network_records_summary(&result.remaining_networks));
+            message.push('.');
+        }
+
+        return message;
+    }
+
     let mut message = format!(
         "Deleted {deleted} Polar network(s), but {} network(s) failed: {}",
-        errors.len(),
-        errors.join("; ")
+        result.failed_networks.len(),
+        failed_networks_summary(&result.failed_networks),
+        deleted = result.deleted_count,
     );
 
-    if errors.iter().all(|error| {
-        let error = error.to_ascii_lowercase();
-        error.contains("no configuration file provided")
-            || error.contains("cannot read property 'nodes' of undefined")
-    }) {
+    if delete_all_failures_include_corrupted_polar_records(&result.failed_networks) {
         message.push_str(
             ". Polar is still listing these networks, but its lifecycle helper cannot load their configuration. Restart Polar and the local Polar bridge, then run Delete all networks again.",
         );
     }
 
-    if !remaining.is_empty() {
+    if !result.remaining_networks.is_empty() {
+        if !message.ends_with('.') {
+            message.push('.');
+        }
         message.push_str(" Remaining networks: ");
-        message.push_str(&remaining.join("; "));
+        message.push_str(&network_records_summary(&result.remaining_networks));
         message.push('.');
     }
 
     message
+}
+
+fn delete_all_failures_include_corrupted_polar_records(
+    failures: &[PolarDeleteAllNetworkFailure],
+) -> bool {
+    failures.iter().any(|failure| {
+        let error = failure.error.to_ascii_lowercase();
+        error.contains("no configuration file provided")
+            || error.contains("cannot read property 'nodes' of undefined")
+    })
+}
+
+fn failed_networks_summary(failures: &[PolarDeleteAllNetworkFailure]) -> String {
+    failures
+        .iter()
+        .map(|failure| {
+            format!(
+                "{} {} ({}): {}",
+                failure.network.id, failure.network.name, failure.network.status, failure.error
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn network_records_summary(networks: &[PolarNetworkRecord]) -> String {
+    networks
+        .iter()
+        .map(|network| format!("{} {} ({})", network.id, network.name, network.status))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -673,8 +1022,6 @@ async fn delete_polar_network_by_id_with_retries(
         if !network_exists(profile, network_id).await? {
             return Ok(DeleteNetworkOutcome::AlreadyGone);
         }
-
-        wait_for_network_delete_ready(profile, network_id).await?;
 
         match delete_polar_network_by_id_once(profile, network_id).await {
             Ok(()) => {
@@ -729,14 +1076,34 @@ async fn maybe_stop_network_before_delete(
         .unwrap_or_else(|| "unknown".to_string())
         .to_ascii_lowercase();
 
-    if status == "started" || status == "running" {
-        stop_network(profile, network_id).await?;
-    } else if status == "starting" || status == "stopping" {
-        wait_for_network_delete_ready(profile, network_id).await?;
+    match delete_network_preparation_for_status(&status) {
+        DeleteNetworkPreparation::StopThenDelete => {
+            stop_network(profile, network_id).await?;
+            wait_for_network_stopped_before_delete(profile, network_id).await?;
+        }
+        DeleteNetworkPreparation::WaitThenDelete => {
+            wait_for_network_stopped_before_delete(profile, network_id).await?;
+        }
+        DeleteNetworkPreparation::DeleteNow => {}
     }
 
     wait_for_delete_network_settle_delay().await;
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeleteNetworkPreparation {
+    StopThenDelete,
+    WaitThenDelete,
+    DeleteNow,
+}
+
+fn delete_network_preparation_for_status(status: &str) -> DeleteNetworkPreparation {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "started" | "running" | "starting" => DeleteNetworkPreparation::StopThenDelete,
+        "stopping" => DeleteNetworkPreparation::WaitThenDelete,
+        _ => DeleteNetworkPreparation::DeleteNow,
+    }
 }
 
 async fn delete_polar_network_by_id_once_without_timeout(
@@ -776,8 +1143,14 @@ fn is_retryable_delete_network_error(error: &str) -> bool {
     is_locked_polar_network_delete_error(&error)
         || error.contains("cannot read property 'nodes' of undefined")
         || error.contains("no configuration file provided")
+        || error.contains("must be stopped")
+        || error.contains("needs to be stopped")
+        || error.contains("stop the network")
+        || error.contains("stop network")
         || error.contains("network is currently stopping")
         || error.contains("network is currently starting")
+        || error.contains("network is currently started")
+        || error.contains("network is currently running")
         || error.contains("timed out after")
         || error.contains("timeout")
 }
@@ -972,6 +1345,7 @@ async fn create_or_prepare_demo_node(
     Ok(DemoNodePreparation { created_node: true })
 }
 
+#[allow(dead_code)]
 async fn determine_demo_node_funding_plan(
     profile: &PolarAutomationProfile,
     network_id: &str,
@@ -1473,6 +1847,7 @@ async fn wait_for_lightning_node_started(
     ))
 }
 
+#[allow(dead_code)]
 async fn wait_for_lightning_nodes_started(
     profile: &PolarAutomationProfile,
     network_id: &str,
@@ -1534,6 +1909,96 @@ async fn wait_for_lightning_nodes_started(
     ))
 }
 
+async fn wait_for_required_polar_nodes_started(
+    profile: &PolarAutomationProfile,
+    network_id: &str,
+) -> Result<(), String> {
+    wait_for_named_polar_nodes_started(profile, network_id, &required_polar_node_names()).await
+}
+
+async fn wait_for_named_polar_nodes_started(
+    profile: &PolarAutomationProfile,
+    network_id: &str,
+    node_names: &[&'static str],
+) -> Result<(), String> {
+    let mut last_started_count = 0usize;
+    let mut no_progress_polls = 0u8;
+    let mut restarted_network = false;
+
+    for attempt in 1..=DEMO_NODE_START_ATTEMPTS {
+        let networks = list_networks(profile).await?;
+        let mut not_started_nodes = Vec::new();
+        let mut statuses = Vec::new();
+        let mut started_count = 0usize;
+
+        for node_name in node_names.iter().copied() {
+            let status = any_node_status(&networks, network_id, node_name)
+                .unwrap_or_else(|| "not started".to_string());
+            statuses.push(format!("{node_name}={status}"));
+
+            if any_node_is_started(&networks, network_id, node_name) {
+                started_count += 1;
+            } else {
+                not_started_nodes.push(node_name);
+            }
+        }
+
+        if not_started_nodes.is_empty() {
+            log_to_terminal(&format!(
+                "[polar-service] required-node-ready attempt={attempt}/{DEMO_NODE_START_ATTEMPTS} statuses={}",
+                statuses.join(", ")
+            ));
+            return Ok(());
+        }
+
+        if started_count > last_started_count {
+            last_started_count = started_count;
+            no_progress_polls = 0;
+        } else {
+            no_progress_polls = no_progress_polls.saturating_add(1);
+        }
+
+        log_to_terminal(&format!(
+            "[polar-service] required-node-wait attempt={attempt}/{DEMO_NODE_START_ATTEMPTS} not_started_nodes={}; statuses={}",
+            not_started_nodes.join(", "),
+            statuses.join(", ")
+        ));
+
+        if required_node_restart_due(no_progress_polls, restarted_network) {
+            log_to_terminal(&format!(
+                "[polar-service] required-node-no-progress-restart network={network_id}"
+            ));
+            restart_network_for_node_start_recovery(profile, network_id).await?;
+            restarted_network = true;
+            no_progress_polls = 0;
+        } else if attempt < DEMO_NODE_START_ATTEMPTS {
+            wait_for_demo_node_start_delay().await;
+        }
+    }
+
+    let networks = list_networks(profile).await?;
+    let statuses = node_names
+        .iter()
+        .copied()
+        .map(|node_name| {
+            format!(
+                "{node_name}={}",
+                any_node_status(&networks, network_id, node_name)
+                    .unwrap_or_else(|| "unknown".to_string())
+            )
+        })
+        .collect::<Vec<_>>();
+
+    Err(format!(
+        "Polar nodes did not finish starting within {DEMO_NODE_START_TIMEOUT_SECONDS} seconds. Last statuses: {}.",
+        statuses.join(", ")
+    ))
+}
+
+fn required_node_restart_due(no_progress_polls: u8, restarted_network: bool) -> bool {
+    no_progress_polls >= 6 && !restarted_network
+}
+
 async fn wait_for_lightning_wallet_balance(
     profile: &PolarAutomationProfile,
     network_id: &str,
@@ -1562,6 +2027,7 @@ async fn wait_for_lightning_wallet_balance(
     ))
 }
 
+#[allow(dead_code)]
 async fn wait_for_demo_lab_ready(
     profile: &PolarAutomationProfile,
     required_balance_sats: u64,
@@ -1695,6 +2161,7 @@ async fn verify_demo_node_ready(
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn verify_demo_lab_ready(
     profile: &PolarAutomationProfile,
     required_balance_sats: u64,
@@ -1787,6 +2254,7 @@ fn network_id_argument(network_id: &str) -> Value {
         .unwrap_or_else(|_| Value::String(network_id.to_string()))
 }
 
+#[allow(dead_code)]
 fn wallet_balance_matches_app_rules(balance: u64, required_balance_sats: u64) -> bool {
     node_wallet_balance_matches_app_rules(DemoNodeId::Alice, balance, required_balance_sats)
 }
@@ -1829,6 +2297,13 @@ async fn request_lightning_node_start(
     match result {
         Ok(_) => Ok(()),
         Err(message) if is_lightning_node_already_started_error(&message) => Ok(()),
+        Err(message) if is_retryable_node_start_request_error(&message) => {
+            log_to_terminal(&format!(
+                "[polar-service] node-start-request-deferred node={node_name} error={}",
+                redact_sensitive_log_text(&message)
+            ));
+            Ok(())
+        }
         Err(message) => Err(message),
     }
 }
@@ -1838,6 +2313,15 @@ fn is_lightning_node_already_started_error(message: &str) -> bool {
     normalized.contains("start_node")
         && normalized.contains("currently started")
         && normalized.contains("only stopped or error")
+}
+
+fn is_retryable_node_start_request_error(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("tool execution timed out")
+        || normalized.contains("timed out")
+        || normalized.contains("timeout")
+        || normalized.contains("ports are not available")
+        || normalized.contains("only one usage of each socket address")
 }
 
 fn demo_node_funding_target(node_id: DemoNodeId, required_balance_sats: u64) -> u64 {
@@ -1866,66 +2350,6 @@ fn game_treasury_missing_message() -> String {
     )
 }
 
-async fn clean_network_for_step_two(
-    profile: &PolarAutomationProfile,
-    network_id: &str,
-    requested_name: &str,
-) -> Result<(), String> {
-    loop {
-        let networks = list_networks(profile).await?;
-        let Some(node_name) = unwanted_step_two_non_bitcoin_nodes(&networks, network_id)
-            .into_iter()
-            .next()
-        else {
-            return Ok(());
-        };
-
-        log_to_terminal(&format!(
-            "[polar-service] step-2-cleanup network={requested_name} node={node_name}"
-        ));
-        remove_demo_node_by_name(profile, network_id, &node_name).await?;
-        wait_for_step_two_node_removed(profile, network_id, requested_name, &node_name).await?;
-    }
-}
-
-async fn wait_for_step_two_node_removed(
-    profile: &PolarAutomationProfile,
-    network_id: &str,
-    requested_name: &str,
-    node_name: &str,
-) -> Result<(), String> {
-    for attempt in 1..=DEMO_NODE_START_ATTEMPTS {
-        let networks = list_networks(profile).await?;
-        let remaining_nodes = unwanted_step_two_non_bitcoin_nodes(&networks, network_id);
-        if !remaining_nodes
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case(node_name))
-        {
-            return Ok(());
-        }
-
-        log_to_terminal(&format!(
-            "[polar-service] step-2-cleanup-wait network={requested_name} node={node_name} attempt={attempt}/{DEMO_NODE_START_ATTEMPTS}"
-        ));
-        if attempt < DEMO_NODE_START_ATTEMPTS {
-            wait_for_demo_node_start_delay().await;
-        }
-    }
-
-    Err(format!(
-        "Polar server {requested_name} still has old non-Bitcoin node {node_name} after cleanup. Retry step 2 after Polar finishes removing it."
-    ))
-}
-
-fn unwanted_step_two_non_bitcoin_nodes(networks: &Value, network_id: &str) -> Vec<String> {
-    let mut nodes = non_bitcoin_node_summaries(networks, network_id)
-        .into_iter()
-        .filter(|node| node.name.is_some())
-        .collect::<Vec<_>>();
-    nodes.sort_by_key(|node| !node.is_taproot);
-    nodes.into_iter().filter_map(|node| node.name).collect()
-}
-
 fn find_reclaimable_default_alice_node(value: &Value, network_id: &str) -> Option<String> {
     let node_names: Vec<String> = lightning_node_summaries(value, network_id)
         .into_iter()
@@ -1941,14 +2365,14 @@ fn find_reclaimable_default_alice_node(value: &Value, network_id: &str) -> Optio
 
     let has_user_nodes = node_names
         .iter()
-        .any(|name| name.eq_ignore_ascii_case("bob") || name.eq_ignore_ascii_case("carol"));
+        .any(|name| name.eq_ignore_ascii_case("Bob") || name.eq_ignore_ascii_case("Carol"));
     if has_user_nodes {
         return None;
     }
 
     node_names
         .into_iter()
-        .find(|name| name.eq_ignore_ascii_case("alice"))
+        .find(|name| name.eq_ignore_ascii_case("Alice"))
 }
 
 fn extract_channel_points(value: &Value) -> Vec<String> {
@@ -2017,39 +2441,40 @@ fn find_lightning_node_name(value: &Value, network_id: &str, node_name: &str) ->
         })
 }
 
-async fn wait_for_network_delete_ready(
+async fn wait_for_network_stopped_before_delete(
     profile: &PolarAutomationProfile,
     network_id: &str,
 ) -> Result<(), String> {
-    let mut last_status = "unknown".to_string();
+    let mut last_status = "missing".to_string();
     for attempt in 1..=DELETE_NETWORK_STATUS_ATTEMPTS {
         let networks = list_networks(profile).await?;
-        let Some(status) = find_network_status(&networks, network_id) else {
-            return Ok(());
-        };
-        last_status = status.clone();
-        let status_lower = status.to_ascii_lowercase();
-        if status_lower != "starting" && status_lower != "stopping" {
+        let status = find_network_status(&networks, network_id);
+        if status
+            .as_deref()
+            .map(network_status_allows_restart)
+            .unwrap_or(true)
+        {
             return Ok(());
         }
+        last_status = status.unwrap_or_else(|| "missing".to_string());
 
         log_to_terminal(&format!(
-            "[polar-service] delete-network-status-wait network={network_id} attempt={attempt}/{DELETE_NETWORK_STATUS_ATTEMPTS} status={status}"
+            "[polar-service] delete-network-stop-wait network={network_id} attempt={attempt}/{DELETE_NETWORK_STATUS_ATTEMPTS} status={last_status}"
         ));
         if attempt < DELETE_NETWORK_STATUS_ATTEMPTS {
             wait_for_delete_network_settle_delay().await;
         }
     }
 
-    Err(delete_network_still_transitioning_message(
+    Err(delete_network_stop_timeout_message(
         network_id,
         &last_status,
     ))
 }
 
-fn delete_network_still_transitioning_message(network_id: &str, status: &str) -> String {
+fn delete_network_stop_timeout_message(network_id: &str, status: &str) -> String {
     format!(
-        "Polar network {network_id} is still {status}; deletion skipped until Polar finishes the lifecycle transition. Wait for Polar to leave {status}, or restart Polar and the local Polar bridge, then run Delete all networks again."
+        "Polar network {network_id} did not stop before deletion. Last status: {status}. Stop the network in Polar, then run Delete all networks again."
     )
 }
 
@@ -2186,6 +2611,7 @@ struct LightningNodeSummary {
     name: Option<String>,
     status: Option<String>,
     is_taproot: bool,
+    is_bitcoin: bool,
 }
 
 fn lightning_node_summaries(value: &Value, network_id: &str) -> Vec<LightningNodeSummary> {
@@ -2204,6 +2630,44 @@ fn non_bitcoin_node_summaries(value: &Value, network_id: &str) -> Vec<LightningN
     }
 
     nodes
+}
+
+fn network_node_summaries(value: &Value, network_id: &str) -> Vec<LightningNodeSummary> {
+    let mut nodes = Vec::new();
+    if let Some(network) = find_network_value(value, network_id) {
+        collect_network_node_summaries(network, &mut nodes);
+    }
+
+    nodes
+}
+
+fn bitcoin_node_exists(value: &Value, network_id: &str, node_name: &str) -> bool {
+    network_node_summaries(value, network_id)
+        .into_iter()
+        .filter(|node| node.is_bitcoin)
+        .filter_map(|node| node.name)
+        .any(|name| name.eq_ignore_ascii_case(node_name))
+}
+
+fn any_node_status(value: &Value, network_id: &str, node_name: &str) -> Option<String> {
+    network_node_summaries(value, network_id)
+        .into_iter()
+        .find(|node| {
+            node.name
+                .as_deref()
+                .map(|name| name.eq_ignore_ascii_case(node_name))
+                .unwrap_or(false)
+        })
+        .and_then(|node| node.status)
+}
+
+fn any_node_is_started(value: &Value, network_id: &str, node_name: &str) -> bool {
+    any_node_status(value, network_id, node_name)
+        .map(|status| {
+            let status = status.to_ascii_lowercase();
+            status.contains("started") || status.contains("running") || status.contains("online")
+        })
+        .unwrap_or(false)
 }
 
 fn taproot_assets_node_exists(value: &Value, network_id: &str) -> bool {
@@ -2289,6 +2753,7 @@ fn collect_non_bitcoin_node_summaries(value: &Value, nodes: &mut Vec<LightningNo
                         .map(|status| status.trim().to_string())
                         .filter(|status| !status.is_empty()),
                     is_taproot: looks_like_taproot_assets_node(value),
+                    is_bitcoin: false,
                 });
                 return;
             }
@@ -2325,6 +2790,7 @@ fn collect_lightning_node_summaries(value: &Value, nodes: &mut Vec<LightningNode
                         .map(|status| status.trim().to_string())
                         .filter(|status| !status.is_empty()),
                     is_taproot: false,
+                    is_bitcoin: false,
                 });
                 return;
             }
@@ -2336,6 +2802,43 @@ fn collect_lightning_node_summaries(value: &Value, nodes: &mut Vec<LightningNode
         Value::Array(items) => {
             for item in items {
                 collect_lightning_node_summaries(item, nodes);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_network_node_summaries(value: &Value, nodes: &mut Vec<LightningNodeSummary>) {
+    match value {
+        Value::Object(map) => {
+            if looks_like_removable_non_bitcoin_node(value) || looks_like_bitcoin_node(value) {
+                nodes.push(LightningNodeSummary {
+                    name: map
+                        .get("name")
+                        .or_else(|| map.get("nodeName"))
+                        .or_else(|| map.get("displayName"))
+                        .or_else(|| map.get("alias"))
+                        .and_then(Value::as_str)
+                        .map(|name| name.trim().to_string())
+                        .filter(|name| !name.is_empty()),
+                    status: map
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .map(|status| status.trim().to_string())
+                        .filter(|status| !status.is_empty()),
+                    is_taproot: looks_like_taproot_assets_node(value),
+                    is_bitcoin: looks_like_bitcoin_node(value),
+                });
+                return;
+            }
+
+            for nested in map.values() {
+                collect_network_node_summaries(nested, nodes);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_network_node_summaries(item, nodes);
             }
         }
         _ => {}
@@ -2383,6 +2886,22 @@ fn looks_like_taproot_assets_node(value: &Value) -> bool {
         .to_ascii_lowercase();
 
     type_text.contains("tap") || type_text.contains("taproot") || type_text.contains("litd")
+}
+
+fn looks_like_bitcoin_node(value: &Value) -> bool {
+    let Value::Object(map) = value else {
+        return false;
+    };
+
+    let type_text = map
+        .get("type")
+        .or_else(|| map.get("implementation"))
+        .or_else(|| map.get("nodeType"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    type_text.contains("bitcoin") || type_text.contains("bitcoind") || type_text.contains("core")
 }
 
 fn looks_like_lightning_node(value: &Value) -> bool {
@@ -2622,12 +3141,14 @@ fn ensure_network_started(networks: &Value, network_id: &str) -> Result<(), Stri
     ))
 }
 
+#[allow(dead_code)]
 fn ensure_named_network_running(networks: &Value, network_name: &str) -> Result<(), String> {
     let network_id = find_network_id_by_name(networks, network_name)
         .ok_or_else(|| format!("Polar server {network_name} is not listed by that name."))?;
     ensure_network_started(networks, &network_id)
 }
 
+#[allow(dead_code)]
 async fn ensure_network_running(
     profile: &PolarAutomationProfile,
     network_id: &str,
@@ -2858,21 +3379,7 @@ async fn execute_tool_with_log_level(
     arguments: Value,
     log_level: DemoLogLevel,
 ) -> Result<Value, String> {
-    let response = post_json(
-        profile,
-        "/api/mcp/execute",
-        json!({
-            "tool": tool,
-            "arguments": arguments,
-        }),
-        log_level,
-    )
-    .await?;
-
-    match extract_mcp_error(&response) {
-        Some(error) => Err(format_mcp_error(tool, &error)),
-        None => Ok(response),
-    }
+    polar_mcp_connector::execute_tool(profile, tool, arguments, log_level.into()).await
 }
 
 fn clean_network_id(profile: &PolarAutomationProfile) -> String {
@@ -2886,124 +3393,28 @@ fn clean_backend_name(profile: &PolarAutomationProfile) -> String {
 fn polar_node_name(node_id: DemoNodeId) -> &'static str {
     match node_id {
         DemoNodeId::GameTreasury => lightning_service::GAME_TREASURY_NODE_LABEL,
-        DemoNodeId::Alice => "alice",
-        DemoNodeId::Bob => "bob",
-        DemoNodeId::Carol => "carol",
+        DemoNodeId::Alice => "Alice",
+        DemoNodeId::Bob => "Bob",
+        DemoNodeId::Carol => "Carol",
     }
 }
 
-fn bridge_url(profile: &PolarAutomationProfile, path: &str) -> String {
-    format!(
-        "{}{}",
-        profile.bridge_url.trim().trim_end_matches('/'),
-        path
-    )
-}
-
+#[cfg(test)]
 fn bridge_request_timeout_message(method: &str, url: &str) -> String {
-    format!("Polar bridge {method} {url} timed out after {BRIDGE_REQUEST_TIMEOUT_SECONDS} seconds.")
+    polar_mcp_connector::bridge_request_timeout_message(method, url)
 }
 
 fn is_transient_bridge_request_error(message: &str) -> bool {
-    let message = message.to_ascii_lowercase();
-    message.contains("polar bridge request failed")
-        && (message.contains("failed to fetch")
-            || message.contains("connection reset")
-            || message.contains("connection refused")
-            || message.contains("transport"))
+    polar_mcp_connector::is_transient_bridge_request_error(message)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn is_transport_timeout(error: impl fmt::Display) -> bool {
-    let normalized = error.to_string().to_ascii_lowercase();
-    normalized.contains("timed out") || normalized.contains("timeout")
-}
-
-fn log_service_request(method: &str, url: &str, body: Option<&Value>, log_level: DemoLogLevel) {
-    if !DEMO_SERVICE_LOG_LEVEL.allows(log_level) {
-        return;
-    }
-
-    let message = match body {
-        Some(body) => format!("[polar-service] request {method} {url} body={body}"),
-        None => format!("[polar-service] request {method} {url}"),
-    };
-    log_to_terminal(&message);
-}
-
-fn log_service_response(
-    method: &str,
-    url: &str,
-    result: &Result<Value, String>,
-    log_level: DemoLogLevel,
-) {
-    if !DEMO_SERVICE_LOG_LEVEL.allows(log_level) {
-        return;
-    }
-
-    let message = match result {
-        Ok(value) if log_level >= DemoLogLevel::Verbose => {
-            let value = sanitized_log_value(value);
-            format!("[polar-service] response {method} {url} body={value}")
-        }
-        Ok(_) => format!("[polar-service] response {method} {url} ok"),
-        Err(error) => format!(
-            "[polar-service] error {method} {url} error={}",
-            redact_sensitive_log_text(error)
-        ),
-    };
-    log_to_terminal(&message);
-}
-
+#[cfg(test)]
 fn sanitized_log_value(value: &Value) -> Value {
-    match value {
-        Value::Object(object) => Value::Object(
-            object
-                .iter()
-                .map(|(key, value)| {
-                    if is_sensitive_log_key(key) {
-                        (key.clone(), Value::String("[redacted]".to_string()))
-                    } else {
-                        (key.clone(), sanitized_log_value(value))
-                    }
-                })
-                .collect(),
-        ),
-        Value::Array(values) => Value::Array(values.iter().map(sanitized_log_value).collect()),
-        _ => value.clone(),
-    }
-}
-
-fn is_sensitive_log_key(key: &str) -> bool {
-    let key = key.to_ascii_lowercase();
-    key == "paths"
-        || key.contains("macaroon")
-        || key.contains("cert")
-        || key.contains("credential")
-        || key.contains("password")
-        || key.contains("secret")
-        || key.contains("token")
+    polar_mcp_connector::sanitized_log_value(value)
 }
 
 fn redact_sensitive_log_text(text: &str) -> String {
-    let trimmed = text.trim();
-    let normalized = trimmed.to_ascii_lowercase();
-    if [
-        "macaroon",
-        "tls.cert",
-        "tlscert",
-        "credential",
-        "password",
-        "secret",
-        "token",
-    ]
-    .iter()
-    .any(|marker| normalized.contains(marker))
-    {
-        "[redacted sensitive Polar detail]".to_string()
-    } else {
-        trimmed.to_string()
-    }
+    polar_mcp_connector::redact_sensitive_log_text(text)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -3090,22 +3501,9 @@ fn unexpected_created_node_name_message(desired_name: &str, created_name: &str) 
     )
 }
 
+#[cfg(test)]
 fn format_mcp_error(tool: &str, error: &str) -> String {
-    if is_missing_mcp_helper_error(error) {
-        return format!(
-            "Polar MCP tool {tool} could not run because Polar's automation helper file is missing. Restart Polar and the local Polar bridge, then retry the step."
-        );
-    }
-
-    format!(
-        "Polar MCP tool {tool} failed: {}",
-        redact_sensitive_log_text(error)
-    )
-}
-
-fn is_missing_mcp_helper_error(error: &str) -> bool {
-    let normalized = error.to_ascii_lowercase();
-    normalized.contains("enoent") && normalized.contains("no such file")
+    polar_mcp_connector::format_mcp_error(tool, error)
 }
 
 fn can_skip_channel_cleanup_error(error: &str) -> bool {
@@ -3113,35 +3511,9 @@ fn can_skip_channel_cleanup_error(error: &str) -> bool {
         && error.contains("automation helper file is missing")
 }
 
+#[cfg(test)]
 fn extract_mcp_error(value: &Value) -> Option<String> {
-    let Value::Object(map) = value else {
-        return None;
-    };
-
-    let success_is_false = map
-        .get("success")
-        .and_then(Value::as_bool)
-        .map(|success| !success)
-        .unwrap_or(false);
-
-    match map.get("error") {
-        Some(Value::String(error)) if !error.trim().is_empty() => Some(error.trim().to_string()),
-        Some(Value::Object(error)) => error
-            .get("message")
-            .and_then(Value::as_str)
-            .filter(|message| !message.trim().is_empty())
-            .map(|message| message.trim().to_string())
-            .or_else(|| {
-                if success_is_false {
-                    Some(Value::Object(error.clone()).to_string())
-                } else {
-                    None
-                }
-            }),
-        Some(error) if success_is_false => Some(error.to_string()),
-        _ if success_is_false => Some("Polar MCP tool returned success=false.".to_string()),
-        _ => None,
-    }
+    polar_mcp_connector::extract_mcp_error(value)
 }
 
 fn find_network_id(value: &Value, requested: &str) -> Option<String> {
@@ -3268,12 +3640,21 @@ fn top_level_network_ids(value: &Value) -> Vec<String> {
     ids
 }
 
+#[cfg(test)]
 fn top_level_network_summaries(value: &Value) -> Vec<String> {
     let mut summaries = Vec::new();
     collect_top_level_network_summaries(value, &mut summaries);
     summaries.sort();
     summaries.dedup();
     summaries
+}
+
+fn top_level_network_records(value: &Value) -> Vec<PolarNetworkRecord> {
+    let mut records = Vec::new();
+    collect_top_level_network_records(value, &mut records);
+    records.sort_by(|a, b| a.id.cmp(&b.id));
+    records.dedup_by(|a, b| a.id.eq_ignore_ascii_case(&b.id));
+    records
 }
 
 fn collect_top_level_network_ids(value: &Value, ids: &mut Vec<String>) {
@@ -3303,6 +3684,48 @@ fn collect_top_level_network_ids(value: &Value, ids: &mut Vec<String>) {
     }
 }
 
+fn collect_top_level_network_records(value: &Value, records: &mut Vec<PolarNetworkRecord>) {
+    match value {
+        Value::Object(map) => {
+            for key in ["networks", "result", "data"] {
+                if let Some(networks) = map.get(key) {
+                    collect_top_level_network_records(networks, records);
+                    return;
+                }
+            }
+
+            if let Some(id) = map
+                .get("id")
+                .or_else(|| map.get("networkId"))
+                .and_then(value_as_id_string)
+            {
+                let name = map
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("unnamed")
+                    .to_string();
+                let status = map
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|status| !status.is_empty())
+                    .unwrap_or("unknown")
+                    .to_string();
+                records.push(PolarNetworkRecord { id, name, status });
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_top_level_network_records(item, records);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
 fn collect_top_level_network_summaries(value: &Value, summaries: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
@@ -3610,7 +4033,7 @@ mod tests {
             },
             "nodes": [
                 {
-                    "name": "alice",
+                    "name": "Alice",
                     "token": "abc",
                     "ports": { "grpc": 10001 }
                 }
@@ -3642,7 +4065,7 @@ mod tests {
     fn bridge_request_timeout_message_names_operation_and_deadline() {
         assert_eq!(
             bridge_request_timeout_message("POST", "http://localhost:37373/api/mcp/execute"),
-            "Polar bridge POST http://localhost:37373/api/mcp/execute timed out after 30 seconds."
+            "Polar bridge POST http://localhost:37373/api/mcp/execute timed out after 90 seconds."
         );
     }
 
@@ -3668,10 +4091,30 @@ mod tests {
     }
 
     #[test]
-    fn delete_network_transition_message_is_actionable() {
+    fn delete_network_stop_timeout_message_is_actionable() {
         assert_eq!(
-            delete_network_still_transitioning_message("31", "Stopping"),
-            "Polar network 31 is still Stopping; deletion skipped until Polar finishes the lifecycle transition. Wait for Polar to leave Stopping, or restart Polar and the local Polar bridge, then run Delete all networks again."
+            delete_network_stop_timeout_message("31", "Started"),
+            "Polar network 31 did not stop before deletion. Last status: Started. Stop the network in Polar, then run Delete all networks again."
+        );
+    }
+
+    #[test]
+    fn delete_network_preparation_stops_starting_networks() {
+        assert_eq!(
+            delete_network_preparation_for_status("Starting"),
+            DeleteNetworkPreparation::StopThenDelete
+        );
+        assert_eq!(
+            delete_network_preparation_for_status("Started"),
+            DeleteNetworkPreparation::StopThenDelete
+        );
+        assert_eq!(
+            delete_network_preparation_for_status("Stopping"),
+            DeleteNetworkPreparation::WaitThenDelete
+        );
+        assert_eq!(
+            delete_network_preparation_for_status("Stopped"),
+            DeleteNetworkPreparation::DeleteNow
         );
     }
 
@@ -3697,6 +4140,12 @@ mod tests {
             "Polar MCP tool delete_network failed: no configuration file provided: not found"
         ));
         assert!(is_retryable_delete_network_error(
+            "Polar MCP tool delete_network failed: network must be stopped before deletion"
+        ));
+        assert!(is_retryable_delete_network_error(
+            "Polar MCP tool delete_network failed: network is currently running"
+        ));
+        assert!(is_retryable_delete_network_error(
             "Timed out after 12s while deleting Polar network 12."
         ));
         assert!(!is_retryable_delete_network_error(
@@ -3716,23 +4165,69 @@ mod tests {
 
     #[test]
     fn delete_all_networks_failure_explains_corrupted_polar_records() {
-        let errors = vec![
-            "12: Polar MCP tool delete_network failed: no configuration file provided: not found"
-                .to_string(),
-            "3: Polar MCP tool delete_network failed: Cannot read property 'nodes' of undefined"
-                .to_string(),
-        ];
+        let result = PolarDeleteAllResult {
+            deleted_count: 0,
+            failed_networks: vec![
+                PolarDeleteAllNetworkFailure {
+                    network: PolarNetworkRecord {
+                        id: "12".to_string(),
+                        name: "Dioxus Bitcoin Lightning Game".to_string(),
+                        status: "Error".to_string(),
+                    },
+                    error:
+                        "Polar MCP tool delete_network failed: no configuration file provided: not found"
+                            .to_string(),
+                },
+                PolarDeleteAllNetworkFailure {
+                    network: PolarNetworkRecord {
+                        id: "3".to_string(),
+                        name: "Bitcoin Lightning Game 991".to_string(),
+                        status: "Error".to_string(),
+                    },
+                    error:
+                        "Polar MCP tool delete_network failed: Cannot read property 'nodes' of undefined"
+                            .to_string(),
+                },
+            ],
+            remaining_networks: vec![
+                PolarNetworkRecord {
+                    id: "3".to_string(),
+                    name: "Bitcoin Lightning Game 991".to_string(),
+                    status: "Error".to_string(),
+                },
+                PolarNetworkRecord {
+                    id: "12".to_string(),
+                    name: "Dioxus Bitcoin Lightning Game".to_string(),
+                    status: "Error".to_string(),
+                },
+            ],
+        };
 
-        let remaining = vec![
-            "3 Bitcoin Lightning Game 991 (Error)".to_string(),
-            "12 Dioxus Bitcoin Lightning Game (Error)".to_string(),
-        ];
-
-        let message = delete_all_networks_failure_message(0, &errors, &remaining);
+        let message = delete_all_networks_failure_message(&result);
 
         assert!(message.contains("Polar is still listing these networks"));
         assert!(message.contains("Restart Polar and the local Polar bridge"));
         assert!(message.contains("Remaining networks: 3 Bitcoin Lightning Game 991 (Error)"));
+    }
+
+    #[test]
+    fn delete_all_networks_failure_explains_still_listed_networks_without_delete_errors() {
+        let result = PolarDeleteAllResult {
+            deleted_count: 2,
+            failed_networks: Vec::new(),
+            remaining_networks: vec![PolarNetworkRecord {
+                id: "7".to_string(),
+                name: "existing".to_string(),
+                status: "Stopped".to_string(),
+            }],
+        };
+
+        let message = delete_all_networks_failure_message(&result);
+
+        assert_eq!(
+            message,
+            "Deleted 2 Polar network(s), but 1 network(s) are still visible to the local Polar bridge. Remaining networks: 7 existing (Stopped)."
+        );
     }
 
     fn healthy_polar_lab_response() -> Value {
@@ -3752,19 +4247,19 @@ mod tests {
                         ],
                         "lightning": [
                             {
-                                "name": "alice",
+                                "name": "Alice",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Started"
                             },
                             {
-                                "name": "bob",
+                                "name": "Bob",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Started"
                             },
                             {
-                                "name": "carol",
+                                "name": "Carol",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Started"
@@ -3782,6 +4277,70 @@ mod tests {
             network_id: DEFAULT_NETWORK_NAME.to_string(),
             bitcoin_backend_name: DEFAULT_BITCOIN_BACKEND_NAME.to_string(),
         }
+    }
+
+    #[test]
+    fn required_polar_node_names_match_requested_topology() {
+        assert_eq!(
+            required_polar_node_names(),
+            [
+                "GAME_BITCOIN",
+                "GAME_LND",
+                "GAME_TAPROOT",
+                "Alice",
+                "Bob",
+                "Carol"
+            ]
+        );
+        assert_eq!(
+            required_polar_base_node_names(),
+            ["GAME_BITCOIN", "GAME_LND", "Alice", "Bob", "Carol"]
+        );
+    }
+
+    #[test]
+    fn required_topology_cleanup_uses_exact_node_names() {
+        let networks = json!({
+            "networks": [{
+                "id": 1,
+                "name": DEFAULT_NETWORK_NAME,
+                "nodes": {
+                    "bitcoin": [{ "name": DEFAULT_BITCOIN_BACKEND_NAME }],
+                    "lightning": [
+                        { "name": "GAME_LND", "type": "lightning" },
+                        { "name": "alice", "type": "lightning" },
+                        { "name": "Bob", "type": "lightning" },
+                        { "name": "Carol", "type": "lightning" }
+                    ],
+                    "taproot": [{ "name": "GAME_TAPROOT", "type": "taproot" }]
+                }
+            }]
+        });
+
+        assert_eq!(
+            first_unexpected_required_topology_node_name(&networks, "1"),
+            Some("alice".to_string())
+        );
+    }
+
+    #[test]
+    fn required_node_restart_waits_for_six_no_progress_polls_once() {
+        assert!(!required_node_restart_due(5, false));
+        assert!(required_node_restart_due(6, false));
+        assert!(!required_node_restart_due(6, true));
+    }
+
+    #[test]
+    fn node_start_timeout_defers_to_readiness_polling() {
+        assert!(is_retryable_node_start_request_error(
+            "Polar MCP tool start_node failed: Tool execution timed out"
+        ));
+        assert!(is_retryable_node_start_request_error(
+            "ports are not available: Only one usage of each socket address"
+        ));
+        assert!(!is_retryable_node_start_request_error(
+            "Polar MCP tool start_node failed: node does not exist"
+        ));
     }
 
     #[test]
@@ -3815,6 +4374,105 @@ mod tests {
             top_level_network_ids(&networks),
             vec!["29".to_string(), "7".to_string()]
         );
+    }
+
+    #[test]
+    fn collects_top_level_network_records_for_delete_all() {
+        let networks = json!({
+            "networks": [
+                { "id": 29, "name": "autopilot-a", "status": "Started" },
+                { "networkId": "7", "name": "existing", "status": "Error" },
+                { "id": 29, "name": "duplicate", "status": "Stopped" }
+            ]
+        });
+
+        assert_eq!(
+            top_level_network_records(&networks),
+            vec![
+                PolarNetworkRecord {
+                    id: "29".to_string(),
+                    name: "autopilot-a".to_string(),
+                    status: "Started".to_string(),
+                },
+                PolarNetworkRecord {
+                    id: "7".to_string(),
+                    name: "existing".to_string(),
+                    status: "Error".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn delete_all_failure_message_includes_failed_and_remaining_networks() {
+        let result = PolarDeleteAllResult {
+            deleted_count: 2,
+            failed_networks: vec![PolarDeleteAllNetworkFailure {
+                network: PolarNetworkRecord {
+                    id: "7".to_string(),
+                    name: "broken".to_string(),
+                    status: "Error".to_string(),
+                },
+                error: "network must be stopped before deletion".to_string(),
+            }],
+            remaining_networks: vec![PolarNetworkRecord {
+                id: "7".to_string(),
+                name: "broken".to_string(),
+                status: "Error".to_string(),
+            }],
+        };
+
+        let message = delete_all_networks_failure_message(&result);
+
+        assert!(message.contains("Deleted 2 Polar network(s)"));
+        assert!(message.contains("7 broken (Error): network must be stopped"));
+        assert!(message.contains("Remaining networks: 7 broken (Error)."));
+    }
+
+    #[test]
+    fn delete_all_failure_message_explains_corrupted_records_in_mixed_failures() {
+        let result = PolarDeleteAllResult {
+            deleted_count: 0,
+            failed_networks: vec![
+                PolarDeleteAllNetworkFailure {
+                    network: PolarNetworkRecord {
+                        id: "30".to_string(),
+                        name: "autopilot".to_string(),
+                        status: "Stopping".to_string(),
+                    },
+                    error: "Polar network 30 did not stop before deletion. Last status: Stopping. Stop the network in Polar, then run Delete all networks again.".to_string(),
+                },
+                PolarDeleteAllNetworkFailure {
+                    network: PolarNetworkRecord {
+                        id: "31".to_string(),
+                        name: "autopilot-1".to_string(),
+                        status: "Error".to_string(),
+                    },
+                    error:
+                        "Polar MCP tool delete_network failed: no configuration file provided: not found"
+                            .to_string(),
+                },
+            ],
+            remaining_networks: vec![
+                PolarNetworkRecord {
+                    id: "30".to_string(),
+                    name: "autopilot".to_string(),
+                    status: "Stopping".to_string(),
+                },
+                PolarNetworkRecord {
+                    id: "31".to_string(),
+                    name: "autopilot-1".to_string(),
+                    status: "Error".to_string(),
+                },
+            ],
+        };
+
+        let message = delete_all_networks_failure_message(&result);
+
+        assert!(message.contains("Polar is still listing these networks"));
+        assert!(message.contains("Restart Polar and the local Polar bridge"));
+        assert!(message.contains("30 autopilot (Stopping)"));
+        assert!(message.contains("31 autopilot-1 (Error)"));
     }
 
     #[test]
@@ -3995,7 +4653,7 @@ mod tests {
                         "bitcoin": [],
                         "lightning": [
                             {
-                                "name": "alice",
+                                "name": "Alice",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Started"
@@ -4006,8 +4664,8 @@ mod tests {
             ]
         });
 
-        assert!(lightning_node_exists(&networks, "1", "alice"));
-        assert!(lightning_node_is_started(&networks, "1", "alice"));
+        assert!(lightning_node_exists(&networks, "1", "Alice"));
+        assert!(lightning_node_is_started(&networks, "1", "Alice"));
     }
 
     #[test]
@@ -4034,12 +4692,12 @@ mod tests {
         });
 
         assert_eq!(
-            find_lightning_node_name(&networks, "1", "alice"),
+            find_lightning_node_name(&networks, "1", "Alice"),
             Some("Alice".to_string())
         );
         assert_ne!(
-            find_lightning_node_name(&networks, "1", "alice"),
-            Some("alice".to_string())
+            find_lightning_node_name(&networks, "1", "Bob"),
+            Some("Alice".to_string())
         );
     }
 
@@ -4098,7 +4756,7 @@ mod tests {
                         "bitcoin": [],
                         "lightning": [
                             {
-                                "name": "alice",
+                                "name": "Alice",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Started"
@@ -4186,7 +4844,7 @@ mod tests {
                         "bitcoin": [],
                         "lightning": [
                             {
-                                "name": "alice",
+                                "name": "Alice",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Stopped"
@@ -4199,41 +4857,7 @@ mod tests {
 
         assert_eq!(
             find_reclaimable_default_alice_node(&networks, "1"),
-            Some("alice".to_string())
-        );
-    }
-
-    #[test]
-    fn step_two_cleanup_leaves_empty_network_only() {
-        let empty = json!({
-            "networks": [
-                {
-                    "id": 1,
-                    "name": DEFAULT_NETWORK_NAME,
-                    "nodes": {
-                        "lightning": []
-                    }
-                }
-            ]
-        });
-        assert!(unwanted_step_two_non_bitcoin_nodes(&empty, "1").is_empty());
-
-        let default_alice = json!({
-            "networks": [
-                {
-                    "id": 1,
-                    "name": DEFAULT_NETWORK_NAME,
-                    "nodes": {
-                        "lightning": [
-                            { "name": "alice", "type": "lightning" }
-                        ]
-                    }
-                }
-            ]
-        });
-        assert_eq!(
-            unwanted_step_two_non_bitcoin_nodes(&default_alice, "1"),
-            vec!["alice".to_string()]
+            Some("Alice".to_string())
         );
     }
 
@@ -4265,124 +4889,6 @@ mod tests {
     }
 
     #[test]
-    fn step_two_cleanup_targets_old_user_nodes() {
-        let networks = json!({
-            "networks": [
-                {
-                    "id": 1,
-                    "name": DEFAULT_NETWORK_NAME,
-                    "nodes": {
-                        "lightning": [
-                            { "name": "alice", "type": "lightning" },
-                            { "name": "bob", "type": "lightning" },
-                            { "name": "carol", "type": "lightning" }
-                        ]
-                    }
-                }
-            ]
-        });
-
-        let unwanted = unwanted_step_two_non_bitcoin_nodes(&networks, "1");
-
-        assert_eq!(
-            unwanted,
-            vec!["alice".to_string(), "bob".to_string(), "carol".to_string()]
-        );
-    }
-
-    #[test]
-    fn step_two_cleanup_targets_all_nodes_when_treasury_exists() {
-        let networks = json!({
-            "networks": [
-                {
-                    "id": 1,
-                    "name": DEFAULT_NETWORK_NAME,
-                    "nodes": {
-                        "lightning": [
-                            { "name": "GAME_LND", "type": "lightning" },
-                            { "name": "alice", "type": "lightning" },
-                            { "name": "bob", "type": "lightning" }
-                        ]
-                    }
-                }
-            ]
-        });
-
-        let unwanted = unwanted_step_two_non_bitcoin_nodes(&networks, "1");
-
-        assert_eq!(
-            unwanted,
-            vec![
-                "GAME_LND".to_string(),
-                "alice".to_string(),
-                "bob".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn step_two_cleanup_targets_taproot_nodes_but_keeps_bitcoin_backend() {
-        let networks = json!({
-            "networks": [
-                {
-                    "id": 1,
-                    "name": DEFAULT_NETWORK_NAME,
-                    "nodes": {
-                        "bitcoin": [
-                            { "name": "backend1", "type": "bitcoin", "implementation": "bitcoind" }
-                        ],
-                        "lightning": [
-                            { "name": "alice", "type": "lightning" }
-                        ],
-                        "tap": [
-                            { "name": "tapd", "type": "taproot", "implementation": "tapd" }
-                        ]
-                    }
-                }
-            ]
-        });
-
-        let unwanted = unwanted_step_two_non_bitcoin_nodes(&networks, "1");
-
-        assert_eq!(unwanted, vec!["tapd".to_string(), "alice".to_string()]);
-    }
-
-    #[test]
-    fn step_two_cleanup_removes_taproot_before_connected_treasury() {
-        let networks = json!({
-            "networks": [
-                {
-                    "id": 1,
-                    "name": DEFAULT_NETWORK_NAME,
-                    "nodes": {
-                        "bitcoin": [
-                            { "name": "backend1", "type": "bitcoin", "implementation": "bitcoind" }
-                        ],
-                        "lightning": [
-                            { "name": "GAME_LND", "type": "lightning" },
-                            { "name": "alice", "type": "lightning" }
-                        ],
-                        "tap": [
-                            { "name": TAPROOT_ASSETS_NODE_NAME, "type": "taproot", "implementation": "tapd" }
-                        ]
-                    }
-                }
-            ]
-        });
-
-        let unwanted = unwanted_step_two_non_bitcoin_nodes(&networks, "1");
-
-        assert_eq!(
-            unwanted,
-            vec![
-                TAPROOT_ASSETS_NODE_NAME.to_string(),
-                "GAME_LND".to_string(),
-                "alice".to_string()
-            ]
-        );
-    }
-
-    #[test]
     fn detects_taproot_dependency_remove_node_error() {
         assert!(is_taproot_dependency_remove_error(
             "Polar MCP tool remove_node failed: Cannot remove a Lightning node that has a Taproot Assets node connected to it."
@@ -4411,13 +4917,13 @@ mod tests {
                         "bitcoin": [],
                         "lightning": [
                             {
-                                "name": "alice",
+                                "name": "Alice",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Started"
                             },
                             {
-                                "name": "bob",
+                                "name": "Bob",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Started"
@@ -4473,12 +4979,12 @@ mod tests {
 
     #[test]
     fn add_lightning_node_arguments_send_all_known_name_fields() {
-        let args = add_lightning_node_arguments("1", "alice");
+        let args = add_lightning_node_arguments("1", "Alice");
 
-        assert_eq!(args["name"], json!("alice"));
-        assert_eq!(args["nodeName"], json!("alice"));
-        assert_eq!(args["displayName"], json!("alice"));
-        assert_eq!(args["alias"], json!("alice"));
+        assert_eq!(args["name"], json!("Alice"));
+        assert_eq!(args["nodeName"], json!("Alice"));
+        assert_eq!(args["displayName"], json!("Alice"));
+        assert_eq!(args["alias"], json!("Alice"));
     }
 
     #[test]
@@ -4500,10 +5006,10 @@ mod tests {
             "nodeName": "dave"
         });
 
-        let error = validate_created_lightning_node_name("alice", &response)
+        let error = validate_created_lightning_node_name("Alice", &response)
             .expect_err("generated fallback node name must not be accepted");
 
-        assert!(error.contains("asked Polar to create alice"));
+        assert!(error.contains("asked Polar to create Alice"));
         assert!(error.contains("created dave"));
         assert!(error.contains("Remove dave"));
     }
@@ -4533,7 +5039,7 @@ mod tests {
         });
 
         let created_name = validate_created_lightning_node_after_add(
-            "alice",
+            "Alice",
             &json!({ "success": true }),
             &before_add,
             &after_add,
@@ -4556,7 +5062,7 @@ mod tests {
                         "bitcoin": [],
                         "lightning": [
                             {
-                                "name": "bob",
+                                "name": "Bob",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Started"
@@ -4576,13 +5082,13 @@ mod tests {
                         "bitcoin": [],
                         "lightning": [
                             {
-                                "name": "bob",
+                                "name": "Bob",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Started"
                             },
                             {
-                                "name": "alice",
+                                "name": "Alice",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Started"
@@ -4599,12 +5105,12 @@ mod tests {
                     "nodes": {
                         "lightning": [
                             {
-                                "name": "bob",
+                                "name": "Bob",
                                 "type": "lightning",
                                 "implementation": "LND"
                             },
                             {
-                                "name": "alice",
+                                "name": "Alice",
                                 "type": "lightning",
                                 "implementation": "LND"
                             }
@@ -4616,13 +5122,13 @@ mod tests {
 
         assert_eq!(
             validate_created_lightning_node_after_add(
-                "alice",
+                "Alice",
                 &response,
                 &before_add,
                 &after_add,
                 "1",
             ),
-            Ok("alice".to_string())
+            Ok("Alice".to_string())
         );
     }
 
@@ -4758,7 +5264,7 @@ mod tests {
     fn extracts_wallet_balance_from_lnd_wallet_info() {
         let wallet_info = json!({
             "success": true,
-            "nodeName": "alice",
+            "nodeName": "Alice",
             "confirmed_balance": "250000",
             "unconfirmed_balance": "750000"
         });
@@ -4770,7 +5276,7 @@ mod tests {
     fn extracts_wallet_balance_from_text_sats() {
         let wallet_info = json!({
             "success": true,
-            "result": "Wallet balance for alice: 1,000,000 sats"
+            "result": "Wallet balance for Alice: 1,000,000 sats"
         });
 
         assert_eq!(extract_wallet_balance_sats(&wallet_info), Some(1_000_000));
@@ -4927,13 +5433,13 @@ mod tests {
         let mut networks = healthy_polar_lab_response();
         networks["networks"][0]["nodes"]["lightning"] = json!([
             {
-                "name": "alice",
+                "name": "Alice",
                 "type": "lightning",
                 "implementation": "LND",
                 "status": "Started"
             },
             {
-                "name": "bob",
+                "name": "Bob",
                 "type": "lightning",
                 "implementation": "LND",
                 "status": "Started"
@@ -4966,66 +5472,12 @@ mod tests {
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn with_bridge_request_timeout<F, T>(future: F, method: &str, url: &str) -> Result<T, String>
-where
-    F: std::future::Future<Output = T>,
-{
-    let timeout =
-        gloo_timers::future::TimeoutFuture::new((BRIDGE_REQUEST_TIMEOUT_SECONDS * 1_000) as u32);
-    futures::pin_mut!(future);
-    futures::pin_mut!(timeout);
-
-    match futures::future::select(future, timeout).await {
-        futures::future::Either::Left((value, _)) => Ok(value),
-        futures::future::Either::Right((_, _)) => Err(bridge_request_timeout_message(method, url)),
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
 async fn get_json(
     profile: &PolarAutomationProfile,
     path: &str,
     log_level: DemoLogLevel,
 ) -> Result<Value, String> {
-    let url = bridge_url(profile, path);
-    log_service_request("GET", &url, None, log_level);
-    let result =
-        match with_bridge_request_timeout(gloo_net::http::Request::get(&url).send(), "GET", &url)
-            .await
-        {
-            Err(error) => Err(error),
-            Ok(Ok(response)) => response
-                .json::<Value>()
-                .await
-                .map_err(|error| format!("Polar bridge returned invalid JSON: {error}")),
-            Ok(Err(error)) => Err(format!("Cannot reach Polar bridge: {error}")),
-        };
-    log_service_response("GET", &url, &result, log_level);
-    result
-}
-
-#[cfg(target_arch = "wasm32")]
-async fn post_json(
-    profile: &PolarAutomationProfile,
-    path: &str,
-    body: Value,
-    log_level: DemoLogLevel,
-) -> Result<Value, String> {
-    let url = bridge_url(profile, path);
-    log_service_request("POST", &url, Some(&body), log_level);
-    let result = match gloo_net::http::Request::post(&url).json(&body) {
-        Ok(request) => match with_bridge_request_timeout(request.send(), "POST", &url).await {
-            Err(error) => Err(error),
-            Ok(Ok(response)) => response
-                .json::<Value>()
-                .await
-                .map_err(|error| format!("Polar bridge returned invalid JSON: {error}")),
-            Ok(Err(error)) => Err(format!("Polar bridge request failed: {error}")),
-        },
-        Err(error) => Err(format!("Cannot encode Polar bridge request: {error}")),
-    };
-    log_service_response("POST", &url, &result, log_level);
-    result
+    polar_mcp_connector::get_json(profile, path, log_level.into()).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -5034,73 +5486,5 @@ async fn get_json(
     path: &str,
     log_level: DemoLogLevel,
 ) -> Result<Value, String> {
-    let url = bridge_url(profile, path);
-    log_service_request("GET", &url, None, log_level);
-    let request_url = url.clone();
-    let result = run_bridge_request_on_worker(move || {
-        match ureq::get(&request_url)
-            .timeout(std::time::Duration::from_secs(
-                BRIDGE_REQUEST_TIMEOUT_SECONDS,
-            ))
-            .call()
-        {
-            Ok(response) => response
-                .into_json::<Value>()
-                .map_err(|error| format!("Polar bridge returned invalid JSON: {error}")),
-            Err(error) if is_transport_timeout(&error) => {
-                Err(bridge_request_timeout_message("GET", &request_url))
-            }
-            Err(error) => Err(format!("Cannot reach Polar bridge: {error}")),
-        }
-    })
-    .await;
-    log_service_response("GET", &url, &result, log_level);
-    result
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-async fn post_json(
-    profile: &PolarAutomationProfile,
-    path: &str,
-    body: Value,
-    log_level: DemoLogLevel,
-) -> Result<Value, String> {
-    let url = bridge_url(profile, path);
-    log_service_request("POST", &url, Some(&body), log_level);
-    let request_url = url.clone();
-    let result = run_bridge_request_on_worker(move || {
-        match ureq::post(&request_url)
-            .timeout(std::time::Duration::from_secs(
-                BRIDGE_REQUEST_TIMEOUT_SECONDS,
-            ))
-            .set("Content-Type", "application/json")
-            .send_json(body)
-        {
-            Ok(response) => response
-                .into_json::<Value>()
-                .map_err(|error| format!("Polar bridge returned invalid JSON: {error}")),
-            Err(error) if is_transport_timeout(&error) => {
-                Err(bridge_request_timeout_message("POST", &request_url))
-            }
-            Err(error) => Err(format!("Polar bridge request failed: {error}")),
-        }
-    })
-    .await;
-    log_service_response("POST", &url, &result, log_level);
-    result
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-async fn run_bridge_request_on_worker<F>(request: F) -> Result<Value, String>
-where
-    F: FnOnce() -> Result<Value, String> + Send + 'static,
-{
-    let (sender, receiver) = futures::channel::oneshot::channel();
-    std::thread::spawn(move || {
-        let _ = sender.send(request());
-    });
-
-    receiver
-        .await
-        .map_err(|_| "Polar bridge worker stopped before returning a response.".to_string())?
+    polar_mcp_connector::get_json(profile, path, log_level.into()).await
 }

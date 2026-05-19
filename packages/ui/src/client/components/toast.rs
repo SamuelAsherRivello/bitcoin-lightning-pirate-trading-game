@@ -21,6 +21,7 @@ pub enum ToastTone {
 pub struct OperationPrompt {
     pub operation_id: u64,
     pub title: String,
+    pub subtitle: Option<String>,
     pub message: String,
     pub tone: ToastTone,
     pub is_pending: bool,
@@ -114,6 +115,9 @@ pub fn OperationPromptRegion(mut prompt: Signal<Option<OperationPrompt>>) -> Ele
                     div { class: "operation-prompt__body",
                         span { class: "eyebrow", "{prompt_status_label(&active_prompt)}" }
                         h2 { "{active_prompt.title}" }
+                        if let Some(subtitle) = active_prompt.subtitle.as_ref() {
+                            p { class: "operation-prompt__subtitle", "{subtitle}" }
+                        }
                         p { "{active_prompt.message}" }
                     }
                     div { class: "operation-prompt__actions",

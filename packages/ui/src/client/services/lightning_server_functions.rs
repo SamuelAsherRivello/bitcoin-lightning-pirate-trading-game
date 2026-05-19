@@ -1,13 +1,14 @@
 use crate::client::models::{
-    BlockWaitReason, ConnectionStatus, DemoNodeId, GameItemDefinition, GameTreasury, LabState,
-    MintTraRequest, NodeStatus, RouteStatus, SetupProfile, TraOwnershipStatus, TraTransferStatus,
-    TransferTraRequest, TreasuryImpactPreview, APPLE_ITEM_ID, BOOK_ITEM_ID,
-    DEFAULT_BITCOIN_BACKEND_NAME, DEFAULT_ROUTE_CAPACITY_SATS,
+    AuthAction, BlockWaitReason, ConnectionStatus, DemoNodeId, GameItemDefinition, GameTreasury,
+    LabState, MintTraRequest, NodeStatus, PlayerAuthSession, RouteStatus, SetupProfile,
+    TraOwnershipStatus, TraTransferStatus, TransferTraRequest, TreasuryImpactPreview,
+    APPLE_ITEM_ID, BOOK_ITEM_ID, DEFAULT_BITCOIN_BACKEND_NAME, DEFAULT_ROUTE_CAPACITY_SATS,
 };
 use crate::client::services::{polar_bridge_service, storage_service};
 
 pub use polar_bridge_service::{
-    PolarLabHealthIssue, PolarServerEnsureResult, PolarServerEnsureStatus,
+    PolarDeleteAllProgress, PolarDeleteAllResult, PolarLabHealthIssue, PolarServerEnsureResult,
+    PolarServerEnsureStatus,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -15,6 +16,35 @@ pub struct PolarLabRecovery {
     pub profile: SetupProfile,
     pub lab_state: Option<LabState>,
     pub message: String,
+}
+
+pub async fn begin_player_auth(
+    profile: SetupProfile,
+    action: AuthAction,
+) -> Result<PlayerAuthSession, String> {
+    lightning_service::begin_player_auth(&profile, action).map_err(|error| error.to_string())
+}
+
+pub async fn display_player_auth_session(session: PlayerAuthSession) -> PlayerAuthSession {
+    lightning_service::display_player_auth_session(session)
+}
+
+pub async fn approve_mock_player_auth_session(
+    session: PlayerAuthSession,
+) -> Result<PlayerAuthSession, String> {
+    lightning_service::approve_mock_player_auth_session(session).map_err(|error| error.to_string())
+}
+
+pub async fn complete_player_auth(
+    session: PlayerAuthSession,
+    linking_key_fingerprint: String,
+) -> Result<PlayerAuthSession, String> {
+    lightning_service::complete_player_auth(session, linking_key_fingerprint)
+        .map_err(|error| error.to_string())
+}
+
+pub async fn cancel_player_auth_session(session: PlayerAuthSession) -> PlayerAuthSession {
+    lightning_service::cancel_player_auth_session(session)
 }
 
 pub async fn test_setup(profile: SetupProfile) -> Result<LabState, String> {
@@ -88,7 +118,21 @@ pub async fn ensure_polar_server(profile: SetupProfile) -> Result<PolarServerEns
 }
 
 pub async fn create_polar_demo_nodes(profile: SetupProfile) -> Result<LabState, String> {
-    create_polar_demo_nodes_with_progress(profile, |_| {}).await
+    create_required_polar_nodes_with_progress(profile, |_| {}).await
+}
+
+pub async fn create_required_polar_nodes(profile: SetupProfile) -> Result<LabState, String> {
+    create_required_polar_nodes_with_progress(profile, |_| {}).await
+}
+
+pub async fn create_polar_demo_nodes_with_progress<F>(
+    profile: SetupProfile,
+    report_progress: F,
+) -> Result<LabState, String>
+where
+    F: FnMut(String),
+{
+    create_required_polar_nodes_with_progress(profile, report_progress).await
 }
 
 pub async fn close_polar_demo_channels(profile: SetupProfile) -> Result<SetupProfile, String> {
@@ -114,7 +158,7 @@ where
     Ok(profile)
 }
 
-pub async fn create_polar_demo_nodes_with_progress<F>(
+pub async fn create_required_polar_nodes_with_progress<F>(
     profile: SetupProfile,
     report_progress: F,
 ) -> Result<LabState, String>
@@ -123,11 +167,6 @@ where
 {
     lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
     let mut profile = profile;
-    if !profile.game_treasury_ready {
-        return Err(
-            "Complete Game Treasury (Sats) before creating Alice, Bob, and Carol.".to_string(),
-        );
-    }
     if let Some(mut state) = matching_setup_snapshot(&profile) {
         if setup_has_user_nodes(&state) {
             state.profile = profile;
@@ -145,7 +184,7 @@ where
     let required_balance_sats = profile
         .sats_per_transaction
         .max(DEFAULT_ROUTE_CAPACITY_SATS);
-    profile.polar_automation = polar_bridge_service::create_demo_nodes_with_progress(
+    profile.polar_automation = polar_bridge_service::create_required_nodes_with_progress(
         &profile.polar_automation,
         required_balance_sats,
         report_progress,
@@ -164,6 +203,34 @@ where
     state = refresh_polar_node_names(state).await?;
     state.profile.connection_status = lightning_service::ConnectionStatus::PartiallyConnected;
     state.profile.polar_block_height_confirmed = false;
+    storage_service::save_setup_profile(&state.profile);
+    storage_service::save_lab_state_snapshot(&state);
+    Ok(state)
+}
+
+pub async fn prepare_user_node_sats(profile: SetupProfile) -> Result<LabState, String> {
+    lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
+    let mut profile = profile;
+    let required_balance_sats = profile
+        .sats_per_transaction
+        .max(DEFAULT_ROUTE_CAPACITY_SATS);
+    if should_read_polar(&profile) {
+        profile.polar_automation = polar_bridge_service::fund_demo_user_nodes(
+            &profile.polar_automation,
+            required_balance_sats,
+        )
+        .await?;
+        profile.connection_status = lightning_service::ConnectionStatus::PartiallyConnected;
+        profile.polar_block_height_confirmed = false;
+        profile.last_verified_at = None;
+    }
+
+    let mut state = get_lab_state(profile).await?;
+    for node in &mut state.nodes {
+        if DemoNodeId::ALL.contains(&node.node_id) {
+            node.wallet_balance_sats = 1_000_000;
+        }
+    }
     storage_service::save_setup_profile(&state.profile);
     storage_service::save_lab_state_snapshot(&state);
     Ok(state)
@@ -245,7 +312,11 @@ pub async fn prepare_game_treasury_tras(profile: SetupProfile) -> Result<LabStat
     Ok(state)
 }
 
-pub async fn transfer_npc_starting_items(mut profile: SetupProfile) -> Result<LabState, String> {
+pub async fn transfer_npc_starting_items(profile: SetupProfile) -> Result<LabState, String> {
+    prepare_user_node_tras(profile).await
+}
+
+pub async fn prepare_user_node_tras(mut profile: SetupProfile) -> Result<LabState, String> {
     if let Some(mut state) = matching_setup_snapshot(&profile) {
         if setup_has_npc_transfers(&state) {
             profile.connection_status = lightning_service::ConnectionStatus::PartiallyConnected;
@@ -315,7 +386,7 @@ pub async fn confirm_polar_block_height(
     };
 
     let mut state = storage_service::load_lab_state_snapshot()
-        .ok_or_else(|| "Complete NPC Item Transfers before setting Block Height.".to_string())?;
+        .ok_or_else(|| "Complete User Nodes (TRAs) before setting Block Height.".to_string())?;
 
     profile.connection_status = if should_read_polar {
         lightning_service::ConnectionStatus::PartiallyConnected
@@ -326,7 +397,7 @@ pub async fn confirm_polar_block_height(
     state.profile = profile.clone();
 
     if !setup_ready_for_block_height(&state) {
-        return Err("Complete Game Treasury (Sats), Game Treasury (TRAs), User Nodes, and NPC Item Transfers before setting Block Height.".to_string());
+        return Err("Complete Game Treasury (Sats), Game Treasury (TRAs), User Nodes (Sats), and User Nodes (TRAs) before setting Block Height.".to_string());
     }
 
     profile.polar_block_height_confirmed = true;
@@ -372,18 +443,25 @@ pub async fn delete_created_polar_server(profile: SetupProfile) -> Result<SetupP
 pub async fn delete_all_polar_networks(
     profile: SetupProfile,
 ) -> Result<(SetupProfile, usize), String> {
-    delete_all_polar_networks_with_progress(profile, |_, _| {}).await
+    delete_all_polar_networks_with_progress(profile, |_| {})
+        .await
+        .map(|(profile, result)| (profile, result.deleted_count))
+}
+
+pub async fn count_polar_networks(profile: SetupProfile) -> Result<usize, String> {
+    lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
+    polar_bridge_service::count_polar_networks(&profile.polar_automation).await
 }
 
 pub async fn delete_all_polar_networks_with_progress<F>(
     profile: SetupProfile,
     report_progress: F,
-) -> Result<(SetupProfile, usize), String>
+) -> Result<(SetupProfile, PolarDeleteAllResult), String>
 where
-    F: FnMut(usize, usize),
+    F: FnMut(PolarDeleteAllProgress),
 {
     lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
-    let deleted_count = polar_bridge_service::delete_all_polar_networks_with_progress(
+    let result = polar_bridge_service::delete_all_polar_networks_with_progress(
         &profile.polar_automation,
         report_progress,
     )
@@ -398,7 +476,7 @@ where
 
     storage_service::save_setup_profile(&profile);
     storage_service::clear_lab_state_snapshot();
-    Ok((profile, deleted_count))
+    Ok((profile, result))
 }
 
 pub async fn reset_polar_setup_start(mut profile: SetupProfile) -> Result<SetupProfile, String> {
@@ -444,7 +522,7 @@ pub async fn complete_polar_setup(mut profile: SetupProfile) -> Result<LabState,
     state.profile = profile.clone();
 
     if !setup_ready_for_unlock(&state) {
-        return Err("Complete Game Treasury (Sats), Game Treasury (TRAs), User Nodes, NPC Item Transfers, and Block Height before unlocking routes.".to_string());
+        return Err("Complete Game Treasury (Sats), Game Treasury (TRAs), User Nodes (Sats), User Nodes (TRAs), and Block Height before unlocking routes.".to_string());
     }
 
     profile.connection_status = lightning_service::ConnectionStatus::Connected;

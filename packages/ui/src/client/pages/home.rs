@@ -59,6 +59,24 @@ pub fn Home() -> Element {
                 div { class: "lab-grid lab-grid--two faq-concept-grid",
                     article { class: "lab-panel faq-concept",
                         div { class: "section-heading",
+                            span { class: "eyebrow", "Auth modes" }
+                            h3 { "What are App, Mock LNAuth, and LNAuth?" }
+                        }
+                        p {
+                            "App mode is the development path where the demo app acts on behalf of the player. Mock LNAuth keeps the same QR-shaped login and approval moments but completes them automatically for local testing. LNAuth is the wallet authorization path: the player scans QR requests for login and value-moving actions."
+                        }
+                    }
+                    article { class: "lab-panel faq-concept",
+                        div { class: "section-heading",
+                            span { class: "eyebrow", "Wallets" }
+                            h3 { "Why is the player wallet outside Polar?" }
+                        }
+                        p {
+                            "Polar runs local regtest nodes for the lab. The player's external wallet supplies identity and approval only; it is not imported into Polar and the app does not store wallet secrets. Alby Go is the first mobile wallet target for LNAuth testing with Alby Hub or another NWC wallet service."
+                        }
+                    }
+                    article { class: "lab-panel faq-concept",
+                        div { class: "section-heading",
                             span { class: "eyebrow", "Bitcoin" }
                             h3 { "What is Bitcoin?" }
                         }

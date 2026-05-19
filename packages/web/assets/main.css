@@ -595,6 +595,13 @@ textarea {
     font-size: 22px;
 }
 
+.operation-prompt__body .operation-prompt__subtitle {
+    color: var(--app-text);
+    font-size: 15px;
+    font-weight: 750;
+    line-height: 1.35;
+}
+
 .operation-prompt__body p {
     color: var(--app-text-muted);
     line-height: 1.5;

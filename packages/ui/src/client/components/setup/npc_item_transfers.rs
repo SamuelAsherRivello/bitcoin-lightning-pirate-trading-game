@@ -6,9 +6,9 @@ use crate::client::models::NpcItemTransfer;
 pub fn NpcItemTransferStatus(transfers: Vec<NpcItemTransfer>) -> Element {
     rsx! {
         div { class: "tra-setup-status", role: "status",
-            strong { "NPC Item Transfers" }
+            strong { "User Nodes (TRAs)" }
             if transfers.is_empty() {
-                span { "Starting items will move from Game Treasury to Bob and Carol." }
+                span { "TRA items will match the demo targets for Alice, Bob, and Carol." }
             } else {
                 for transfer in transfers {
                     span {

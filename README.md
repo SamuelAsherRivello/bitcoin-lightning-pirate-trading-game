@@ -35,11 +35,18 @@ The static web build is exported and hosted automatically with each push to the 
 | Command | Required? | Description |
 | ------- | --------- | --- |
 | `.\Scripts\Common\InstallDependencies.ps1` | ✅ | Installs repository dependencies and builds Tailwind CSS output. |
+| `.\Scripts\Common\RunPolarMcp.ps1` | ✅ for Polar | Starts the local Polar MCP helper with `npx -y @lightningpolar/mcp`. Run this while using the networked Polar setup path. |
 | `.\Scripts\Common\RunWeb.ps1` | ✅ | Stops this repo's Dioxus web/static server and generated app server, then starts a fresh web app at `http://localhost:8080` for Polar bridge compatibility and opens it in the default browser. Use `-NoOpen` to skip browser launch. |
 | `.\Scripts\Common\StopWeb.ps1` | ❌ | Stops the Dioxus web server and generated game server for the requested port. |
 | `.\Scripts\Common\RunDesktop.ps1` | ✅ | Starts the desktop app with Dioxus desktop. |
 
-`http://localhost:37373` is Polar's local MCP bridge, not the Dioxus app. Open the app at `http://localhost:8080` when using Polar Automation so browser calls to Polar's bridge pass its localhost CORS check. `RunWeb.ps1` restarts the Dioxus development servers on every run; if the requested port is owned by another process such as Polar, Docker, or an LND node, the script reports that owner instead of stopping it. For phone or offline mock testing, pass `-Address <this laptop's Wi-Fi IPv4>`; networked Polar bridge calls may reject that non-localhost browser origin.
+Polar automation requires Node.js 18 or newer and the maintained Polar MCP package. The preferred launch path is:
+
+```powershell
+.\Scripts\Common\RunPolarMcp.ps1
+```
+
+The script runs `npx -y @lightningpolar/mcp` and verifies Polar's local bridge at `http://localhost:37373/health`. `http://localhost:37373` is Polar's local MCP bridge, not the Dioxus app. Open the app at `http://localhost:8080` when using Polar Automation so browser calls to Polar's bridge pass its localhost CORS check. `RunWeb.ps1` restarts the Dioxus development servers on every run; if the requested port is owned by another process such as Polar, Docker, or an LND node, the script reports that owner instead of stopping it. For phone or offline mock testing, pass `-Address <this laptop's Wi-Fi IPv4>`; networked Polar bridge calls may reject that non-localhost browser origin.
 
 ### Other
 

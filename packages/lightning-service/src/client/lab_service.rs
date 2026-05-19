@@ -2,9 +2,10 @@ use chrono::Utc;
 
 use super::error::LightningError;
 use super::models::{
-    ActionLogEntry, BlockWaitAction, BlockWaitReason, BlockWaitStatus, ConnectionStatus, DemoNode,
-    DemoNodeId, GameTreasury, InvoiceRequest, InvoiceStatus, LabState, NodeStatus, OperationFaqRow,
-    PaymentAttempt, PaymentStatus, RouteStatus, SetupMode, SetupProfile, TradeRoute,
+    ActionLogEntry, AuthAction, AuthSessionStatus, BlockWaitAction, BlockWaitReason,
+    BlockWaitStatus, ConnectionStatus, DemoNode, DemoNodeId, GameTreasury, InvoiceRequest,
+    InvoiceStatus, LabState, NodeStatus, OperationFaqRow, PaymentAttempt, PaymentStatus,
+    PlayerAuthSession, PlayerIdentity, RouteStatus, SetupMode, SetupProfile, TradeRoute,
     DEFAULT_ROUTE_CAPACITY_SATS, GAME_TREASURY_NODE_LABEL, MAX_SATS_PER_TRANSACTION,
 };
 use crate::server::config::validate_polar_connection_profile;
@@ -70,6 +71,82 @@ pub fn test_setup(mut profile: SetupProfile) -> Result<LabState, LightningError>
     Ok(state)
 }
 
+pub fn begin_player_auth(
+    profile: &SetupProfile,
+    action: AuthAction,
+) -> Result<PlayerAuthSession, LightningError> {
+    if !profile.user_auth_mode.requires_player_auth() {
+        return Err(LightningError::AuthModeNotEnabled);
+    }
+
+    let now = Utc::now();
+    let suffix = now.timestamp_millis();
+    Ok(PlayerAuthSession {
+        session_id: format!("player-auth-{suffix}"),
+        challenge_id: format!("k1-{suffix}"),
+        lnurl: format!("lnurl-auth://local-regtest/{suffix}"),
+        qr_payload: format!("lnurl-auth://local-regtest/{suffix}"),
+        action,
+        status: AuthSessionStatus::Created,
+        expires_at: Some(now + chrono::Duration::minutes(5)),
+        player_identity: None,
+        failure_reason: None,
+    })
+}
+
+pub fn display_player_auth_session(mut session: PlayerAuthSession) -> PlayerAuthSession {
+    session.status = AuthSessionStatus::Displayed;
+    session
+}
+
+pub fn approve_mock_player_auth_session(
+    mut session: PlayerAuthSession,
+) -> Result<PlayerAuthSession, LightningError> {
+    if session.status == AuthSessionStatus::Canceled {
+        return Ok(session);
+    }
+
+    let now = Utc::now();
+    session.status = AuthSessionStatus::Approved;
+    session.player_identity = Some(PlayerIdentity {
+        linking_key_fingerprint: format!("mock-{}", session.challenge_id),
+        display_label: "Mock LNAuth player".to_string(),
+        authenticated_at: now,
+        last_seen_at: Some(now),
+    });
+    session.failure_reason = None;
+    Ok(session)
+}
+
+pub fn complete_player_auth(
+    mut session: PlayerAuthSession,
+    linking_key_fingerprint: String,
+) -> Result<PlayerAuthSession, LightningError> {
+    if matches!(
+        session.status,
+        AuthSessionStatus::Canceled | AuthSessionStatus::Expired | AuthSessionStatus::Rejected
+    ) {
+        return Ok(session);
+    }
+
+    let now = Utc::now();
+    session.status = AuthSessionStatus::Approved;
+    session.player_identity = Some(PlayerIdentity {
+        display_label: "LNAuth player".to_string(),
+        linking_key_fingerprint,
+        authenticated_at: now,
+        last_seen_at: Some(now),
+    });
+    session.failure_reason = None;
+    Ok(session)
+}
+
+pub fn cancel_player_auth_session(mut session: PlayerAuthSession) -> PlayerAuthSession {
+    session.status = AuthSessionStatus::Canceled;
+    session.failure_reason = Some("Canceled by user.".to_string());
+    session
+}
+
 pub fn default_lab_state(profile: SetupProfile) -> LabState {
     let connected = profile.is_connected();
 
@@ -83,6 +160,9 @@ pub fn default_lab_state(profile: SetupProfile) -> LabState {
         tra_items: Vec::new(),
         game_treasury: GameTreasury::default(),
         npc_item_transfers: Vec::new(),
+        player_auth_session: None,
+        recent_transaction_approvals: Vec::new(),
+        auth_warnings: Vec::new(),
         operation_faq: get_operation_faq(),
         block_height: 0,
         polar_observed_block_height: None,
@@ -685,6 +765,74 @@ mod tests {
             connection_status: ConnectionStatus::Connected,
             ..SetupProfile::default()
         }
+    }
+
+    fn mock_auth_profile() -> SetupProfile {
+        SetupProfile {
+            user_auth_mode: super::super::models::UserAuthMode::MockLnAuth,
+            ..connected_profile()
+        }
+    }
+
+    #[test]
+    fn player_auth_session_lifecycle_supports_display_and_approval() {
+        let session =
+            begin_player_auth(&mock_auth_profile(), AuthAction::Login).expect("mock auth session");
+
+        assert_eq!(session.status, AuthSessionStatus::Created);
+        assert_eq!(session.action, AuthAction::Login);
+        assert!(session.player_identity.is_none());
+
+        let session = display_player_auth_session(session);
+        assert_eq!(session.status, AuthSessionStatus::Displayed);
+
+        let session = approve_mock_player_auth_session(session).expect("mock approved");
+        assert_eq!(session.status, AuthSessionStatus::Approved);
+        assert!(session.player_identity.is_some());
+    }
+
+    #[test]
+    fn player_auth_session_accepts_real_wallet_completion() {
+        let session = begin_player_auth(
+            &SetupProfile {
+                user_auth_mode: super::super::models::UserAuthMode::LnAuth,
+                ..connected_profile()
+            },
+            AuthAction::Login,
+        )
+        .expect("ln auth session");
+
+        let session = complete_player_auth(session, "wallet-public-fingerprint".to_string())
+            .expect("completed");
+
+        assert_eq!(session.status, AuthSessionStatus::Approved);
+        assert_eq!(
+            session
+                .player_identity
+                .as_ref()
+                .map(|identity| identity.linking_key_fingerprint.as_str()),
+            Some("wallet-public-fingerprint")
+        );
+    }
+
+    #[test]
+    fn player_auth_session_can_be_canceled_before_mock_completion() {
+        let session =
+            begin_player_auth(&mock_auth_profile(), AuthAction::Login).expect("mock auth session");
+        let session = display_player_auth_session(session);
+        let session = cancel_player_auth_session(session);
+        let session = approve_mock_player_auth_session(session).expect("mock completion skipped");
+
+        assert_eq!(session.status, AuthSessionStatus::Canceled);
+        assert!(session.player_identity.is_none());
+    }
+
+    #[test]
+    fn app_mode_does_not_create_player_auth_session() {
+        let error = begin_player_auth(&connected_profile(), AuthAction::Login)
+            .expect_err("app mode should not require wallet auth");
+
+        assert!(matches!(error, LightningError::AuthModeNotEnabled));
     }
 
     #[test]

@@ -102,6 +102,24 @@ function Ensure-NodeDependencies {
     }
 }
 
+function Ensure-PolarMcpPrerequisites {
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        throw "Node.js 18 or newer is required for the Polar MCP helper. Install Node.js from https://nodejs.org/ and rerun this script."
+    }
+
+    $NodeVersionText = (& node --version).Trim().TrimStart("v")
+    $NodeMajor = [int]($NodeVersionText.Split(".")[0])
+    if ($NodeMajor -lt 18) {
+        throw "Node.js 18 or newer is required for the Polar MCP helper. Current node version: v$NodeVersionText."
+    }
+
+    if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
+        throw "npx is required to launch @lightningpolar/mcp. Install Node.js/npm from https://nodejs.org/ and rerun this script."
+    }
+
+    Write-Host "Polar MCP prerequisites are available. Start the helper with .\Scripts\Common\RunPolarMcp.ps1 when using networked Polar setup."
+}
+
 function Build-TailwindCss {
     Write-Host "Building Tailwind CSS..."
     Invoke-CheckedCommand "npm" @("run", "tailwind:build")
@@ -111,6 +129,7 @@ Ensure-RustToolchain
 Ensure-WasmTarget
 Ensure-DioxusCli
 Ensure-NodeDependencies
+Ensure-PolarMcpPrerequisites
 Build-TailwindCss
 
 Write-Host ""

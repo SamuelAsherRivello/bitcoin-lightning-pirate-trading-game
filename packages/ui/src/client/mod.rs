@@ -90,6 +90,7 @@ fn AppLayout() -> Element {
                         operation_prompt.set(Some(components::toast::OperationPrompt {
                             operation_id: next_id,
                             title: "Polar setup needs attention".to_string(),
+                            subtitle: None,
                             message: recovery.message,
                             tone: components::toast::ToastTone::Error,
                             is_pending: false,
@@ -147,6 +148,7 @@ fn AppLayout() -> Element {
                         operation_prompt.set(Some(components::toast::OperationPrompt {
                             operation_id: next_id,
                             title: "Polar setup needs attention".to_string(),
+                            subtitle: None,
                             message: recovery.message,
                             tone: components::toast::ToastTone::Error,
                             is_pending: false,

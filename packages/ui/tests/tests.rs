@@ -122,7 +122,7 @@ fn setup_profile_defaults_to_polar_connection() {
     );
     assert_eq!(
         profile.polar_automation.bitcoin_backend_name,
-        "My Bitcoin Node"
+        "GAME_BITCOIN"
     );
     assert!(profile.polar_automation.is_complete());
 }
