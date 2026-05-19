@@ -616,6 +616,91 @@ textarea {
     padding: 10px 22px 22px;
 }
 
+.qr-auth-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: grid;
+    place-items: center;
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: 24px;
+    overflow: auto;
+    background: rgba(5, 7, 10, 0.58);
+}
+
+.qr-auth-modal {
+    width: min(100%, 420px);
+    display: grid;
+    gap: 16px;
+    padding: 24px;
+    border: 1px solid var(--app-border);
+    border-radius: 8px;
+    background: var(--app-raised);
+    color: var(--app-text);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+}
+
+.qr-auth-modal__body {
+    display: grid;
+    justify-items: center;
+    gap: 12px;
+    text-align: center;
+}
+
+.qr-auth-modal__body h2,
+.qr-auth-modal__body p {
+    margin: 0;
+}
+
+.qr-auth-modal__body h2 {
+    font-size: 22px;
+}
+
+.qr-auth-modal__body p,
+.qr-auth-modal__status {
+    color: var(--app-text-muted);
+    line-height: 1.45;
+}
+
+.qr-auth-modal__status--error {
+    color: var(--app-negative);
+}
+
+.qr-auth-modal__actions {
+    display: flex;
+    justify-content: center;
+}
+
+.qr-auth-modal__payload {
+    max-width: 100%;
+    overflow: auto;
+    padding: 12px;
+    border-radius: 8px;
+    background: var(--app-surface);
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.qr-code {
+    width: min(72vw, 260px);
+    aspect-ratio: 1;
+    display: grid;
+    gap: 0;
+    padding: 12px;
+    border-radius: 8px;
+    background: #fff;
+}
+
+.qr-code__cell {
+    aspect-ratio: 1;
+    background: #fff;
+}
+
+.qr-code__cell--dark {
+    background: #111;
+}
+
 .connection-tabs {
     display: grid;
     gap: 12px;

@@ -10,16 +10,20 @@ use crate::client::components::toast::{
     wait_for_prompt_message_minimum, OperationPrompt, Toast, ToastTone,
 };
 use crate::client::models::{
-    ConnectionStatus, DemoNode, DemoNodeId, GameItemDefinition, LabState, RouteStatus, SetupMode,
-    SetupProfile, TraItem, TraOwnershipStatus, TraTransferStatus, TradeRoute, TransferTraRequest,
+    ApprovalOperationKind, AuthAction, AuthSessionStatus, ConnectionStatus, DemoNode, DemoNodeId,
+    GameItemDefinition, LabState, QrAuthorizationKind, QrAuthorizationModal, QrAuthorizationStatus,
+    RouteStatus, SetupMode, SetupProfile, TraItem, TraOwnershipStatus, TraTransferStatus,
+    TradeRoute, TransactionApproval, TransactionApprovalStatus, TransferTraRequest,
     DEFAULT_ROUTE_CAPACITY_SATS, DEFAULT_SATS_PER_TRANSACTION, MAX_TRA_ITEMS_PER_NODE,
 };
 use crate::client::services::lightning_server_functions::{
-    close_polar_demo_channels_with_progress, close_trade_route, complete_polar_setup,
-    create_polar_demo_nodes_with_progress, destroy_polar_demo_nodes, ensure_polar_server,
-    execute_tra_item_trade, initial_tra_setup_items, mint_tra, open_trade_route, preview_tra_setup,
-    recover_if_polar_lab_unhealthy, reset_tra_inventory, verify_polar_bridge, verify_tra_setup,
-    wait_for_next_block, PolarLabRecovery,
+    approve_mock_player_auth_session, approve_transaction_approval, begin_player_auth,
+    begin_transaction_approval, close_polar_demo_channels_with_progress, close_trade_route,
+    complete_polar_setup, create_polar_demo_nodes_with_progress, destroy_polar_demo_nodes,
+    display_player_auth_session, ensure_polar_server, execute_tra_item_trade,
+    initial_tra_setup_items, mint_tra, open_trade_route, preview_tra_setup,
+    record_transaction_approval, recover_if_polar_lab_unhealthy, reset_tra_inventory,
+    verify_polar_bridge, verify_tra_setup, wait_for_next_block, PolarLabRecovery,
 };
 use crate::client::Route;
 
@@ -34,6 +38,7 @@ const GAME_NPC_ALT: Asset = asset!("/assets/images/game/npc-alt.svg");
 const GAME_PURSE: Asset = asset!("/assets/images/game/purse.svg");
 const GAME_CHANNEL: Asset = asset!("/assets/images/game/channel.svg");
 const GAME_CHANNEL_DOTTED: Asset = asset!("/assets/images/game/channel-dotted.svg");
+const MOCK_LNAUTH_AUTO_COMPLETE_MS: u32 = 1_000;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum PlayGameRefreshStatus {
@@ -110,6 +115,7 @@ pub fn PlayGame() -> Element {
     let setup_profile = use_context::<Signal<SetupProfile>>();
     let mut lab_state = use_context::<Signal<Option<LabState>>>();
     let toast = use_context::<Signal<Option<Toast>>>();
+    let qr_authorization_prompt = use_context::<Signal<Option<QrAuthorizationModal>>>();
     let operation_prompt = use_context::<Signal<Option<OperationPrompt>>>();
     let toast_sequence = use_signal(|| 30_000_u64);
     let prompt_sequence = use_signal(|| 50_000_u64);
@@ -120,9 +126,10 @@ pub fn PlayGame() -> Element {
     let mut play_game_refresh_status = use_signal(PlayGameRefreshStatus::default);
     let navigator = navigator();
 
+    let refresh_route = active_route.clone();
     use_effect(move || {
         let profile = setup_profile();
-        if active_route == (Route::PlayGame {}) && profile.is_connected() && !is_busy() {
+        if refresh_route == (Route::PlayGame {}) && profile.is_connected() && !is_busy() {
             play_game_refresh_status.set(PlayGameRefreshStatus::Refreshing);
             spawn(async move {
                 match preview_tra_setup(profile.clone()).await {
@@ -154,6 +161,43 @@ pub fn PlayGame() -> Element {
                 }
             });
         }
+    });
+
+    let auth_route = active_route.clone();
+    use_effect(move || {
+        let profile = setup_profile();
+        let Some(state) = lab_state() else {
+            return;
+        };
+
+        if auth_route != (Route::PlayGame {})
+            || !profile.is_connected()
+            || !profile.user_auth_mode.requires_player_auth()
+            || profile.player_identity.is_some()
+            || state.player_auth_session.as_ref().is_some_and(|session| {
+                matches!(
+                    session.status,
+                    AuthSessionStatus::Created
+                        | AuthSessionStatus::Displayed
+                        | AuthSessionStatus::Approved
+                        | AuthSessionStatus::Canceled
+                )
+            })
+        {
+            return;
+        }
+
+        spawn(async move {
+            begin_play_game_login_auth(
+                profile,
+                setup_profile,
+                lab_state,
+                qr_authorization_prompt,
+                toast,
+                toast_sequence,
+            )
+            .await;
+        });
     });
 
     let profile = setup_profile();
@@ -427,6 +471,27 @@ pub fn PlayGame() -> Element {
                             return;
                         };
                         is_busy.set(true);
+                        let send_summary = format!("You are sending {} sats", selected_item.cost_sats);
+                        let trade_approval = match authorize_trade_with_qr(
+                            setup_profile(),
+                            selected_item.cost_sats,
+                            send_summary,
+                            qr_authorization_prompt,
+                        )
+                        .await
+                        {
+                            Ok(approval) => approval,
+                            Err(message) => {
+                                push_toast(
+                                    toast,
+                                    toast_sequence,
+                                    message,
+                                    ToastTone::Error,
+                                );
+                                is_busy.set(false);
+                                return;
+                            }
+                        };
                         game_animation.set(GameAnimation::PaymentLeftToRight);
                         wait_for_game_animation().await;
                         let memo = format!(
@@ -441,6 +506,7 @@ pub fn PlayGame() -> Element {
                             DemoNodeId::Alice,
                             selected_item.cost_sats,
                             memo,
+                            trade_approval,
                             TransferTraRequest {
                                 tra_id: selected_item.tra_id.clone(),
                                 from_node: merchant,
@@ -503,6 +569,27 @@ pub fn PlayGame() -> Element {
                             return;
                         };
                         is_busy.set(true);
+                        let send_summary = format!("You are sending {} sats", selected_item.cost_sats);
+                        let trade_approval = match authorize_trade_with_qr(
+                            setup_profile(),
+                            selected_item.cost_sats,
+                            send_summary,
+                            qr_authorization_prompt,
+                        )
+                        .await
+                        {
+                            Ok(approval) => approval,
+                            Err(message) => {
+                                push_toast(
+                                    toast,
+                                    toast_sequence,
+                                    message,
+                                    ToastTone::Error,
+                                );
+                                is_busy.set(false);
+                                return;
+                            }
+                        };
                         game_animation.set(GameAnimation::ItemLeftToRight);
                         wait_for_game_animation().await;
                         let memo = format!(
@@ -517,6 +604,7 @@ pub fn PlayGame() -> Element {
                             merchant,
                             selected_item.cost_sats,
                             memo,
+                            trade_approval,
                             TransferTraRequest {
                                 tra_id: selected_item.tra_id.clone(),
                                 from_node: DemoNodeId::Alice,
@@ -597,6 +685,201 @@ fn available_node_sats(state: &LabState, node_id: DemoNodeId) -> u64 {
                 .saturating_add(node.channel_balance_sats)
         })
         .unwrap_or(0)
+}
+
+async fn begin_play_game_login_auth(
+    profile: SetupProfile,
+    mut setup_profile: Signal<SetupProfile>,
+    mut lab_state: Signal<Option<LabState>>,
+    mut qr_prompt: Signal<Option<QrAuthorizationModal>>,
+    toast: Signal<Option<Toast>>,
+    toast_sequence: Signal<u64>,
+) {
+    let session = match begin_player_auth(profile.clone(), AuthAction::Login).await {
+        Ok(session) => session,
+        Err(message) => {
+            push_toast(toast, toast_sequence, message, ToastTone::Error);
+            return;
+        }
+    };
+    let session = display_player_auth_session(session).await;
+    let mut state = lab_state
+        .peek()
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|| lightning_service::default_lab_state(profile.clone()));
+    state.player_auth_session = Some(session.clone());
+    state.profile.last_auth_status = Some(session.status);
+    crate::client::services::storage_service::save_lab_state_snapshot(&state);
+    lab_state.set(Some(state));
+
+    let modal = QrAuthorizationModal {
+        modal_id: session.session_id.clone(),
+        title: "Scan with wallet".to_string(),
+        description: "Log in to start playing.".to_string(),
+        qr_payload: session.qr_payload.clone(),
+        qr_kind: QrAuthorizationKind::Login,
+        amount_sats: None,
+        status: if profile.user_auth_mode.is_mock() {
+            QrAuthorizationStatus::MockCompleting
+        } else {
+            QrAuthorizationStatus::Open
+        },
+        can_cancel: true,
+        opened_at: chrono::Utc::now(),
+        auto_complete_after_ms: profile
+            .user_auth_mode
+            .is_mock()
+            .then_some(u64::from(MOCK_LNAUTH_AUTO_COMPLETE_MS)),
+    };
+    qr_prompt.set(Some(modal));
+
+    if !profile.user_auth_mode.is_mock() {
+        return;
+    }
+
+    wait_for_mock_lnauth_auto_complete().await;
+    if qr_prompt.peek().as_ref().is_some_and(|modal| {
+        modal.modal_id == session.session_id && modal.status == QrAuthorizationStatus::Canceled
+    }) {
+        qr_prompt.set(None);
+        let canceled =
+            crate::client::services::lightning_server_functions::cancel_player_auth_session(
+                session,
+            )
+            .await;
+        let mut state = lab_state
+            .peek()
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| lightning_service::default_lab_state(profile.clone()));
+        state.player_auth_session = Some(canceled.clone());
+        state.profile.last_auth_status = Some(canceled.status);
+        crate::client::services::storage_service::save_lab_state_snapshot(&state);
+        lab_state.set(Some(state));
+        push_toast(
+            toast,
+            toast_sequence,
+            "Wallet login was canceled.",
+            ToastTone::Error,
+        );
+        return;
+    }
+
+    if !qr_prompt
+        .peek()
+        .as_ref()
+        .is_some_and(|modal| modal.modal_id == session.session_id)
+    {
+        return;
+    }
+
+    match approve_mock_player_auth_session(session).await {
+        Ok(approved_session) => {
+            qr_prompt.set(None);
+            let mut next_profile = profile.clone();
+            next_profile.player_identity = approved_session.player_identity.clone();
+            next_profile.last_auth_status = Some(approved_session.status);
+            setup_profile.set(next_profile.clone());
+            crate::client::services::storage_service::save_setup_profile(&next_profile);
+
+            let mut state = lab_state
+                .peek()
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| lightning_service::default_lab_state(next_profile.clone()));
+            state.profile = next_profile;
+            state.player_auth_session = Some(approved_session);
+            crate::client::services::storage_service::save_lab_state_snapshot(&state);
+            lab_state.set(Some(state));
+            push_toast(
+                toast,
+                toast_sequence,
+                "Mock LNAuth login approved.",
+                ToastTone::Success,
+            );
+        }
+        Err(message) => {
+            qr_prompt.set(None);
+            push_toast(toast, toast_sequence, message, ToastTone::Error);
+        }
+    }
+}
+
+async fn authorize_trade_with_qr(
+    profile: SetupProfile,
+    amount_sats: u64,
+    summary: String,
+    mut qr_prompt: Signal<Option<QrAuthorizationModal>>,
+) -> Result<Option<TransactionApproval>, String> {
+    let approval = begin_transaction_approval(
+        profile.clone(),
+        ApprovalOperationKind::SendSats,
+        summary.clone(),
+        Some(amount_sats),
+    )
+    .await;
+
+    if approval.status == TransactionApprovalStatus::NotRequired {
+        return Ok(None);
+    }
+
+    let modal = QrAuthorizationModal {
+        modal_id: approval.approval_id.clone(),
+        title: "Scan with wallet".to_string(),
+        description: format!("You are sending {amount_sats} sats."),
+        qr_payload: format!(
+            "lnurl-auth://local-regtest/approval/{}",
+            approval.approval_id
+        ),
+        qr_kind: QrAuthorizationKind::SendSats,
+        amount_sats: Some(amount_sats),
+        status: if profile.user_auth_mode.is_mock() {
+            QrAuthorizationStatus::MockCompleting
+        } else {
+            QrAuthorizationStatus::Open
+        },
+        can_cancel: true,
+        opened_at: chrono::Utc::now(),
+        auto_complete_after_ms: profile
+            .user_auth_mode
+            .is_mock()
+            .then_some(u64::from(MOCK_LNAUTH_AUTO_COMPLETE_MS)),
+    };
+    qr_prompt.set(Some(modal));
+
+    if !profile.user_auth_mode.is_mock() {
+        return Err(
+            "Real LNAuth approval is displayed, but wallet callback completion still needs Alby Go validation."
+                .to_string(),
+        );
+    }
+
+    wait_for_mock_lnauth_auto_complete().await;
+    if qr_prompt.peek().as_ref().is_some_and(|modal| {
+        modal.modal_id == approval.approval_id && modal.status == QrAuthorizationStatus::Canceled
+    }) {
+        qr_prompt.set(None);
+        let approval =
+            crate::client::services::lightning_server_functions::cancel_transaction_approval(
+                approval,
+            )
+            .await;
+        let _ = record_transaction_approval(profile, approval).await;
+        return Err("Wallet approval was canceled. The trade was not sent.".to_string());
+    }
+
+    if !qr_prompt
+        .peek()
+        .as_ref()
+        .is_some_and(|modal| modal.modal_id == approval.approval_id)
+    {
+        return Err("Wallet approval did not complete. The trade was not sent.".to_string());
+    }
+
+    qr_prompt.set(None);
+    let approval = approve_transaction_approval(approval).await;
+    Ok(Some(approval))
 }
 
 fn can_sell_item_to_current_npc(
@@ -1074,6 +1357,19 @@ async fn wait_for_game_animation() {
 #[cfg(not(target_arch = "wasm32"))]
 async fn wait_for_game_animation() {
     futures_timer::Delay::new(std::time::Duration::from_millis(850)).await;
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn wait_for_mock_lnauth_auto_complete() {
+    gloo_timers::future::TimeoutFuture::new(MOCK_LNAUTH_AUTO_COMPLETE_MS).await;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn wait_for_mock_lnauth_auto_complete() {
+    futures_timer::Delay::new(std::time::Duration::from_millis(
+        MOCK_LNAUTH_AUTO_COMPLETE_MS.into(),
+    ))
+    .await;
 }
 
 #[cfg(target_arch = "wasm32")]

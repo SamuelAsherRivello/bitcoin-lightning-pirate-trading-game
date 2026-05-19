@@ -1481,9 +1481,7 @@ async fn prepare_existing_game_treasury_node(
     let target_sats = demo_node_funding_target(DemoNodeId::GameTreasury, required_balance_sats);
     let networks = list_networks(profile).await?;
     if lightning_node_is_started(&networks, network_id, node_name) {
-        if let Ok(balance) =
-            get_lightning_wallet_balance(profile, network_id, node_name).await
-        {
+        if let Ok(balance) = get_lightning_wallet_balance(profile, network_id, node_name).await {
             if balance >= target_sats {
                 report_progress(format!(
                     "{node_name} already has {balance} sats. Extra sats preserved."

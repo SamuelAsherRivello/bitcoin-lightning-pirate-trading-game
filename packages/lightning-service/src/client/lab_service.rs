@@ -2,11 +2,12 @@ use chrono::Utc;
 
 use super::error::LightningError;
 use super::models::{
-    ActionLogEntry, AuthAction, AuthSessionStatus, BlockWaitAction, BlockWaitReason,
-    BlockWaitStatus, ConnectionStatus, DemoNode, DemoNodeId, GameTreasury, InvoiceRequest,
-    InvoiceStatus, LabState, NodeStatus, OperationFaqRow, PaymentAttempt, PaymentStatus,
-    PlayerAuthSession, PlayerIdentity, RouteStatus, SetupMode, SetupProfile, TradeRoute,
-    DEFAULT_ROUTE_CAPACITY_SATS, GAME_TREASURY_NODE_LABEL, MAX_SATS_PER_TRANSACTION,
+    ActionLogEntry, ApprovalOperationKind, AuthAction, AuthSessionStatus, BlockWaitAction,
+    BlockWaitReason, BlockWaitStatus, ConnectionStatus, DemoNode, DemoNodeId, GameTreasury,
+    InvoiceRequest, InvoiceStatus, LabState, NodeStatus, OperationFaqRow, PaymentAttempt,
+    PaymentStatus, PlayerAuthSession, PlayerIdentity, RouteStatus, SetupMode, SetupProfile,
+    TradeRoute, TransactionApproval, TransactionApprovalStatus, DEFAULT_ROUTE_CAPACITY_SATS,
+    GAME_TREASURY_NODE_LABEL, MAX_SATS_PER_TRANSACTION,
 };
 use crate::server::config::validate_polar_connection_profile;
 
@@ -145,6 +146,56 @@ pub fn cancel_player_auth_session(mut session: PlayerAuthSession) -> PlayerAuthS
     session.status = AuthSessionStatus::Canceled;
     session.failure_reason = Some("Canceled by user.".to_string());
     session
+}
+
+pub fn begin_transaction_approval(
+    profile: &SetupProfile,
+    operation_kind: ApprovalOperationKind,
+    operation_summary: String,
+    amount_sats: Option<u64>,
+) -> TransactionApproval {
+    let now = Utc::now();
+    let status = if profile
+        .user_auth_mode
+        .requires_authorization_event_approval()
+    {
+        TransactionApprovalStatus::Required
+    } else {
+        TransactionApprovalStatus::NotRequired
+    };
+
+    TransactionApproval {
+        approval_id: format!("approval-{}", now.timestamp_millis()),
+        operation_kind,
+        operation_summary,
+        player_identity: profile.player_identity.clone(),
+        amount_sats,
+        status,
+        created_at: now,
+        expires_at: Some(now + chrono::Duration::minutes(5)),
+        approved_at: None,
+        failure_reason: None,
+    }
+}
+
+pub fn approve_transaction_approval(mut approval: TransactionApproval) -> TransactionApproval {
+    let now = Utc::now();
+    approval.status = TransactionApprovalStatus::Approved;
+    approval.approved_at = Some(now);
+    approval.failure_reason = None;
+    approval
+}
+
+pub fn cancel_transaction_approval(mut approval: TransactionApproval) -> TransactionApproval {
+    approval.status = TransactionApprovalStatus::Canceled;
+    approval.failure_reason = Some("Canceled by user.".to_string());
+    approval
+}
+
+pub fn record_transaction_approval(mut state: LabState, approval: TransactionApproval) -> LabState {
+    state.recent_transaction_approvals.insert(0, approval);
+    state.recent_transaction_approvals.truncate(8);
+    state
 }
 
 pub fn default_lab_state(profile: SetupProfile) -> LabState {
@@ -833,6 +884,53 @@ mod tests {
             .expect_err("app mode should not require wallet auth");
 
         assert!(matches!(error, LightningError::AuthModeNotEnabled));
+    }
+
+    #[test]
+    fn app_mode_does_not_require_transaction_approval() {
+        let approval = begin_transaction_approval(
+            &connected_profile(),
+            ApprovalOperationKind::SendSats,
+            "You are sending 1,000 sats".to_string(),
+            Some(1_000),
+        );
+
+        assert_eq!(approval.status, TransactionApprovalStatus::NotRequired);
+        assert_eq!(approval.amount_sats, Some(1_000));
+    }
+
+    #[test]
+    fn mock_lnauth_requires_transaction_approval() {
+        let approval = begin_transaction_approval(
+            &mock_auth_profile(),
+            ApprovalOperationKind::SendSats,
+            "You are sending 1,000 sats".to_string(),
+            Some(1_000),
+        );
+
+        assert_eq!(approval.status, TransactionApprovalStatus::Required);
+
+        let approval = approve_transaction_approval(approval);
+        assert_eq!(approval.status, TransactionApprovalStatus::Approved);
+        assert!(approval.approved_at.is_some());
+    }
+
+    #[test]
+    fn canceled_transaction_approval_is_recorded_without_completing() {
+        let approval = begin_transaction_approval(
+            &mock_auth_profile(),
+            ApprovalOperationKind::SendSats,
+            "You are sending 1,000 sats".to_string(),
+            Some(1_000),
+        );
+        let approval = cancel_transaction_approval(approval);
+        let state = record_transaction_approval(default_lab_state(mock_auth_profile()), approval);
+
+        assert_eq!(state.recent_transaction_approvals.len(), 1);
+        assert_eq!(
+            state.recent_transaction_approvals[0].status,
+            TransactionApprovalStatus::Canceled
+        );
     }
 
     #[test]

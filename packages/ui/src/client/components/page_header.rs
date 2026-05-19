@@ -1,11 +1,12 @@
 use dioxus::prelude::*;
 use dioxus_i18n::t;
 
+use crate::client::components::auth::QrAuthorizationModalRegion;
 use crate::client::components::developer_tools::DeveloperTools;
 use crate::client::components::toast::{
     OperationPrompt, OperationPromptRegion, Toast, ToastRegion,
 };
-use crate::client::models::SetupProfile;
+use crate::client::models::{QrAuthorizationModal, SetupProfile};
 use crate::client::Route;
 
 #[component]
@@ -19,6 +20,7 @@ pub fn PageHeader() -> Element {
     let setup_snapshot = setup_profile();
     let setup_is_connected = setup_snapshot.is_connected();
     let toast = use_context::<Signal<Option<Toast>>>();
+    let qr_authorization_prompt = use_context::<Signal<Option<QrAuthorizationModal>>>();
     let operation_prompt = use_context::<Signal<Option<OperationPrompt>>>();
 
     rsx! {
@@ -110,6 +112,7 @@ pub fn PageHeader() -> Element {
                 DeveloperTools {}
             }
             ToastRegion { toast }
+            QrAuthorizationModalRegion { prompt: qr_authorization_prompt }
             OperationPromptRegion { prompt: operation_prompt }
         }
     }

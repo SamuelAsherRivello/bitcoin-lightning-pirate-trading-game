@@ -1,8 +1,9 @@
 use crate::client::models::{
-    AuthAction, BlockWaitReason, ConnectionStatus, DemoNodeId, GameItemDefinition, GameTreasury,
-    LabState, MintTraRequest, NodeStatus, PlayerAuthSession, RouteStatus, SetupProfile,
-    TraOwnershipStatus, TraTransferStatus, TransferTraRequest, TreasuryImpactPreview,
-    APPLE_ITEM_ID, BOOK_ITEM_ID, DEFAULT_BITCOIN_BACKEND_NAME, DEFAULT_ROUTE_CAPACITY_SATS,
+    ApprovalOperationKind, AuthAction, BlockWaitReason, ConnectionStatus, DemoNodeId,
+    GameItemDefinition, GameTreasury, LabState, MintTraRequest, NodeStatus, PlayerAuthSession,
+    RouteStatus, SetupProfile, TraOwnershipStatus, TraTransferStatus, TransactionApproval,
+    TransactionApprovalStatus, TransferTraRequest, TreasuryImpactPreview, APPLE_ITEM_ID,
+    BOOK_ITEM_ID, DEFAULT_BITCOIN_BACKEND_NAME, DEFAULT_ROUTE_CAPACITY_SATS,
 };
 use crate::client::services::{polar_bridge_service, storage_service};
 
@@ -45,6 +46,38 @@ pub async fn complete_player_auth(
 
 pub async fn cancel_player_auth_session(session: PlayerAuthSession) -> PlayerAuthSession {
     lightning_service::cancel_player_auth_session(session)
+}
+
+pub async fn begin_transaction_approval(
+    profile: SetupProfile,
+    operation_kind: ApprovalOperationKind,
+    operation_summary: String,
+    amount_sats: Option<u64>,
+) -> TransactionApproval {
+    lightning_service::begin_transaction_approval(
+        &profile,
+        operation_kind,
+        operation_summary,
+        amount_sats,
+    )
+}
+
+pub async fn approve_transaction_approval(approval: TransactionApproval) -> TransactionApproval {
+    lightning_service::approve_transaction_approval(approval)
+}
+
+pub async fn cancel_transaction_approval(approval: TransactionApproval) -> TransactionApproval {
+    lightning_service::cancel_transaction_approval(approval)
+}
+
+pub async fn record_transaction_approval(
+    profile: SetupProfile,
+    approval: TransactionApproval,
+) -> Result<LabState, String> {
+    let state = get_lab_state(profile).await?;
+    let state = lightning_service::record_transaction_approval(state, approval);
+    storage_service::save_lab_state_snapshot(&state);
+    Ok(state)
 }
 
 pub async fn test_setup(profile: SetupProfile) -> Result<LabState, String> {
@@ -90,8 +123,8 @@ pub async fn verify_polar_bridge(profile: SetupProfile) -> Result<SetupProfile, 
     storage_service::save_setup_profile(&profile);
     if !bridge_unchanged {
         storage_service::clear_lab_state_snapshot();
-    } else if let Some(mut state) = previous_state
-        .filter(|state| setup_snapshot_matches_polar_network(state, &profile))
+    } else if let Some(mut state) =
+        previous_state.filter(|state| setup_snapshot_matches_polar_network(state, &profile))
     {
         state.profile = profile.clone();
         storage_service::save_lab_state_snapshot(&state);
@@ -840,8 +873,21 @@ pub async fn execute_tra_item_trade(
     candidate_payer_node: DemoNodeId,
     amount_sats: u64,
     memo: String,
+    approval: Option<TransactionApproval>,
     transfer_request: TransferTraRequest,
 ) -> Result<LabState, String> {
+    if profile
+        .user_auth_mode
+        .requires_authorization_event_approval()
+        && !approval
+            .as_ref()
+            .is_some_and(|approval| approval.status == TransactionApprovalStatus::Approved)
+    {
+        return Err(
+            "Wallet approval is required before this player sats send can run.".to_string(),
+        );
+    }
+
     let state = get_lab_state(profile).await?;
     let state = lightning_service::create_invoice_and_maybe_autosend(
         state,
@@ -852,8 +898,11 @@ pub async fn execute_tra_item_trade(
         true,
     )
     .map_err(|error| error.to_string())?;
-    let state = lightning_service::TraService::transfer_tra(state, transfer_request)
+    let mut state = lightning_service::TraService::transfer_tra(state, transfer_request)
         .map_err(|error| error.to_string())?;
+    if let Some(approval) = approval {
+        state = lightning_service::record_transaction_approval(state, approval);
+    }
     storage_service::save_lab_state_snapshot(&state);
     Ok(state)
 }

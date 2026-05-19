@@ -99,12 +99,12 @@
 - [X] T045 [US2] Wire auth_client module exports in packages/lightning-service/src/server/mod.rs
 - [X] T046 [US2] Implement begin_player_auth and complete_player_auth service functions in packages/lightning-service/src/client/lab_service.rs
 - [X] T047 [US2] Add Dioxus-safe auth wrappers in packages/ui/src/client/services/lightning_server_functions.rs
-- [ ] T048 [US2] Add QR prompt context signal and provider beside toast and operation prompt state in packages/ui/src/client/mod.rs
-- [ ] T049 [US2] Create reusable QR authorization modal component in packages/ui/src/client/components/auth/qr_authorization_modal.rs
-- [ ] T050 [US2] Render QrAuthorizationModal from PageHeader near ToastRegion and OperationPromptRegion in packages/ui/src/client/components/page_header.rs
-- [ ] T051 [US2] Add QR modal styles for web and desktop in packages/ui/assets/main.css
-- [ ] T052 [US2] Trigger Play Game login QR after connected route-entry lab refresh in packages/ui/src/client/pages/play_game.rs
-- [ ] T053 [US2] Implement Mock LNAuth one-second login auto-complete and cancel handling in packages/ui/src/client/pages/play_game.rs
+- [X] T048 [US2] Add QR prompt context signal and provider beside toast and operation prompt state in packages/ui/src/client/mod.rs
+- [X] T049 [US2] Create reusable QR authorization modal component in packages/ui/src/client/components/auth/qr_authorization_modal.rs
+- [X] T050 [US2] Render QrAuthorizationModal from PageHeader near ToastRegion and OperationPromptRegion in packages/ui/src/client/components/page_header.rs
+- [X] T051 [US2] Add QR modal styles for web and desktop in packages/ui/assets/main.css
+- [X] T052 [US2] Trigger Play Game login QR after connected route-entry lab refresh in packages/ui/src/client/pages/play_game.rs
+- [X] T053 [US2] Implement Mock LNAuth one-second login auto-complete and cancel handling in packages/ui/src/client/pages/play_game.rs
 - [ ] T054 [US2] Add recoverable login failure and retry state handling in packages/ui/src/client/pages/play_game.rs
 - [ ] T055 [US2] Verify login modal behavior in the served web app using Scripts/Common/RunWeb.ps1
 
@@ -120,20 +120,20 @@
 
 ### Tests for User Story 3
 
-- [ ] T056 [P] [US3] Add authorization policy tests for App, Mock LNAuth, and LNAuth modes in packages/lightning-service/src/client/lab_service.rs
+- [X] T056 [P] [US3] Add authorization policy tests for App, Mock LNAuth, and LNAuth modes in packages/lightning-service/src/client/lab_service.rs
 - [ ] T057 [P] [US3] Add tests proving low-risk reads do not require QR approval in packages/lightning-service/src/client/lab_service.rs
 - [ ] T058 [P] [US3] Add tests proving canceled or failed send approval leaves the trade incomplete in packages/lightning-service/src/client/tra_service.rs
 
 ### Implementation for User Story 3
 
-- [ ] T059 [US3] Implement authorize_player_operation and approval result handling in packages/lightning-service/src/client/lab_service.rs
-- [ ] T060 [US3] Bind TransactionApproval to operation summary, amount, and player identity in packages/lightning-service/src/client/models.rs
-- [ ] T061 [US3] Add approval wrapper functions in packages/ui/src/client/services/lightning_server_functions.rs
-- [ ] T062 [US3] Gate execute_tra_item_trade before invoice payment and TRA transfer in packages/ui/src/client/services/lightning_server_functions.rs
-- [ ] T063 [US3] Show send approval QR modal from Buy Item and Sell Item flows in packages/ui/src/client/pages/play_game.rs
-- [ ] T064 [US3] Implement Mock LNAuth one-second send approval auto-complete and cancel handling in packages/ui/src/client/pages/play_game.rs
-- [ ] T065 [US3] Record non-sensitive approval history in LabState and storage snapshots in packages/lightning-service/src/client/models.rs
-- [ ] T066 [US3] Verify App mode Buy/Sell behavior remains unchanged in packages/ui/src/client/pages/play_game.rs
+- [X] T059 [US3] Implement authorize_player_operation and approval result handling in packages/lightning-service/src/client/lab_service.rs
+- [X] T060 [US3] Bind TransactionApproval to operation summary, amount, and player identity in packages/lightning-service/src/client/models.rs
+- [X] T061 [US3] Add approval wrapper functions in packages/ui/src/client/services/lightning_server_functions.rs
+- [X] T062 [US3] Gate execute_tra_item_trade before invoice payment and TRA transfer in packages/ui/src/client/services/lightning_server_functions.rs
+- [X] T063 [US3] Show send approval QR modal from Buy Item and Sell Item flows in packages/ui/src/client/pages/play_game.rs
+- [X] T064 [US3] Implement Mock LNAuth one-second send approval auto-complete and cancel handling in packages/ui/src/client/pages/play_game.rs
+- [X] T065 [US3] Record non-sensitive approval history in LabState and storage snapshots in packages/lightning-service/src/client/models.rs
+- [X] T066 [US3] Verify App mode Buy/Sell behavior remains unchanged in packages/ui/src/client/pages/play_game.rs
 - [ ] T067 [US3] Verify send approval behavior in the served web app using Scripts/Common/RunWeb.ps1
 
 **Checkpoint**: User Story 3 is independently functional and testable.

@@ -31,6 +31,7 @@ fn AppLayout() -> Element {
     let mut setup_profile = use_signal(services::storage_service::load_setup_profile);
     let mut lab_state = use_signal(services::storage_service::load_lab_state_snapshot);
     let toast = use_signal(|| None::<components::toast::Toast>);
+    let qr_authorization_prompt = use_signal(|| None::<models::QrAuthorizationModal>);
     let mut operation_prompt = use_signal(|| None::<components::toast::OperationPrompt>);
     let mut operation_prompt_sequence = use_signal(|| 70_000_u64);
     let mut lab_poll_tick = use_signal(|| 0_u64);
@@ -41,6 +42,7 @@ fn AppLayout() -> Element {
     use_context_provider(|| setup_profile);
     use_context_provider(|| lab_state);
     use_context_provider(|| toast);
+    use_context_provider(|| qr_authorization_prompt);
     use_context_provider(|| operation_prompt);
 
     use_effect(move || {
@@ -254,6 +256,7 @@ pub use pages::setup::SetUp;
 
 pub mod components {
     pub mod app_error;
+    pub mod auth;
     pub mod developer_tools;
     pub mod game;
     pub mod help;

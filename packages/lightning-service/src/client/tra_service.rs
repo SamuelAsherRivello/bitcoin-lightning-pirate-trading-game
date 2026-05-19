@@ -4,8 +4,8 @@ use super::error::LightningError;
 use super::models::{
     ActionLogEntry, ConnectionStatus, DemoNodeId, GameItemDefinition, LabState, MintTraRequest,
     NpcItemTransfer, TraItem, TraOwnershipStatus, TraTransferStatus, TransferTraRequest,
-    TreasuryEntry, TreasuryEntryDirection, TreasuryImpactPreview, TreasuryStatus,
-    APPLE_ITEM_ID, BOOK_ITEM_ID, DEFAULT_ROUTE_CAPACITY_SATS, DEFAULT_SATS_PER_TRANSACTION,
+    TreasuryEntry, TreasuryEntryDirection, TreasuryImpactPreview, TreasuryStatus, APPLE_ITEM_ID,
+    BOOK_ITEM_ID, DEFAULT_ROUTE_CAPACITY_SATS, DEFAULT_SATS_PER_TRANSACTION,
     GAME_TREASURY_NODE_LABEL, MAX_TRA_ITEMS_PER_NODE,
 };
 
@@ -133,7 +133,12 @@ impl TraService {
 
         let requests = Self::initial_setup_items();
         for (index, request) in requests.into_iter().enumerate() {
-            if node_has_item(&state, request.owner_node, request.item_id, &request.unique_name) {
+            if node_has_item(
+                &state,
+                request.owner_node,
+                request.item_id,
+                &request.unique_name,
+            ) {
                 continue;
             }
 
@@ -622,8 +627,8 @@ mod tests {
         let state =
             TraService::prepare_game_treasury(setup_started_state()).expect("prepare treasury");
         let state = TraService::prepare_game_treasury_items(state).expect("prepare treasury items");
-        let state = TraService::prepare_game_treasury_items(state)
-            .expect("prepare treasury items again");
+        let state =
+            TraService::prepare_game_treasury_items(state).expect("prepare treasury items again");
 
         assert_eq!(state.game_treasury.owned_items.len(), 4);
         assert_eq!(
@@ -651,8 +656,8 @@ mod tests {
         state.game_treasury.status = TreasuryStatus::Ready;
         state = TraService::prepare_game_treasury_items(state).expect("prepare treasury items");
 
-        let state = TraService::transfer_npc_starting_items(state)
-            .expect("transfer starting items");
+        let state =
+            TraService::transfer_npc_starting_items(state).expect("transfer starting items");
 
         assert!(state.game_treasury.owned_items.is_empty());
         assert_eq!(state.game_treasury.inventory_value_sats, 0);
