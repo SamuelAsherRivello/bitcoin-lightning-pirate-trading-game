@@ -268,6 +268,18 @@ where
     let network_id = clean_network_id(&resolved_profile);
 
     report_progress("Reading current Polar node list...".to_string());
+    let networks = list_networks(&resolved_profile).await?;
+    if required_polar_topology_is_ready(&networks, &network_id) {
+        report_progress("Required Polar nodes are already created and started.".to_string());
+        log_to_terminal(&format!(
+            "[polar-service] required-node-ready-preflight network={network_id}"
+        ));
+        return Ok(PolarAutomationProfile {
+            bitcoin_backend_name: DEFAULT_BITCOIN_BACKEND_NAME.to_string(),
+            ..resolved_profile
+        });
+    }
+
     delete_unwanted_required_topology_nodes(&resolved_profile, &network_id, &mut report_progress)
         .await?;
 
@@ -354,6 +366,22 @@ fn required_polar_base_node_names() -> [&'static str; 5] {
         polar_node_name(DemoNodeId::Bob),
         polar_node_name(DemoNodeId::Carol),
     ]
+}
+
+fn required_polar_topology_is_ready(value: &Value, network_id: &str) -> bool {
+    required_polar_node_names()
+        .iter()
+        .copied()
+        .all(|node_name| any_node_is_started(value, network_id, node_name))
+        && network_node_summaries(value, network_id)
+            .into_iter()
+            .filter(|node| node.name.is_some())
+            .all(|node| {
+                node.status
+                    .as_deref()
+                    .map(network_status_is_started)
+                    .unwrap_or(false)
+            })
 }
 
 async fn delete_unwanted_required_topology_nodes(
@@ -2280,7 +2308,10 @@ async fn request_lightning_node_start(
     node_name: &str,
     status: &str,
 ) -> Result<(), String> {
-    if status.eq_ignore_ascii_case("starting") {
+    if network_status_is_started(status) || status.eq_ignore_ascii_case("starting") {
+        log_to_terminal(&format!(
+            "[polar-service] node-start-request-skip node={node_name} status={status}"
+        ));
         return Ok(());
     }
 
@@ -4296,6 +4327,60 @@ mod tests {
             required_polar_base_node_names(),
             ["GAME_BITCOIN", "GAME_LND", "Alice", "Bob", "Carol"]
         );
+    }
+
+    #[test]
+    fn required_topology_ready_when_required_and_extra_nodes_are_started() {
+        let networks = json!({
+            "networks": [{
+                "id": 1,
+                "name": DEFAULT_NETWORK_NAME,
+                "nodes": {
+                    "bitcoin": [
+                        { "name": DEFAULT_BITCOIN_BACKEND_NAME, "type": "bitcoin", "status": "Started" }
+                    ],
+                    "lightning": [
+                        { "name": "GAME_LND", "type": "lightning", "status": "Started" },
+                        { "name": "Alice", "type": "lightning", "status": "Started" },
+                        { "name": "Bob", "type": "lightning", "status": "Started" },
+                        { "name": "Carol", "type": "lightning", "status": "Started" },
+                        { "name": "Extra", "type": "lightning", "status": "Started" }
+                    ],
+                    "tap": [
+                        { "name": TAPROOT_ASSETS_NODE_NAME, "type": "tap", "status": "Started" }
+                    ]
+                }
+            }]
+        });
+
+        assert!(required_polar_topology_is_ready(&networks, "1"));
+    }
+
+    #[test]
+    fn required_topology_not_ready_when_any_existing_node_is_not_started() {
+        let networks = json!({
+            "networks": [{
+                "id": 1,
+                "name": DEFAULT_NETWORK_NAME,
+                "nodes": {
+                    "bitcoin": [
+                        { "name": DEFAULT_BITCOIN_BACKEND_NAME, "type": "bitcoin", "status": "Started" }
+                    ],
+                    "lightning": [
+                        { "name": "GAME_LND", "type": "lightning", "status": "Started" },
+                        { "name": "Alice", "type": "lightning", "status": "Started" },
+                        { "name": "Bob", "type": "lightning", "status": "Started" },
+                        { "name": "Carol", "type": "lightning", "status": "Started" },
+                        { "name": "Extra", "type": "lightning", "status": "Error" }
+                    ],
+                    "tap": [
+                        { "name": TAPROOT_ASSETS_NODE_NAME, "type": "tap", "status": "Started" }
+                    ]
+                }
+            }]
+        });
+
+        assert!(!required_polar_topology_is_ready(&networks, "1"));
     }
 
     #[test]
