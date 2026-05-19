@@ -1094,7 +1094,6 @@ pub fn SetUp() -> Element {
                                                             if let Ok(next_state) = lightning_service::TraService::prepare_game_treasury_items(state.clone()) {
                                                                 state = next_state;
                                                             }
-                                                            storage_service::save_lab_state_snapshot(&state);
                                                             lab_state.set(Some(state));
                                                         }
                                                         push_toast(toast, toast_sequence, "Returned to step 6. NPC Item Transfers will be recreated on submit.", ToastTone::Success);
@@ -1793,7 +1792,6 @@ fn reset_to_bridge_url_step(mut profile: SetupProfile) -> SetupProfile {
     profile.polar_automation.network_id.clear();
     profile.polar_automation.bitcoin_backend_name = DEFAULT_BITCOIN_BACKEND_NAME.to_string();
     storage_service::save_setup_profile(&profile);
-    storage_service::clear_lab_state_snapshot();
     profile
 }
 
@@ -1805,7 +1803,6 @@ fn reset_to_server_name_step(mut profile: SetupProfile) -> SetupProfile {
     profile.last_verified_at = None;
     profile.polar_automation.network_id.clear();
     storage_service::save_setup_profile(&profile);
-    storage_service::clear_lab_state_snapshot();
     profile
 }
 
@@ -1820,7 +1817,6 @@ fn reset_to_game_treasury_step(mut profile: SetupProfile) -> SetupProfile {
     }
 
     storage_service::save_setup_profile(&profile);
-    storage_service::clear_lab_state_snapshot();
 
     profile
 }
@@ -1853,11 +1849,6 @@ fn lab_state_after_reset_to_game_treasury_tras_step() -> Option<LabState> {
         state
     });
 
-    match next.as_ref() {
-        Some(state) => storage_service::save_lab_state_snapshot(state),
-        None => storage_service::clear_lab_state_snapshot(),
-    }
-
     next
 }
 
@@ -1870,7 +1861,6 @@ fn reset_to_demo_nodes_step(mut profile: SetupProfile) -> SetupProfile {
     }
 
     storage_service::save_setup_profile(&profile);
-    storage_service::clear_lab_state_snapshot();
 
     profile
 }
@@ -1889,7 +1879,6 @@ fn lab_state_after_reset_to_demo_nodes_step(profile: SetupProfile) -> Option<Lab
     }
     let state = lightning_service::TraService::prepare_game_treasury_items(state).ok()?;
 
-    storage_service::save_lab_state_snapshot(&state);
     Some(state)
 }
 
@@ -2641,11 +2630,31 @@ async fn run_polar_setup_autopilot_inner(
     polar_block_height: &mut Signal<String>,
     autopilot_status: &mut Signal<String>,
 ) -> Result<LabState, String> {
-    let requested_server_name = fresh_autopilot_server_name();
+    let current_profile = setup_profile();
+    let current_step = polar_wizard_step(&current_profile, lab_state().as_ref());
+    let should_start_fresh = current_profile.is_connected()
+        || current_step == PolarWizardStep::BridgeUrl
+        || (current_step == PolarWizardStep::ServerName
+            && current_profile
+                .polar_automation
+                .network_id
+                .trim()
+                .is_empty());
+    let requested_server_name = if should_start_fresh {
+        fresh_autopilot_server_name()
+    } else {
+        current_profile.network_name.clone()
+    };
     polar_server_name.set(requested_server_name.clone());
-    autopilot_status.set(format!(
-        "Using fresh Polar server name {requested_server_name}..."
-    ));
+    if should_start_fresh {
+        autopilot_status.set(format!(
+            "Using fresh Polar server name {requested_server_name}..."
+        ));
+    } else {
+        autopilot_status.set(format!(
+            "Continuing Polar server {requested_server_name}..."
+        ));
+    }
 
     let mut profile = profile_from_inputs(
         amount_text,
@@ -2659,7 +2668,7 @@ async fn run_polar_setup_autopilot_inner(
         setup_profile(),
     )?;
 
-    if profile.is_connected() {
+    if should_start_fresh && profile.is_connected() {
         profile.connection_status = ConnectionStatus::NotConfigured;
         profile.polar_automation.network_id.clear();
         profile.polar_block_height_confirmed = false;

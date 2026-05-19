@@ -61,6 +61,7 @@ pub async fn ensure_polar_server(profile: SetupProfile) -> Result<PolarServerEns
     lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
     let mut profile = profile;
     let result = polar_bridge_service::ensure_server(&profile.polar_automation).await?;
+    let previous_state = storage_service::load_lab_state_snapshot();
 
     profile.polar_automation = result.profile.clone();
     profile.connection_status = lightning_service::ConnectionStatus::SavedOffline;
@@ -69,8 +70,19 @@ pub async fn ensure_polar_server(profile: SetupProfile) -> Result<PolarServerEns
     profile.game_treasury_funded_sats = 0;
     profile.last_verified_at = None;
 
-    storage_service::save_setup_profile(&profile);
-    storage_service::clear_lab_state_snapshot();
+    if let Some(mut state) =
+        previous_state.filter(|state| setup_snapshot_matches_polar_network(state, &profile))
+    {
+        profile.game_treasury_ready = state.profile.game_treasury_ready;
+        profile.game_treasury_funded_sats = state.profile.game_treasury_funded_sats;
+        profile.polar_block_height_confirmed = state.profile.polar_block_height_confirmed;
+        state.profile = profile.clone();
+        storage_service::save_setup_profile(&profile);
+        storage_service::save_lab_state_snapshot(&state);
+    } else {
+        storage_service::save_setup_profile(&profile);
+        storage_service::clear_lab_state_snapshot();
+    }
 
     Ok(result)
 }
@@ -116,6 +128,20 @@ where
             "Complete Game Treasury (Sats) before creating Alice, Bob, and Carol.".to_string(),
         );
     }
+    if let Some(mut state) = matching_setup_snapshot(&profile) {
+        if setup_has_user_nodes(&state) {
+            state.profile = profile;
+            state.profile.connection_status =
+                lightning_service::ConnectionStatus::PartiallyConnected;
+            state.profile.polar_block_height_confirmed = false;
+            state.profile.last_verified_at = None;
+            let mut state = refresh_polar_block_height(state).await?;
+            state = refresh_polar_node_names(state).await?;
+            storage_service::save_setup_profile(&state.profile);
+            storage_service::save_lab_state_snapshot(&state);
+            return Ok(state);
+        }
+    }
     let required_balance_sats = profile
         .sats_per_transaction
         .max(DEFAULT_ROUTE_CAPACITY_SATS);
@@ -146,6 +172,19 @@ where
 pub async fn prepare_game_treasury(profile: SetupProfile) -> Result<LabState, String> {
     lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
     let mut profile = profile;
+    if let Some(mut state) = matching_setup_snapshot(&profile) {
+        if state.profile.game_treasury_ready {
+            profile.game_treasury_ready = true;
+            profile.game_treasury_funded_sats = state.profile.game_treasury_funded_sats;
+            profile.connection_status = lightning_service::ConnectionStatus::PartiallyConnected;
+            profile.last_verified_at = None;
+            state.profile = profile;
+            let state = refresh_polar_block_height(state).await?;
+            storage_service::save_setup_profile(&state.profile);
+            storage_service::save_lab_state_snapshot(&state);
+            return Ok(state);
+        }
+    }
     let required_balance_sats = profile
         .sats_per_transaction
         .max(DEFAULT_ROUTE_CAPACITY_SATS);
@@ -176,6 +215,18 @@ pub async fn prepare_game_treasury_tras(profile: SetupProfile) -> Result<LabStat
         return Err("Complete Game Treasury (Sats) before creating treasury TRAs.".to_string());
     }
     let mut profile = profile;
+    if let Some(mut state) = matching_setup_snapshot(&profile) {
+        if setup_has_treasury_tras(&state) {
+            profile.connection_status = lightning_service::ConnectionStatus::PartiallyConnected;
+            profile.polar_block_height_confirmed = false;
+            profile.last_verified_at = None;
+            state.profile = profile;
+            let state = refresh_polar_block_height(state).await?;
+            storage_service::save_setup_profile(&state.profile);
+            storage_service::save_lab_state_snapshot(&state);
+            return Ok(state);
+        }
+    }
     if should_read_polar(&profile) {
         profile.polar_automation =
             polar_bridge_service::ensure_taproot_assets_node(&profile.polar_automation).await?;
@@ -195,6 +246,20 @@ pub async fn prepare_game_treasury_tras(profile: SetupProfile) -> Result<LabStat
 }
 
 pub async fn transfer_npc_starting_items(mut profile: SetupProfile) -> Result<LabState, String> {
+    if let Some(mut state) = matching_setup_snapshot(&profile) {
+        if setup_has_npc_transfers(&state) {
+            profile.connection_status = lightning_service::ConnectionStatus::PartiallyConnected;
+            profile.polar_block_height_confirmed = false;
+            profile.last_verified_at = None;
+            state.profile = profile;
+            let mut state = refresh_polar_block_height(state).await?;
+            state = refresh_polar_node_names(state).await?;
+            storage_service::save_setup_profile(&state.profile);
+            storage_service::save_lab_state_snapshot(&state);
+            return Ok(state);
+        }
+    }
+
     if should_read_polar(&profile) {
         let report = polar_bridge_service::validate_lab_health(&profile.polar_automation)
             .await
@@ -1001,6 +1066,35 @@ mod tests {
 
         assert!(!setup_snapshot_matches_profile(&state, &profile));
     }
+
+    #[test]
+    fn polar_network_snapshot_match_allows_regressed_step_flags() {
+        let mut state = lightning_service::default_lab_state(connected_profile());
+        state.profile.game_treasury_ready = true;
+        state.profile.game_treasury_funded_sats = 50_000;
+        state.profile.polar_block_height_confirmed = true;
+
+        let mut regressed_profile = state.profile.clone();
+        regressed_profile.connection_status = ConnectionStatus::SavedOffline;
+        regressed_profile.game_treasury_ready = false;
+        regressed_profile.game_treasury_funded_sats = 0;
+        regressed_profile.polar_block_height_confirmed = false;
+
+        assert!(setup_snapshot_matches_polar_network(
+            &state,
+            &regressed_profile
+        ));
+        assert!(!setup_snapshot_matches_profile(&state, &regressed_profile));
+    }
+
+    #[test]
+    fn polar_network_snapshot_match_rejects_new_network_name() {
+        let state = lightning_service::default_lab_state(connected_profile());
+        let mut profile = state.profile.clone();
+        profile.network_name = "fresh-network".to_string();
+
+        assert!(!setup_snapshot_matches_polar_network(&state, &profile));
+    }
 }
 
 async fn refresh_polar_block_height(mut state: LabState) -> Result<LabState, String> {
@@ -1098,6 +1192,20 @@ fn setup_snapshot_matches_profile(state: &LabState, profile: &SetupProfile) -> b
             == profile.polar_automation.bitcoin_backend_name
         && snapshot.game_treasury_ready == profile.game_treasury_ready
         && snapshot.game_treasury_funded_sats == profile.game_treasury_funded_sats
+}
+
+fn matching_setup_snapshot(profile: &SetupProfile) -> Option<LabState> {
+    storage_service::load_lab_state_snapshot()
+        .filter(|state| setup_snapshot_matches_polar_network(state, profile))
+}
+
+fn setup_snapshot_matches_polar_network(state: &LabState, profile: &SetupProfile) -> bool {
+    let snapshot = &state.profile;
+    snapshot.sats_per_transaction == profile.sats_per_transaction
+        && snapshot.setup_mode == profile.setup_mode
+        && snapshot.network_name == profile.network_name
+        && snapshot.polar_automation.bridge_url == profile.polar_automation.bridge_url
+        && snapshot.polar_automation.network_id == profile.polar_automation.network_id
 }
 
 fn setup_ready_for_block_height(state: &LabState) -> bool {

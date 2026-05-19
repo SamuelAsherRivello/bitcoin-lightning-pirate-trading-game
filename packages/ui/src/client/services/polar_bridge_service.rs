@@ -26,7 +26,7 @@ const DELETE_NETWORK_SETTLE_MS: u32 = 5_000;
 const DELETE_NETWORK_ATTEMPTS: u8 = 4;
 const DELETE_NETWORK_STATUS_ATTEMPTS: u8 = 10;
 const DEMO_SERVICE_LOG_LEVEL: DemoLogLevel = DemoLogLevel::On;
-const TAPROOT_ASSETS_NODE_NAME: &str = "My Taproot Node";
+const TAPROOT_ASSETS_NODE_NAME: &str = "GAME_TAP";
 const LEGACY_TAPROOT_ASSETS_NODE_NAME: &str = "tapd";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1018,7 +1018,7 @@ async fn prepare_existing_game_treasury_node(
 ) -> Result<DemoNodeFundingPlan, String> {
     set_lightning_backend(profile, network_id, node_name, backend_name).await?;
 
-    report_progress("Starting GAME_TREASURY in Polar...".to_string());
+    report_progress(format!("Starting {node_name} in Polar..."));
     start_node_if_needed(profile, network_id, node_name, backend_name).await?;
 
     let balance =
@@ -1346,16 +1346,39 @@ async fn deposit_demo_node_funds(
     node_id: DemoNodeId,
     sats: u64,
 ) -> Result<(), String> {
-    execute_tool(
-        profile,
-        "deposit_funds",
-        json!({
-            "networkId": network_id_argument(network_id),
-            "nodeName": polar_node_name(node_id),
-            "sats": sats,
-        }),
-    )
-    .await?;
+    let node_name = polar_node_name(node_id);
+    let starting_balance = get_lightning_wallet_balance(profile, network_id, node_name)
+        .await
+        .unwrap_or(0);
+    let target_balance = starting_balance.saturating_add(sats);
+
+    for attempt in 1..=2 {
+        let result = execute_tool(
+            profile,
+            "deposit_funds",
+            json!({
+                "networkId": network_id_argument(network_id),
+                "nodeName": node_name,
+                "sats": sats,
+            }),
+        )
+        .await;
+
+        match result {
+            Ok(_) => return Ok(()),
+            Err(error) if is_transient_bridge_request_error(&error) && attempt == 1 => {
+                wait_for_demo_node_ready_delay().await;
+                if get_lightning_wallet_balance(profile, network_id, node_name)
+                    .await
+                    .map(|balance| balance >= target_balance)
+                    .unwrap_or(false)
+                {
+                    return Ok(());
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
 
     Ok(())
 }
@@ -1837,7 +1860,10 @@ fn require_game_treasury_node_name(value: &Value, network_id: &str) -> Result<St
 }
 
 fn game_treasury_missing_message() -> String {
-    "GAME_TREASURY is missing. Retry Game Treasury so the app can prepare the treasury node before funding it.".to_string()
+    format!(
+        "{} is missing. Retry Game Treasury so the app can prepare the treasury node before funding it.",
+        polar_node_name(DemoNodeId::GameTreasury)
+    )
 }
 
 async fn clean_network_for_step_two(
@@ -2859,7 +2885,7 @@ fn clean_backend_name(profile: &PolarAutomationProfile) -> String {
 
 fn polar_node_name(node_id: DemoNodeId) -> &'static str {
     match node_id {
-        DemoNodeId::GameTreasury => "GAME_TREASURY",
+        DemoNodeId::GameTreasury => lightning_service::GAME_TREASURY_NODE_LABEL,
         DemoNodeId::Alice => "alice",
         DemoNodeId::Bob => "bob",
         DemoNodeId::Carol => "carol",
@@ -2876,6 +2902,15 @@ fn bridge_url(profile: &PolarAutomationProfile, path: &str) -> String {
 
 fn bridge_request_timeout_message(method: &str, url: &str) -> String {
     format!("Polar bridge {method} {url} timed out after {BRIDGE_REQUEST_TIMEOUT_SECONDS} seconds.")
+}
+
+fn is_transient_bridge_request_error(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("polar bridge request failed")
+        && (message.contains("failed to fetch")
+            || message.contains("connection reset")
+            || message.contains("connection refused")
+            || message.contains("transport"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -3612,6 +3647,19 @@ mod tests {
     }
 
     #[test]
+    fn transient_bridge_request_errors_are_retryable() {
+        assert!(is_transient_bridge_request_error(
+            "Polar bridge request failed: TypeError: Failed to fetch"
+        ));
+        assert!(is_transient_bridge_request_error(
+            "Polar bridge request failed: connection reset by peer"
+        ));
+        assert!(!is_transient_bridge_request_error(
+            "Polar MCP tool deposit_funds failed: permission denied by policy"
+        ));
+    }
+
+    #[test]
     fn delete_network_timeout_message_names_network_and_deadline() {
         assert_eq!(
             delete_network_timeout_message("network-8"),
@@ -4064,7 +4112,7 @@ mod tests {
         let error = require_game_treasury_node_name(&networks, "1")
             .expect_err("alice must not satisfy treasury setup");
 
-        assert!(error.contains("GAME_TREASURY is missing"));
+        assert!(error.contains("GAME_LND is missing"));
         assert!(error.contains("Retry Game Treasury"));
         assert!(!error.contains("Retry Server Name"));
     }
@@ -4081,7 +4129,7 @@ mod tests {
                         "bitcoin": [],
                         "lightning": [
                             {
-                                "name": "GAME_TREASURY",
+                                "name": "GAME_LND",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Started"
@@ -4094,14 +4142,14 @@ mod tests {
 
         assert_eq!(
             require_game_treasury_node_name(&networks, "1"),
-            Ok("GAME_TREASURY".to_string())
+            Ok("GAME_LND".to_string())
         );
     }
 
     #[test]
     fn backend_already_connected_error_is_idempotent() {
         assert!(is_lightning_backend_already_connected_error(
-            "The node 'GAME_TREASURY' is already connected to 'backend1'"
+            "The node 'GAME_LND' is already connected to 'backend1'"
         ));
     }
 
@@ -4122,7 +4170,7 @@ mod tests {
     #[test]
     fn unrelated_backend_error_is_not_idempotent() {
         assert!(!is_lightning_backend_already_connected_error(
-            "The node 'GAME_TREASURY' could not connect to backend1"
+            "The node 'GAME_LND' could not connect to backend1"
         ));
     }
 
@@ -4251,7 +4299,7 @@ mod tests {
                     "name": DEFAULT_NETWORK_NAME,
                     "nodes": {
                         "lightning": [
-                            { "name": "GAME_TREASURY", "type": "lightning" },
+                            { "name": "GAME_LND", "type": "lightning" },
                             { "name": "alice", "type": "lightning" },
                             { "name": "bob", "type": "lightning" }
                         ]
@@ -4265,7 +4313,7 @@ mod tests {
         assert_eq!(
             unwanted,
             vec![
-                "GAME_TREASURY".to_string(),
+                "GAME_LND".to_string(),
                 "alice".to_string(),
                 "bob".to_string()
             ]
@@ -4311,7 +4359,7 @@ mod tests {
                             { "name": "backend1", "type": "bitcoin", "implementation": "bitcoind" }
                         ],
                         "lightning": [
-                            { "name": "GAME_TREASURY", "type": "lightning" },
+                            { "name": "GAME_LND", "type": "lightning" },
                             { "name": "alice", "type": "lightning" }
                         ],
                         "tap": [
@@ -4328,7 +4376,7 @@ mod tests {
             unwanted,
             vec![
                 TAPROOT_ASSETS_NODE_NAME.to_string(),
-                "GAME_TREASURY".to_string(),
+                "GAME_LND".to_string(),
                 "alice".to_string()
             ]
         );
@@ -4415,12 +4463,12 @@ mod tests {
 
     #[test]
     fn add_lightning_node_arguments_request_requested_name() {
-        let args = add_lightning_node_arguments("1", "GAME_TREASURY");
+        let args = add_lightning_node_arguments("1", "GAME_LND");
 
         assert_eq!(args["networkId"], json!(1));
         assert_eq!(args["implementation"], json!("LND"));
-        assert_eq!(args["name"], json!("GAME_TREASURY"));
-        assert_eq!(args["nodeName"], json!("GAME_TREASURY"));
+        assert_eq!(args["name"], json!("GAME_LND"));
+        assert_eq!(args["nodeName"], json!("GAME_LND"));
     }
 
     #[test]
@@ -4435,14 +4483,14 @@ mod tests {
 
     #[test]
     fn remove_node_arguments_send_selected_option_shape() {
-        let args = remove_node_arguments("1", "GAME_TREASURY");
+        let args = remove_node_arguments("1", "GAME_LND");
 
         assert_eq!(args["networkId"], json!(1));
-        assert_eq!(args["nodeName"], json!("GAME_TREASURY"));
+        assert_eq!(args["nodeName"], json!("GAME_LND"));
         assert_eq!(args["network"]["selected"], json!(1));
-        assert_eq!(args["node"]["selected"], json!("GAME_TREASURY"));
+        assert_eq!(args["node"]["selected"], json!("GAME_LND"));
         assert_eq!(args["selected"]["networkId"], json!(1));
-        assert_eq!(args["selected"]["nodeName"], json!("GAME_TREASURY"));
+        assert_eq!(args["selected"]["nodeName"], json!("GAME_LND"));
     }
 
     #[test]
@@ -4583,7 +4631,7 @@ mod tests {
         let arguments = add_taproot_assets_node_arguments(
             "1",
             "tapd",
-            "GAME_TREASURY",
+            "GAME_LND",
             DEFAULT_BITCOIN_BACKEND_NAME,
         );
 
@@ -4591,8 +4639,8 @@ mod tests {
         assert_eq!(arguments["implementation"], json!("tapd"));
         assert_eq!(arguments["nodeName"], json!(TAPROOT_ASSETS_NODE_NAME));
         assert_eq!(arguments["type"], json!("taproot"));
-        assert_eq!(arguments["lightningNodeName"], json!("GAME_TREASURY"));
-        assert_eq!(arguments["lndNodeName"], json!("GAME_TREASURY"));
+        assert_eq!(arguments["lightningNodeName"], json!("GAME_LND"));
+        assert_eq!(arguments["lndNodeName"], json!("GAME_LND"));
         assert_eq!(
             arguments["bitcoinNodeName"],
             json!(DEFAULT_BITCOIN_BACKEND_NAME)
@@ -4653,10 +4701,10 @@ mod tests {
                     "nodes": {
                         "tap": [
                             {
-                                "name": "GAME_TREASURY-tap",
+                                "name": "GAME_LND-tap",
                                 "type": "tap",
                                 "implementation": "tapd",
-                                "lndName": "GAME_TREASURY",
+                                "lndName": "GAME_LND",
                                 "status": "Started"
                             }
                         ]
@@ -4667,7 +4715,7 @@ mod tests {
 
         assert_eq!(
             find_taproot_assets_node_name(&networks, "31"),
-            Some("GAME_TREASURY-tap".to_string())
+            Some("GAME_LND-tap".to_string())
         );
         assert!(taproot_assets_node_exists(&networks, "31"));
     }
