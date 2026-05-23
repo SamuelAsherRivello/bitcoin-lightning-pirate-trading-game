@@ -264,6 +264,7 @@ pub mod components {
     pub mod page;
     pub mod page_footer;
     pub mod page_header;
+    pub mod profile;
     pub mod setup;
     pub mod toast;
 }

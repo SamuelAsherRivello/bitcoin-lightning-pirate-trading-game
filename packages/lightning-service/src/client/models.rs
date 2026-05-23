@@ -330,6 +330,7 @@ pub struct TransactionApproval {
 pub enum QrAuthorizationKind {
     Login,
     SendSats,
+    NostrProfile,
 }
 
 impl Default for QrAuthorizationKind {
@@ -366,6 +367,197 @@ pub struct QrAuthorizationModal {
     pub can_cancel: bool,
     pub opened_at: DateTime<Utc>,
     pub auto_complete_after_ms: Option<u64>,
+}
+
+pub const MAX_NOSTR_USERNAME_CHARS: usize = 32;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum NostrIdentityStatus {
+    Unauthenticated,
+    PendingAuth,
+    Authenticated,
+    AuthFailed,
+    Canceled,
+}
+
+impl Default for NostrIdentityStatus {
+    fn default() -> Self {
+        Self::Unauthenticated
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum NostrProfileSource {
+    Relay,
+    LocalSnapshot,
+    PendingPublish,
+    Mock,
+}
+
+impl Default for NostrProfileSource {
+    fn default() -> Self {
+        Self::Mock
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum NostrProfilePublishStatus {
+    Unknown,
+    NotPublished,
+    Publishing,
+    Published,
+    Failed,
+}
+
+impl Default for NostrProfilePublishStatus {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum NostrProfileEditStatus {
+    Editing,
+    Validating,
+    AwaitingNostrAuth,
+    Publishing,
+    Succeeded,
+    Canceled,
+    Failed,
+}
+
+impl Default for NostrProfileEditStatus {
+    fn default() -> Self {
+        Self::Editing
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum NostrProfileAction {
+    Login,
+    SetProfileName,
+}
+
+impl Default for NostrProfileAction {
+    fn default() -> Self {
+        Self::Login
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum NostrAuthorizationStatus {
+    Pending,
+    Scanned,
+    Approved,
+    Rejected,
+    Expired,
+    Canceled,
+    Failed,
+}
+
+impl Default for NostrAuthorizationStatus {
+    fn default() -> Self {
+        Self::Pending
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct NostrIdentity {
+    pub public_key: String,
+    pub npub: String,
+    pub status: NostrIdentityStatus,
+    pub authenticated_at: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct NostrProfile {
+    pub public_key: String,
+    pub username: Option<String>,
+    pub source: NostrProfileSource,
+    pub publish_status: NostrProfilePublishStatus,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub relay_urls: Vec<String>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct NostrProfileEditRequest {
+    pub draft_username: String,
+    pub status: NostrProfileEditStatus,
+    pub validation_error: Option<String>,
+    pub identity_public_key: Option<String>,
+    pub requested_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct NostrAuthorizationSession {
+    pub session_id: String,
+    pub action: NostrProfileAction,
+    pub qr_payload: String,
+    pub status: NostrAuthorizationStatus,
+    pub public_key: Option<String>,
+    pub expires_at: DateTime<Utc>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum NostrProfileError {
+    EmptyUsername,
+    UsernameTooLong,
+    UnsafeUsername,
+    SecretLikeValue,
+    AuthorizationRequired,
+    AuthorizationExpired,
+    PublishFailed,
+}
+
+impl std::fmt::Display for NostrProfileError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match self {
+            Self::EmptyUsername => "username is required",
+            Self::UsernameTooLong => "username is too long",
+            Self::UnsafeUsername => "username contains unsupported characters",
+            Self::SecretLikeValue => "username looks like secret material",
+            Self::AuthorizationRequired => "Nostr identity authorization is required",
+            Self::AuthorizationExpired => "Nostr identity authorization expired",
+            Self::PublishFailed => "Nostr profile metadata could not be saved",
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl std::error::Error for NostrProfileError {}
+
+pub fn validate_nostr_username(username: &str) -> Result<String, NostrProfileError> {
+    let username = username.trim();
+    if username.is_empty() {
+        return Err(NostrProfileError::EmptyUsername);
+    }
+    if username.chars().count() > MAX_NOSTR_USERNAME_CHARS {
+        return Err(NostrProfileError::UsernameTooLong);
+    }
+    if username.chars().any(char::is_control) {
+        return Err(NostrProfileError::UnsafeUsername);
+    }
+    if looks_secret_like(username) {
+        return Err(NostrProfileError::SecretLikeValue);
+    }
+
+    Ok(username.to_string())
+}
+
+pub fn nostr_profile_button_label(username: Option<&str>) -> String {
+    format!("Set Name ({})", username.unwrap_or_default())
+}
+
+fn looks_secret_like(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    [
+        "nsec", "private", "xprv", "seed", "secret", "password", "bearer", "token", "cookie",
+    ]
+    .iter()
+    .any(|marker| value.contains(marker))
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1144,6 +1336,8 @@ impl Default for GameTreasury {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct LabState {
+    #[serde(default)]
+    pub local_revision: u64,
     pub profile: SetupProfile,
     pub nodes: Vec<DemoNode>,
     pub trade_routes: Vec<TradeRoute>,
@@ -1173,9 +1367,10 @@ pub struct LabState {
 #[cfg(test)]
 mod tests {
     use super::{
+        nostr_profile_button_label, validate_nostr_username, NostrProfileError,
         PolarAutomationProfile, PolarConnectorHealth, PolarConnectorHealthStatus,
         PolarOperationRecord, PolarOperationStatus, SetupProfile, UserAuthMode,
-        DEFAULT_NETWORK_NAME, DEFAULT_SATS_PER_TRANSACTION,
+        DEFAULT_NETWORK_NAME, DEFAULT_SATS_PER_TRANSACTION, MAX_NOSTR_USERNAME_CHARS,
     };
 
     #[test]
@@ -1269,6 +1464,43 @@ mod tests {
         assert_eq!(record.status, PolarOperationStatus::Pending);
         assert_eq!(record.attempts, 0);
         assert!(record.message.is_none());
+    }
+
+    #[test]
+    fn nostr_username_validation_trims_valid_names() {
+        assert_eq!(
+            validate_nostr_username("  alice  "),
+            Ok("alice".to_string())
+        );
+    }
+
+    #[test]
+    fn nostr_username_validation_rejects_empty_too_long_control_and_secret_like_values() {
+        assert_eq!(
+            validate_nostr_username("   "),
+            Err(NostrProfileError::EmptyUsername)
+        );
+        assert_eq!(
+            validate_nostr_username(&"a".repeat(MAX_NOSTR_USERNAME_CHARS + 1)),
+            Err(NostrProfileError::UsernameTooLong)
+        );
+        assert_eq!(
+            validate_nostr_username("ali\u{0007}ce"),
+            Err(NostrProfileError::UnsafeUsername)
+        );
+        assert_eq!(
+            validate_nostr_username("nsec1private"),
+            Err(NostrProfileError::SecretLikeValue)
+        );
+    }
+
+    #[test]
+    fn nostr_profile_button_label_keeps_empty_username_shape() {
+        assert_eq!(nostr_profile_button_label(None), "Set Name ()");
+        assert_eq!(
+            nostr_profile_button_label(Some("alice")),
+            "Set Name (alice)"
+        );
     }
 
     #[test]

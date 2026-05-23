@@ -644,6 +644,7 @@ pub async fn get_lab_state(profile: SetupProfile) -> Result<LabState, String> {
     } else {
         lightning_service::default_lab_state(profile)
     };
+    let loaded_revision = state.local_revision;
 
     let mut refreshed_state = refresh_polar_block_height(state).await?;
     refreshed_state = refresh_polar_node_names(refreshed_state).await?;
@@ -651,7 +652,7 @@ pub async fn get_lab_state(profile: SetupProfile) -> Result<LabState, String> {
         refreshed_state = lightning_service::TraService::verify_tra_setup(refreshed_state)
             .map_err(|error| error.to_string())?;
     }
-    storage_service::save_lab_state_snapshot(&refreshed_state);
+    let refreshed_state = save_refreshed_lab_state_snapshot(loaded_revision, refreshed_state);
     Ok(refreshed_state)
 }
 
@@ -757,7 +758,7 @@ pub async fn open_trade_route(
     let state =
         lightning_service::open_trade_route(state, DemoNodeId::Alice, to_node, route_capacity_sats)
             .map_err(|error| error.to_string())?;
-    storage_service::save_lab_state_snapshot(&state);
+    let state = save_mutated_lab_state_snapshot(state);
     Ok(state)
 }
 
@@ -768,7 +769,7 @@ pub async fn close_trade_route(
     let state = get_lab_state(profile).await?;
     let state = lightning_service::close_trade_route(state, DemoNodeId::Alice, to_node)
         .map_err(|error| error.to_string())?;
-    storage_service::save_lab_state_snapshot(&state);
+    let state = save_mutated_lab_state_snapshot(state);
     Ok(state)
 }
 
@@ -807,7 +808,7 @@ pub async fn wait_for_next_block(
             action.resulting_height = Some(state.block_height);
         }
     }
-    storage_service::save_lab_state_snapshot(&state);
+    let state = save_mutated_lab_state_snapshot(state);
     Ok(state)
 }
 
@@ -927,7 +928,7 @@ pub async fn execute_tra_item_trade(
     if let Some(approval) = approval {
         state = lightning_service::record_transaction_approval(state, approval);
     }
-    storage_service::save_lab_state_snapshot(&state);
+    let state = save_mutated_lab_state_snapshot(state);
     Ok(state)
 }
 
@@ -969,13 +970,18 @@ pub async fn preview_tra_setup(profile: SetupProfile) -> Result<LabState, String
     } else {
         lightning_service::default_lab_state(profile)
     };
+    let loaded_revision = state.local_revision;
 
     let mut refreshed_state = refresh_polar_block_height(state).await?;
     if refreshed_state.profile.is_connected() && !refreshed_state.tra_items.is_empty() {
         refreshed_state = lightning_service::TraService::verify_tra_setup(refreshed_state)
             .map_err(|error| error.to_string())?;
     }
-    Ok(refreshed_state)
+    Ok(resolve_refreshed_lab_state(
+        loaded_revision,
+        refreshed_state,
+        storage_service::load_lab_state_snapshot().as_ref(),
+    ))
 }
 
 pub async fn reset_tra_inventory(profile: SetupProfile) -> Result<LabState, String> {
@@ -1275,6 +1281,67 @@ mod tests {
 
         assert!(!setup_snapshot_matches_polar_network(&state, &profile));
     }
+
+    #[test]
+    fn stale_refresh_result_does_not_replace_newer_open_route_snapshot() {
+        let mut stale_refreshed = lightning_service::default_lab_state(connected_profile());
+        stale_refreshed.local_revision = 1;
+
+        let mut current = stale_refreshed.clone();
+        current = lightning_service::open_trade_route(
+            current,
+            DemoNodeId::Alice,
+            DemoNodeId::Bob,
+            DEFAULT_ROUTE_CAPACITY_SATS,
+        )
+        .expect("open route");
+        current.local_revision = 2;
+
+        let resolved = resolve_refreshed_lab_state(1, stale_refreshed, Some(&current));
+        let route = resolved
+            .trade_routes
+            .iter()
+            .find(|route| route.to_node == DemoNodeId::Bob)
+            .expect("route to Bob");
+
+        assert_eq!(resolved.local_revision, 2);
+        assert_eq!(route.status, RouteStatus::UnderConstruction);
+    }
+}
+
+fn resolve_refreshed_lab_state(
+    loaded_revision: u64,
+    refreshed_state: LabState,
+    current_state: Option<&LabState>,
+) -> LabState {
+    if let Some(current_state) = current_state {
+        if current_state.local_revision > loaded_revision
+            && setup_snapshot_matches_polar_network(current_state, &refreshed_state.profile)
+        {
+            return current_state.clone();
+        }
+    }
+
+    refreshed_state
+}
+
+fn save_refreshed_lab_state_snapshot(loaded_revision: u64, refreshed_state: LabState) -> LabState {
+    let resolved = resolve_refreshed_lab_state(
+        loaded_revision,
+        refreshed_state,
+        storage_service::load_lab_state_snapshot().as_ref(),
+    );
+    storage_service::save_lab_state_snapshot(&resolved);
+    resolved
+}
+
+fn save_mutated_lab_state_snapshot(mut state: LabState) -> LabState {
+    let current_revision = storage_service::load_lab_state_snapshot()
+        .map(|current| current.local_revision)
+        .unwrap_or(0);
+    state.local_revision = current_revision.max(state.local_revision).saturating_add(1);
+    storage_service::save_lab_state_snapshot(&state);
+    state
 }
 
 async fn refresh_polar_block_height(mut state: LabState) -> Result<LabState, String> {

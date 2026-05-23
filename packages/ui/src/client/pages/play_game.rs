@@ -6,16 +6,18 @@ use crate::client::components::game::{
     GameAnimation, GameChannelAnimation, GameChannelVisual, GameInventorySlot, GameSide,
     GameTreasuryPanel, GameView, GameViewConfig, HistoryItems, LabStatusWidget, RouteSummary,
 };
+use crate::client::components::profile::ProfileNamePrompt;
 use crate::client::components::toast::{
     wait_for_prompt_message_minimum, OperationPrompt, Toast, ToastTone,
 };
 use crate::client::models::{
     ApprovalOperationKind, AuthAction, AuthSessionStatus, ConnectionStatus, DemoNode, DemoNodeId,
-    GameItemDefinition, LabState, PlayerAuthSession, QrAuthorizationKind, QrAuthorizationModal,
-    QrAuthorizationStatus, RouteStatus, SetupMode, SetupProfile, TraItem, TraOwnershipStatus,
-    TraTransferStatus, TradeRoute, TransactionApproval, TransactionApprovalStatus,
-    TransferTraRequest, DEFAULT_ROUTE_CAPACITY_SATS, DEFAULT_SATS_PER_TRANSACTION,
-    MAX_TRA_ITEMS_PER_NODE,
+    GameItemDefinition, LabState, NostrAuthorizationSession, NostrAuthorizationStatus,
+    NostrProfile, NostrProfileAction, NostrProfileError, PlayerAuthSession, QrAuthorizationKind,
+    QrAuthorizationModal, QrAuthorizationStatus, RouteStatus, SetupMode, SetupProfile, TraItem,
+    TraOwnershipStatus, TraTransferStatus, TradeRoute, TransactionApproval,
+    TransactionApprovalStatus, TransferTraRequest, DEFAULT_ROUTE_CAPACITY_SATS,
+    DEFAULT_SATS_PER_TRANSACTION, MAX_TRA_ITEMS_PER_NODE,
 };
 use crate::client::services::lightning_server_functions::{
     approve_mock_player_auth_session, approve_transaction_approval, begin_player_auth,
@@ -26,6 +28,11 @@ use crate::client::services::lightning_server_functions::{
     preview_tra_setup, record_transaction_approval, recover_if_polar_lab_unhealthy,
     reset_tra_inventory, verify_polar_bridge, verify_tra_setup, wait_for_next_block,
     PolarLabRecovery,
+};
+use crate::client::services::nostr_profile_service::{
+    cancel_nostr_profile_edit, get_nostr_profile_summary, start_nostr_profile_authorization,
+    submit_nostr_profile_name, CancelNostrProfileEditRequest, GetNostrProfileSummaryRequest,
+    StartNostrProfileAuthorizationRequest, SubmitNostrProfileNameRequest,
 };
 use crate::client::Route;
 
@@ -40,7 +47,8 @@ const GAME_NPC_ALT: Asset = asset!("/assets/images/game/npc-alt.svg");
 const GAME_PURSE: Asset = asset!("/assets/images/game/purse.svg");
 const GAME_CHANNEL: Asset = asset!("/assets/images/game/channel.svg");
 const GAME_CHANNEL_DOTTED: Asset = asset!("/assets/images/game/channel-dotted.svg");
-const MOCK_LNAUTH_AUTO_COMPLETE_MS: u32 = 1_000;
+const MOCK_LNAUTH_AUTO_COMPLETE_MS: u32 = 3_000;
+const MOCK_LNAUTH_PROMPT_POLL_MS: u32 = 50;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum PlayGameRefreshStatus {
@@ -126,7 +134,35 @@ pub fn PlayGame() -> Element {
     let mut channel_animation = use_signal(GameChannelAnimation::default);
     let mut location_index = use_signal(|| 0_usize);
     let mut play_game_refresh_status = use_signal(PlayGameRefreshStatus::default);
+    let mut nostr_profile = use_signal(|| None::<NostrProfile>);
+    let mut nostr_profile_loaded = use_signal(|| false);
+    let mut nostr_profile_status = use_signal(|| None::<String>);
+    let mut show_profile_prompt = use_signal(|| false);
+    let mut profile_username_draft = use_signal(String::new);
+    let mut profile_validation_error = use_signal(|| None::<String>);
+    let profile_submit_pending = use_signal(|| false);
     let navigator = navigator();
+
+    use_effect(move || {
+        if nostr_profile_loaded() {
+            return;
+        }
+        nostr_profile_loaded.set(true);
+        spawn(async move {
+            match get_nostr_profile_summary(GetNostrProfileSummaryRequest {
+                preferred_relays: Vec::new(),
+                allow_local_snapshot: true,
+            })
+            .await
+            {
+                Ok(response) => {
+                    nostr_profile.set(response.profile);
+                    nostr_profile_status.set(response.status_message);
+                }
+                Err(message) => nostr_profile_status.set(Some(message)),
+            }
+        });
+    });
 
     let refresh_route = active_route.clone();
     use_effect(move || {
@@ -308,6 +344,10 @@ pub fn PlayGame() -> Element {
     let selected_player_item_for_sell = selected_player_item.clone();
     let refresh_status = play_game_refresh_status();
     let is_route_refreshing = refresh_status == PlayGameRefreshStatus::Refreshing;
+    let profile_username = nostr_profile()
+        .and_then(|profile| profile.username)
+        .unwrap_or_default();
+    let profile_button_label = format!("{} ({profile_username})", t!("profile-set-name"));
 
     rsx! {
         main { class: "page-content lab-page play-page",
@@ -648,6 +688,70 @@ pub fn PlayGame() -> Element {
                 },
             }
 
+            section { class: "lab-panel",
+                div { class: "section-heading",
+                    div {
+                        span { class: "eyebrow", {t!("profile-group-label")} }
+                        h2 { {t!("profile-group-label")} }
+                    }
+                    if let Some(status) = nostr_profile_status() {
+                        span { class: "status-pill", "{status}" }
+                    }
+                }
+                div { class: "game-view__action-controls",
+                    button {
+                        class: "secondary-action",
+                        r#type: "button",
+                        disabled: profile_submit_pending(),
+                        onclick: move |_| {
+                            profile_username_draft.set(profile_username.clone());
+                            profile_validation_error.set(None);
+                            show_profile_prompt.set(true);
+                        },
+                        "{profile_button_label}"
+                    }
+                }
+            }
+
+            if show_profile_prompt() {
+                ProfileNamePrompt {
+                    username: profile_username_draft(),
+                    validation_error: profile_validation_error(),
+                    is_submitting: profile_submit_pending(),
+                    on_username_input: move |value| {
+                        profile_username_draft.set(value);
+                        profile_validation_error.set(None);
+                    },
+                    on_submit: move |_| {
+                        spawn(async move {
+                            submit_profile_name_from_prompt(
+                                profile_username_draft(),
+                                profile_submit_pending,
+                                profile_validation_error,
+                                show_profile_prompt,
+                                nostr_profile,
+                                nostr_profile_status,
+                                qr_authorization_prompt,
+                                toast,
+                                toast_sequence,
+                            )
+                            .await;
+                        });
+                    },
+                    on_cancel: move |_| {
+                        spawn(async move {
+                            let _ = cancel_nostr_profile_edit(CancelNostrProfileEditRequest {
+                                session_id: None,
+                            })
+                            .await;
+                            show_profile_prompt.set(false);
+                            profile_validation_error.set(None);
+                            push_toast(toast, toast_sequence, "Profile edit canceled.", ToastTone::Info);
+                        });
+                    },
+                }
+            }
+
             GameTreasuryPanel { treasury: state.game_treasury.clone() }
 
             if let Some(route) = focused_route_for_panel {
@@ -754,7 +858,7 @@ async fn begin_play_game_login_auth(
         return;
     }
 
-    wait_for_mock_lnauth_auto_complete().await;
+    wait_for_mock_lnauth_auto_complete(qr_prompt, &session.session_id).await;
     if qr_prompt.peek().as_ref().is_some_and(|modal| {
         modal.modal_id == session.session_id && modal.status == QrAuthorizationStatus::Canceled
     }) {
@@ -999,7 +1103,7 @@ async fn authorize_trade_with_qr(
         return Ok(Some(approval));
     }
 
-    wait_for_mock_lnauth_auto_complete().await;
+    wait_for_mock_lnauth_auto_complete(qr_prompt, &approval.approval_id).await;
     if qr_prompt.peek().as_ref().is_some_and(|modal| {
         modal.modal_id == approval.approval_id && modal.status == QrAuthorizationStatus::Canceled
     }) {
@@ -1494,6 +1598,137 @@ async fn begin_operation_prompt(
     operation_id
 }
 
+async fn submit_profile_name_from_prompt(
+    username: String,
+    mut profile_submit_pending: Signal<bool>,
+    mut profile_validation_error: Signal<Option<String>>,
+    mut show_profile_prompt: Signal<bool>,
+    mut nostr_profile: Signal<Option<NostrProfile>>,
+    mut nostr_profile_status: Signal<Option<String>>,
+    mut qr_authorization_prompt: Signal<Option<QrAuthorizationModal>>,
+    toast: Signal<Option<Toast>>,
+    toast_sequence: Signal<u64>,
+) {
+    if profile_submit_pending() {
+        return;
+    }
+
+    profile_submit_pending.set(true);
+    profile_validation_error.set(None);
+
+    let authorization =
+        match start_nostr_profile_authorization(StartNostrProfileAuthorizationRequest {
+            action: NostrProfileAction::SetProfileName,
+            draft_username: Some(username.clone()),
+        })
+        .await
+        {
+            Ok(response) => response.session,
+            Err(message) => {
+                profile_validation_error.set(Some(message));
+                profile_submit_pending.set(false);
+                return;
+            }
+        };
+
+    qr_authorization_prompt.set(Some(QrAuthorizationModal {
+        modal_id: authorization.session_id.clone(),
+        title: "Authorize Nostr profile".to_string(),
+        description:
+            "Scan this QR code with a Nostr identity signer to approve the profile name change."
+                .to_string(),
+        qr_payload: authorization.qr_payload.clone(),
+        qr_kind: QrAuthorizationKind::NostrProfile,
+        amount_sats: None,
+        status: QrAuthorizationStatus::MockCompleting,
+        can_cancel: true,
+        opened_at: chrono::Utc::now(),
+        auto_complete_after_ms: Some(MOCK_LNAUTH_AUTO_COMPLETE_MS.into()),
+    }));
+
+    let authorization =
+        wait_for_mock_nostr_authorization(qr_authorization_prompt, authorization).await;
+    if authorization.status == NostrAuthorizationStatus::Canceled {
+        let _ = cancel_nostr_profile_edit(CancelNostrProfileEditRequest {
+            session_id: Some(authorization.session_id),
+        })
+        .await;
+        profile_submit_pending.set(false);
+        show_profile_prompt.set(false);
+        push_toast(
+            toast,
+            toast_sequence,
+            "Nostr profile authorization canceled.",
+            ToastTone::Info,
+        );
+        return;
+    }
+
+    match submit_nostr_profile_name(SubmitNostrProfileNameRequest {
+        session: authorization,
+        username,
+        preferred_relays: Vec::new(),
+    })
+    .await
+    {
+        Ok(response) => {
+            nostr_profile.set(Some(response.profile));
+            nostr_profile_status.set(Some("Nostr profile saved.".to_string()));
+            show_profile_prompt.set(false);
+            push_toast(
+                toast,
+                toast_sequence,
+                "Nostr profile saved.",
+                ToastTone::Success,
+            );
+        }
+        Err(error) => {
+            profile_validation_error.set(Some(profile_error_message(error)));
+        }
+    }
+
+    qr_authorization_prompt.set(None);
+    profile_submit_pending.set(false);
+}
+
+async fn wait_for_mock_nostr_authorization(
+    qr_prompt: Signal<Option<QrAuthorizationModal>>,
+    mut session: NostrAuthorizationSession,
+) -> NostrAuthorizationSession {
+    wait_for_mock_lnauth_auto_complete(qr_prompt, &session.session_id).await;
+    match qr_prompt.peek().as_ref() {
+        Some(modal)
+            if modal.modal_id == session.session_id
+                && modal.status == QrAuthorizationStatus::Canceled =>
+        {
+            session.status = NostrAuthorizationStatus::Canceled;
+        }
+        Some(modal)
+            if modal.modal_id == session.session_id
+                && modal.status == QrAuthorizationStatus::Approved =>
+        {
+            session.status = NostrAuthorizationStatus::Approved;
+        }
+        _ => {
+            session.status = NostrAuthorizationStatus::Approved;
+        }
+    }
+    session.public_key = Some(session.public_key.unwrap_or_else(|| {
+        "0000000000000000000000000000000000000000000000000000000000000ace".to_string()
+    }));
+    session
+}
+
+fn profile_error_message(error: NostrProfileError) -> String {
+    match error {
+        NostrProfileError::EmptyUsername => "Enter a username.".to_string(),
+        NostrProfileError::UsernameTooLong => {
+            "Username must be 32 characters or fewer.".to_string()
+        }
+        other => other.to_string(),
+    }
+}
+
 async fn update_operation_prompt(
     mut prompt: Signal<Option<OperationPrompt>>,
     operation_id: u64,
@@ -1546,16 +1781,49 @@ async fn wait_for_game_animation() {
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn wait_for_mock_lnauth_auto_complete() {
-    gloo_timers::future::TimeoutFuture::new(MOCK_LNAUTH_AUTO_COMPLETE_MS).await;
+async fn wait_for_mock_lnauth_auto_complete(
+    qr_prompt: Signal<Option<QrAuthorizationModal>>,
+    modal_id: &str,
+) {
+    let mut elapsed_ms = 0;
+    while elapsed_ms < MOCK_LNAUTH_AUTO_COMPLETE_MS {
+        if mock_lnauth_prompt_finished(qr_prompt, modal_id) {
+            return;
+        }
+        gloo_timers::future::TimeoutFuture::new(MOCK_LNAUTH_PROMPT_POLL_MS).await;
+        elapsed_ms += MOCK_LNAUTH_PROMPT_POLL_MS;
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn wait_for_mock_lnauth_auto_complete() {
-    futures_timer::Delay::new(std::time::Duration::from_millis(
-        MOCK_LNAUTH_AUTO_COMPLETE_MS.into(),
-    ))
-    .await;
+async fn wait_for_mock_lnauth_auto_complete(
+    qr_prompt: Signal<Option<QrAuthorizationModal>>,
+    modal_id: &str,
+) {
+    let mut elapsed_ms = 0;
+    while elapsed_ms < MOCK_LNAUTH_AUTO_COMPLETE_MS {
+        if mock_lnauth_prompt_finished(qr_prompt, modal_id) {
+            return;
+        }
+        futures_timer::Delay::new(std::time::Duration::from_millis(
+            MOCK_LNAUTH_PROMPT_POLL_MS.into(),
+        ))
+        .await;
+        elapsed_ms += MOCK_LNAUTH_PROMPT_POLL_MS;
+    }
+}
+
+fn mock_lnauth_prompt_finished(
+    qr_prompt: Signal<Option<QrAuthorizationModal>>,
+    modal_id: &str,
+) -> bool {
+    qr_prompt.peek().as_ref().is_none_or(|modal| {
+        modal.modal_id != modal_id
+            || matches!(
+                modal.status,
+                QrAuthorizationStatus::Approved | QrAuthorizationStatus::Canceled
+            )
+    })
 }
 
 #[cfg(target_arch = "wasm32")]

@@ -65,6 +65,16 @@ const TRANSLATION_KEYS: &[&str] = &[
     "page-03-body-02",
     "page-03-body-03",
     "footer-rights",
+    "profile-group-label",
+    "profile-set-name",
+    "profile-username-label",
+    "profile-submit",
+    "profile-cancel",
+    "profile-nostr-qr-title",
+    "profile-nostr-qr-description",
+    "profile-stale-offline",
+    "profile-validation-empty",
+    "profile-validation-too-long",
 ];
 
 #[test]

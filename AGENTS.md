@@ -12,7 +12,7 @@ This repo is not a place for speculative rewrites. Inspect the relevant files fi
 
 - `AGENTS.md`: this file.
 - `.codex/rules/dioxus-0.7-workflow.md`: Dioxus implementation workflow.
-- `specs/008-qr-lightning-auth/plan.md`: current Spec Kit implementation plan and feature constraints.
+- `specs/010-nostr-profile/plan.md`: current Spec Kit implementation plan and feature constraints.
 - The files directly involved in the request.
 
 ## Project Map
@@ -189,7 +189,7 @@ Ask a concise clarifying question, propose a short plan, or document the blocker
 
 - Never run destructive Git operations.
 - User permission does not override this rule.
-- Git use is limited to inspection, additive work, and branch creation/switching.
+- Git use is limited to inspection, additive work, commits, branch creation/switching, and non-destructive merges.
 - Do not delete repositories.
 - Do not delete existing commits.
 - Do not rewrite Git history.
@@ -206,7 +206,7 @@ Ask a concise clarifying question, propose a short plan, or document the blocker
 - Do not run `git branch -D` or delete local or remote branches.
 - Do not delete tags.
 - Do not overwrite tags.
-- Allowed Git operations are `git status`, `git diff`, `git log`, `git show`, `git fetch`, `git branch` for creating/listing branches, `git checkout` for creating/switching branches, `git add`, `git commit`, and normal non-force `git push`.
+- Allowed Git operations are `git status`, `git diff`, `git log`, `git show`, `git fetch`, `git branch` for creating/listing branches, `git checkout` for creating/switching branches, `git add`, `git commit`, `git merge`, and normal non-force `git push`.
 - If a task appears to require destructive Git, stop and explain that the operation is not permitted.
 
 ## Secret And Credential Safety
@@ -245,5 +245,5 @@ Ask a concise clarifying question, propose a short plan, or document the blocker
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/008-qr-lightning-auth/plan.md`
+`specs/010-nostr-profile/plan.md`
 <!-- SPECKIT END -->

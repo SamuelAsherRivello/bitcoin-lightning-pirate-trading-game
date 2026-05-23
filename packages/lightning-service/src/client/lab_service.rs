@@ -202,6 +202,7 @@ pub fn default_lab_state(profile: SetupProfile) -> LabState {
     let connected = profile.is_connected();
 
     LabState {
+        local_revision: 0,
         profile,
         nodes: default_nodes(connected),
         trade_routes: default_routes(),

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::client::models::{LabState, SetupProfile};
+use crate::client::models::{LabState, NostrProfile, SetupProfile};
 use crate::client::services::localization_service::AppLanguage;
 
 #[cfg(target_arch = "wasm32")]
@@ -86,6 +86,19 @@ pub fn clear_lab_state_snapshot() {
     platform::clear_lab_state_snapshot();
 }
 
+pub fn load_nostr_profile_snapshot() -> Option<NostrProfile> {
+    platform::load_nostr_profile_snapshot()
+}
+
+pub fn save_nostr_profile_snapshot(profile: &NostrProfile) {
+    debug_assert_nostr_profile_snapshot_is_non_sensitive(profile);
+    platform::save_nostr_profile_snapshot(profile);
+}
+
+pub fn clear_nostr_profile_snapshot() {
+    platform::clear_nostr_profile_snapshot();
+}
+
 fn debug_assert_tra_snapshot_is_non_sensitive(state: &LabState) {
     debug_assert_setup_profile_is_non_sensitive(&state.profile);
     debug_assert_auth_snapshot_is_non_sensitive(state);
@@ -167,10 +180,30 @@ fn debug_assert_player_identity_is_non_sensitive(identity: &crate::client::model
     );
 }
 
+fn debug_assert_nostr_profile_snapshot_is_non_sensitive(profile: &NostrProfile) {
+    debug_assert!(
+        !looks_sensitive(&profile.public_key)
+            && profile
+                .username
+                .as_ref()
+                .is_none_or(|username| !looks_sensitive(username))
+            && profile
+                .last_error
+                .as_ref()
+                .is_none_or(|error| !looks_sensitive(error))
+            && profile
+                .relay_urls
+                .iter()
+                .all(|relay_url| !looks_sensitive(relay_url)),
+        "Nostr profile snapshots may store only non-sensitive public key, username, relay, status, and timestamp fields"
+    );
+}
+
 fn looks_sensitive(value: &str) -> bool {
     let value = value.to_ascii_lowercase();
     [
-        "macaroon", "seed", "private", "xprv", "proof", "password", "secret",
+        "macaroon", "seed", "private", "xprv", "proof", "password", "secret", "nsec", "bearer",
+        "token", "cookie",
     ]
     .iter()
     .any(|marker| value.contains(marker))
@@ -181,8 +214,8 @@ mod tests {
     use chrono::Utc;
 
     use crate::client::models::{
-        ApprovalOperationKind, DemoNodeId, SetupProfile, TransactionApproval,
-        TransactionApprovalStatus,
+        ApprovalOperationKind, DemoNodeId, NostrProfile, NostrProfilePublishStatus,
+        NostrProfileSource, SetupProfile, TransactionApproval, TransactionApprovalStatus,
     };
 
     use super::*;
@@ -239,6 +272,37 @@ mod tests {
 
         debug_assert_auth_snapshot_is_non_sensitive(&state);
     }
+
+    #[test]
+    fn nostr_profile_snapshot_allows_public_summary() {
+        let profile = NostrProfile {
+            public_key: "abcdef123456".to_string(),
+            username: Some("alice".to_string()),
+            source: NostrProfileSource::Mock,
+            publish_status: NostrProfilePublishStatus::Published,
+            updated_at: Some(Utc::now()),
+            relay_urls: vec!["wss://relay.example".to_string()],
+            last_error: None,
+        };
+
+        debug_assert_nostr_profile_snapshot_is_non_sensitive(&profile);
+    }
+
+    #[test]
+    #[should_panic(expected = "Nostr profile snapshots may store only non-sensitive")]
+    fn nostr_profile_snapshot_rejects_secret_like_values() {
+        let profile = NostrProfile {
+            public_key: "nsec1private".to_string(),
+            username: Some("alice".to_string()),
+            source: NostrProfileSource::Mock,
+            publish_status: NostrProfilePublishStatus::Published,
+            updated_at: Some(Utc::now()),
+            relay_urls: Vec::new(),
+            last_error: None,
+        };
+
+        debug_assert_nostr_profile_snapshot_is_non_sensitive(&profile);
+    }
 }
 
 pub fn load_setup_polar_tab() -> Option<String> {
@@ -262,7 +326,7 @@ pub fn save_template_data_snapshot(result: &TemplateDataLoadResult) {
 #[cfg(target_arch = "wasm32")]
 mod platform {
     use crate::client::models::{
-        LabState, SetupProfile, TemplateDataLoadResult, TemplateDataSource,
+        LabState, NostrProfile, SetupProfile, TemplateDataLoadResult, TemplateDataSource,
     };
 
     use super::{AppLanguage, Theme, TEMPLATE_DATA_SNAPSHOT_KEY};
@@ -272,6 +336,7 @@ mod platform {
     const SETUP_PROFILE_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:setup-profile";
     const SETUP_POLAR_TAB_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:setup-polar-tab";
     const LAB_STATE_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:lab-state";
+    const NOSTR_PROFILE_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:nostr-profile";
 
     pub fn load_theme() -> Option<Theme> {
         let value = local_storage()?
@@ -365,6 +430,33 @@ mod platform {
         let _ = storage.remove_item(LAB_STATE_STORAGE_KEY);
     }
 
+    pub fn load_nostr_profile_snapshot() -> Option<NostrProfile> {
+        let value = local_storage()?
+            .get_item(NOSTR_PROFILE_STORAGE_KEY)
+            .ok()
+            .flatten()?;
+        serde_json::from_str(&value).ok()
+    }
+
+    pub fn save_nostr_profile_snapshot(profile: &NostrProfile) {
+        let Some(storage) = local_storage() else {
+            return;
+        };
+        let Ok(value) = serde_json::to_string(profile) else {
+            return;
+        };
+
+        let _ = storage.set_item(NOSTR_PROFILE_STORAGE_KEY, &value);
+    }
+
+    pub fn clear_nostr_profile_snapshot() {
+        let Some(storage) = local_storage() else {
+            return;
+        };
+
+        let _ = storage.remove_item(NOSTR_PROFILE_STORAGE_KEY);
+    }
+
     pub fn load_setup_polar_tab() -> Option<String> {
         local_storage()?
             .get_item(SETUP_POLAR_TAB_STORAGE_KEY)
@@ -413,7 +505,7 @@ mod platform {
     use std::fs;
     use std::path::PathBuf;
 
-    use crate::client::models::{LabState, SetupProfile};
+    use crate::client::models::{LabState, NostrProfile, SetupProfile};
 
     use super::{AppLanguage, Theme};
 
@@ -477,6 +569,19 @@ mod platform {
         let _ = fs::remove_file(lab_state_path());
     }
 
+    pub fn load_nostr_profile_snapshot() -> Option<NostrProfile> {
+        let value = fs::read_to_string(nostr_profile_path()).ok()?;
+        serde_json::from_str(&value).ok()
+    }
+
+    pub fn save_nostr_profile_snapshot(profile: &NostrProfile) {
+        write_json(&nostr_profile_path(), profile);
+    }
+
+    pub fn clear_nostr_profile_snapshot() {
+        let _ = fs::remove_file(nostr_profile_path());
+    }
+
     pub fn load_setup_polar_tab() -> Option<String> {
         fs::read_to_string(setup_polar_tab_path()).ok()
     }
@@ -524,6 +629,13 @@ mod platform {
             .unwrap_or_else(|_| PathBuf::from("."))
             .join("data")
             .join("lightning-lab-state.json")
+    }
+
+    fn nostr_profile_path() -> PathBuf {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("data")
+            .join("nostr-profile.json")
     }
 
     fn write_json<T: serde::Serialize>(path: &PathBuf, value: &T) {
