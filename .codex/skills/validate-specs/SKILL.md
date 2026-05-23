@@ -102,4 +102,4 @@ Keep the report concrete and evidence-backed:
 
 ## Remediation Rules
 
-After the user chooses a direction, use the narrowest patch that restores alignment. For Dioxus behavior changes, also follow `.codex/skills/dioxus-bitcoin-lightning-game/SKILL.md`, `.codex/rules/dioxus-0.7-workflow.md`, and update `Documentation/DioxusFeatureMatrix.md` when feature usage, routes, cache behavior, platform support, or future work changes.
+After the user chooses a direction, use the narrowest patch that restores alignment. For Dioxus behavior changes, also follow `.codex/rules/dioxus-0.7-workflow.md`, and update `Documentation/DioxusFeatureMatrix.md` when feature usage, routes, cache behavior, platform support, or future work changes.

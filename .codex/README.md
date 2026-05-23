@@ -52,6 +52,4 @@ The web script stops an older `dx serve` process on the requested port before st
 
 ## Skill Work
 
-Use `.codex/skills/dioxus-bitcoin-lightning-game/SKILL.md` as the starting point for a project-specific custom skill.
-
 Use `.codex/skills/validate-specs/SKILL.md` to compare Spec Kit specs against the current codebase truth before choosing whether to update code, specs, or both.

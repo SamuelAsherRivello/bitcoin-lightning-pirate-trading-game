@@ -129,7 +129,7 @@ pub fn DebugNetwork() -> Element {
                         }
                     }
                     div { class: "tra-table__row node-table__row", role: "row",
-                        span { role: "cell", "Taproot Assets" }
+                        span { role: "cell", "GAME_TAPROOT" }
                         span { role: "cell", "Taproot" }
                         span { role: "cell", "TRA inventory" }
                         span { role: "cell", "{taproot_node_status(state.tra_items.len())}" }
@@ -141,7 +141,7 @@ pub fn DebugNetwork() -> Element {
 
             section { class: "lab-panel",
                 div { class: "section-heading",
-                    span { class: "eyebrow", "Taproots assets v0.7.0-alpha" }
+                    span { class: "eyebrow", "GAME_TAPROOT assets v0.7.0-alpha" }
                     h2 { "TRA instances" }
                 }
                 if state.tra_items.is_empty() {

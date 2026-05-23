@@ -128,10 +128,10 @@ The setup service should expose or wrap operations that match the visual Polar o
 
 Rules:
 
-- `create_required_nodes` owns topology readiness only. It finds or creates the Bitcoin backend, Game Treasury LND node, Taproot Assets node, one player LND node, and two NPC LND nodes, then verifies all required node statuses before value setup begins.
-- `create_required_nodes` requests creation before readiness checks, retries readiness checks, and restarts the Polar network at most once for startup instability before returning success or a recoverable failure.
+- `create_required_nodes` owns topology readiness only. It finds or creates the Bitcoin backend, Game Treasury LND node, `GAME_TAPROOT` Taproot Assets node, one player LND node, and two NPC LND nodes, then verifies all required node statuses before value setup begins.
+- `create_required_nodes` requests creation before readiness checks, restarts the Polar network after node topology changes, retries readiness checks, and restarts the Polar network at most once more for startup instability before returning success or a recoverable failure.
 - `prepare_game_treasury_sats` funds or tops up Game Treasury after required nodes exist.
-- `prepare_game_treasury_tras` creates or verifies treasury-owned TRA inventory after the Taproot Assets node exists.
+- `prepare_game_treasury_tras` creates or verifies treasury-owned TRA inventory after `GAME_TAPROOT` exists.
 - `rebalance_user_node_sats` transfers sats to or from Game Treasury until the user-node sats targets are met; exact Game Treasury balance is not a completion criterion.
 - `rebalance_user_node_tras` transfers TRAs to or from Game Treasury until the user-node TRA targets are met; exact Game Treasury inventory is not a completion criterion.
 

@@ -29,11 +29,4 @@ Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Stop-ProcessById -ProcessId $_.ProcessId -Reason "existing Dioxus server"
     }
 
-if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-    throw "npm is required for Tailwind CSS. Run Scripts\Common\InstallDependencies.ps1 first."
-}
-
-Write-Host "Building Tailwind CSS..."
-npm run tailwind:build
-
 dx serve --package desktop --desktop

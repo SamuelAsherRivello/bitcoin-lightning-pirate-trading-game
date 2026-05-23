@@ -2,6 +2,9 @@ html {
     height: 100%;
     overflow: hidden;
     background: #070d16;
+    line-height: 1.5;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
 }
 
 body {
@@ -27,11 +30,33 @@ body:has(.app-shell--dark) {
     box-sizing: border-box;
 }
 
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+a {
+    color: inherit;
+}
+
 button,
 input,
 select,
 textarea {
     font: inherit;
+}
+
+img,
+svg,
+video,
+canvas {
+    display: block;
+    max-width: 100%;
+}
+
+table {
+    border-collapse: collapse;
+    border-color: inherit;
 }
 
 .app-shell {

@@ -3907,7 +3907,7 @@ async fn prepare_treasury_tras_step(
         operation_prompt,
         prompt_sequence,
         "Game Treasury (TRAs)",
-        "Creating the Polar Taproot node and treasury-owned TRA inventory items...",
+        "Creating GAME_TAPROOT and treasury-owned TRA inventory items...",
         false,
     )
     .await;

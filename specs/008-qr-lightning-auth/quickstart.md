@@ -44,8 +44,8 @@ Verify in the served app:
 - Set Up shows an info icon next to `LNAuth` that promotes ZEUS as the primary Android/iOS test wallet.
 - Set Up keeps `User Auth` separate from the Polar workflow, then uses this Polar order: `Bridge URLs`, `Server Name`, `Create Nodes`, `Game Treasury (Sats)`, `Game Treasury (TRAs)`, `User Nodes (Sats)`, `User Nodes (TRAs)`, `Block Height`, `Unlock Routes`.
 - Step 1 always tests the Polar Bridge URL; when `LNAuth` is selected, Step 1 also shows and tests the LNAuth Bridge URL before allowing setup to continue.
-- `Create Nodes` finds or creates the Bitcoin backend, Game Treasury, Taproot Assets node, two NPC nodes, and one player node before later funding or inventory steps run.
-- `Create Nodes` requests creation first, then checks all required node statuses; after several readiness retries, it restarts the Polar network once and checks again.
+- `Create Nodes` finds or creates the Bitcoin backend, Game Treasury, `GAME_TAPROOT`, two NPC nodes, and one player node before later funding or inventory steps run.
+- `Create Nodes` requests creation first, restarts Polar after node topology changes, then checks all required node statuses; after several readiness retries, it restarts the Polar network once and checks again.
 - `User Nodes (Sats)` balances sats to or from Game Treasury until the user nodes have the right balances, while allowing Game Treasury to keep extra sats.
 - `User Nodes (TRAs)` balances TRA ownership to or from Game Treasury until the user nodes have the right TRA inventory, while allowing Game Treasury to keep extra TRAs.
 - User Auth is separate from the existing `Polar Connection (Networked)` / `Mock Connection (Offline)` connection tabs.

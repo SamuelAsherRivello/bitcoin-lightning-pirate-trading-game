@@ -1,0 +1,55 @@
+skill	summary	call_count
+browser:browser	Automate Codex in-app browser for local targets	000
+bug-fix-with-testing	Fix specific bugs with a test-first workflow	000
+chrome:Chrome	Automate user Chrome sessions and authenticated pages	000
+codex-security:attack-path-analysis	Trace security findings from source to sink	000
+codex-security:finding-discovery	Discover candidate security findings in code changes	000
+codex-security:fix-finding	Fix and verify validated security findings	000
+codex-security:security-scan	Run full security scans of repositories or diffs	000
+codex-security:threat-model	Model repository threats during security scan workflows	000
+codex-security:validation	Validate whether candidate security findings are real	000
+codex-yolo	Plan cautious parallel Codex YOLO agent runs	000
+debug-draw	Add temporary visual debug shapes to apps	000
+debug-draw-align	Align debug shapes with production visuals	000
+documents:documents	Create, edit, render, and verify DOCX files	000
+engineering-management	Turn goals into plans, issues, and coordination	000
+explain-screen-entity-hierarchy	Explain high-level Bevy screen entity hierarchy	000
+explain-state-machine	Explain game state, scene, and mode flows	000
+frontend-ui-generation	Generate and refine polished local-first frontend UI	000
+git-start-worktree	Start isolated Git worktree for implementation tasks	000
+github:gh-address-comments	Address actionable GitHub PR review feedback	000
+github:gh-fix-ci	Debug and fix failing GitHub Actions checks	000
+github:github	Triage GitHub repositories, pull requests, and issues	000
+github:yeet	Commit, push, and open draft GitHub PRs	000
+gpt-image-2	Generate PNG images with OpenAI image API	000
+hatch-pet	Create and validate animated Codex pet sprites	000
+imagegen	Generate or edit raster images and mockups	000
+list-skill-repetoir	List available skills with repo usage counts	004
+mem-search	Search persistent memory for previous session context	000
+openai-docs	Use official OpenAI docs for product guidance	000
+parallel-code-review	Coordinate focused parallel review passes over changes	000
+plan-before-coding	Plan implementation scope before editing code	000
+playwright	Automate real browsers from terminal Playwright scripts	000
+plugin-creator	Create and scaffold Codex plugin directories	000
+presentations:Presentations	Build PowerPoint decks with presentation JSX artifacts	000
+project-memory	Maintain durable local project memory notes	000
+qa-workflows	Execute practical QA workflows for local software	000
+release-management	Prepare, audit, package, and verify releases	000
+remotion:remotion-best-practices	Apply best practices for Remotion videos	000
+scrape	Fetch online data or assets for demos	000
+security-review	Perform local-first security review of software	000
+skill-creator	Create or update Codex skills and resources	002
+skill-installer	Install curated or GitHub-hosted Codex skills	000
+skill-orchestration	Coordinate multiple skills across complex workflows	000
+speckit-analyze	Analyze Spec Kit artifacts for consistency	000
+speckit-checklist	Generate custom checklists for feature specs	000
+speckit-clarify	Ask targeted clarifications and update feature specs	000
+speckit-constitution	Create or update project constitution documents	000
+speckit-implement	Execute implementation tasks from Spec Kit tasks	000
+speckit-plan	Generate Spec Kit implementation planning artifacts	000
+speckit-specify	Create feature specifications from natural language	000
+speckit-tasks	Generate dependency-ordered tasks for feature plans	000
+speckit-taskstoissues	Convert Spec Kit tasks into GitHub issues	000
+spreadsheets:Spreadsheets	Create, analyze, visualize, and export spreadsheets	000
+test-first-workflow	Drive implementation with tests before changes	000
+validate-specs	Validate specs against current codebase truth	000

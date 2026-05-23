@@ -34,7 +34,7 @@ The static web build is exported and hosted automatically with each push to the 
 
 | Command | Required? | Description |
 | ------- | --------- | --- |
-| `.\Scripts\Common\InstallDependencies.ps1` | ✅ | Installs repository dependencies and builds Tailwind CSS output. |
+| `.\Scripts\Common\InstallDependencies.ps1` | ✅ | Installs repository dependencies and validates the Rust workspace. |
 | `.\Scripts\Common\RunPolarMcp.ps1` | ✅ for Polar | Starts the local Polar MCP helper with `npx -y @lightningpolar/mcp`. Run this while using the networked Polar setup path. |
 | `.\Scripts\Common\RunWeb.ps1` | ✅ | Stops this repo's Dioxus web/static server and generated app server, then starts a fresh web app at `http://localhost:8080` for Polar bridge compatibility and opens it in the default browser. Use `-NoOpen` to skip browser launch. |
 | `.\Scripts\Common\StopWeb.ps1` | ❌ | Stops the Dioxus web server and generated game server for the requested port. |
@@ -61,8 +61,8 @@ The script runs `npx -y @lightningpolar/mcp` and verifies Polar's local bridge a
 | Path | Description |
 | ---- | ----------- |
 | [`packages/ui`](./packages/ui) | Shared Dioxus UI crate split into routed pages, components, models, client services, assets, and tests. |
-| [`packages/web`](./packages/web) | Web entrypoint, favicon, generated Tailwind CSS, and web CSS. |
-| [`packages/desktop`](./packages/desktop) | Desktop entrypoint, generated Tailwind CSS, and desktop CSS. |
+| [`packages/web`](./packages/web) | Web entrypoint, favicon, and maintained web CSS. |
+| [`packages/desktop`](./packages/desktop) | Desktop entrypoint and maintained desktop CSS. |
 
 The shared UI crate owns the app shell, routes, toast region, developer tools, localization, theme persistence, and the generic template data example.
 
@@ -102,7 +102,7 @@ This repo includes optional but recommended [Codex](./.codex/README.md) context 
 | [`.aiignore`](./.aiignore) | Common AI-agent ignore file for build output, runtime data, test artifacts, logs, and dependency caches. |
 | [`.agents/skills/`](./.agents/skills) | Spec Kit skills for Codex, invoked as `$speckit-constitution`, `$speckit-specify`, `$speckit-plan`, `$speckit-tasks`, and related commands. |
 | [`.codex/rules/`](./.codex/rules/frontend-design.md) | Frontend design and Dioxus workflow guidance for this template. |
-| [`.codex/skills/`](./.codex/skills/dioxus-bitcoin-lightning-game/SKILL.md) | Project-specific skill guidance for Dioxus, cache, and verification work. |
+| [`.codex/skills/`](./.codex/skills) | Optional repo-local Codex skills and skill support files. |
 | [`.specify/`](./.specify) | Spec Kit project configuration, constitution, PowerShell workflow scripts, and templates. |
 | [`specs/`](./specs) | Feature specifications, starting with the template baseline spec. |
 

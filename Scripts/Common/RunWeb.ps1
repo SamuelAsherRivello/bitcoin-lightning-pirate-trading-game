@@ -165,13 +165,6 @@ if ($browserHost -eq "localhost") {
 }
 Write-Host ""
 
-if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-    throw "npm is required for Tailwind CSS. Run Scripts\Common\InstallDependencies.ps1 first."
-}
-
-Write-Host "Building Tailwind CSS..."
-npm run tailwind:build
-
 $env:LNAUTH_BRIDGE_ADDRESS = $bindAddress
 $env:LNAUTH_BRIDGE_PORT = "$AuthBridgePort"
 Write-Host "Starting LNAuth bridge at http://$bindAddress`:$AuthBridgePort."

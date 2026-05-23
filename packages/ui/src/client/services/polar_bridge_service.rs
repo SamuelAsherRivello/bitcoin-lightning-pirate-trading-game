@@ -27,12 +27,16 @@ const DELETE_NETWORK_ATTEMPTS: u8 = 4;
 const DELETE_NETWORK_STATUS_ATTEMPTS: u8 = 10;
 const DELETE_ALL_NETWORK_PASSES: u8 = 3;
 const TAPROOT_ASSETS_NODE_NAME: &str = "GAME_TAPROOT";
-const LEGACY_TAPROOT_ASSETS_NODE_NAME: &str = "tapd";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TreasuryShellPolicy {
     AllowCreate,
     ReclaimOnly,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PolarNodeKind {
+    TaprootAssets,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -156,7 +160,7 @@ enum DemoNodeFundingPlan {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DemoNodePreparation {
-    created_node: bool,
+    changed_topology: bool,
 }
 
 pub async fn test_bridge(profile: &PolarAutomationProfile) -> Result<(), String> {
@@ -302,13 +306,17 @@ where
         });
     }
 
-    delete_unwanted_required_topology_nodes(&resolved_profile, &network_id, &mut report_progress)
-        .await?;
+    let mut changed_topology = delete_unwanted_required_topology_nodes(
+        &resolved_profile,
+        &network_id,
+        &mut report_progress,
+    )
+    .await?;
 
     report_progress(format!("Ensuring {DEFAULT_BITCOIN_BACKEND_NAME} exists..."));
-    ensure_bitcoin_backend_node(&resolved_profile, &network_id).await?;
+    changed_topology |= ensure_bitcoin_backend_node(&resolved_profile, &network_id).await?;
 
-    ensure_game_treasury_node_shell(
+    changed_topology |= ensure_game_treasury_node_shell(
         &resolved_profile,
         &network_id,
         TreasuryShellPolicy::AllowCreate,
@@ -320,7 +328,7 @@ where
             "Ensuring {} exists in Polar...",
             polar_node_name(node_id)
         ));
-        create_or_prepare_demo_node(
+        let preparation = create_or_prepare_demo_node(
             &resolved_profile,
             &network_id,
             DEFAULT_BITCOIN_BACKEND_NAME,
@@ -328,22 +336,40 @@ where
             &mut report_progress,
         )
         .await?;
+        changed_topology |= preparation.changed_topology;
     }
 
-    for node_name in required_polar_base_node_names() {
-        report_progress(format!("Requesting start for {node_name} in Polar..."));
+    if changed_topology {
+        report_progress(
+            "Restarting Polar network after node topology changes before start checks..."
+                .to_string(),
+        );
+        log_to_terminal(&format!(
+            "[polar-service] topology-change-restart network={network_id}"
+        ));
+        restart_network_for_node_start_recovery(&resolved_profile, &network_id).await?;
+    }
+
+    let required_base_node_names = required_polar_base_node_name_strings();
+    for node_name in &required_base_node_names {
+        report_progress(format!(
+            "Checking Polar start state for base node {node_name}..."
+        ));
         let networks = list_networks(&resolved_profile).await?;
         let status = any_node_status(&networks, &network_id, node_name)
             .unwrap_or_else(|| "not started".to_string());
+        report_progress(format!(
+            "Submitting Polar start request for base node {node_name} (current status: {status})..."
+        ));
         request_lightning_node_start(&resolved_profile, &network_id, node_name, &status).await?;
     }
 
-    wait_for_named_polar_nodes_started(
-        &resolved_profile,
-        &network_id,
-        &required_polar_base_node_names(),
-    )
-    .await?;
+    report_progress(format!(
+        "Waiting for Polar to report base nodes started: {}...",
+        required_base_node_names.join(", ")
+    ));
+    wait_for_named_polar_nodes_started(&resolved_profile, &network_id, &required_base_node_names)
+        .await?;
 
     report_progress(format!("Ensuring {TAPROOT_ASSETS_NODE_NAME} exists..."));
     ensure_taproot_assets_node(&PolarAutomationProfile {
@@ -352,15 +378,27 @@ where
     })
     .await?;
 
-    for node_name in required_polar_node_names() {
-        report_progress(format!("Requesting start for {node_name} in Polar..."));
+    let required_node_names =
+        current_required_polar_node_names(&list_networks(&resolved_profile).await?, &network_id);
+    for node_name in &required_node_names {
+        report_progress(format!(
+            "Checking Polar start state for required node {node_name}..."
+        ));
         let networks = list_networks(&resolved_profile).await?;
         let status = any_node_status(&networks, &network_id, node_name)
             .unwrap_or_else(|| "not started".to_string());
+        report_progress(format!(
+            "Submitting Polar start request for required node {node_name} (current status: {status})..."
+        ));
         request_lightning_node_start(&resolved_profile, &network_id, node_name, &status).await?;
     }
 
-    wait_for_required_polar_nodes_started(&resolved_profile, &network_id).await?;
+    report_progress(format!(
+        "Waiting for Polar to report all required nodes started: {}...",
+        required_node_names.join(", ")
+    ));
+    wait_for_named_polar_nodes_started(&resolved_profile, &network_id, &required_node_names)
+        .await?;
     report_progress("Required Polar nodes are created and started.".to_string());
 
     Ok(PolarAutomationProfile {
@@ -390,15 +428,31 @@ fn required_polar_base_node_names() -> [&'static str; 5] {
     ]
 }
 
+fn required_polar_base_node_name_strings() -> Vec<String> {
+    required_polar_base_node_names()
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
+fn current_required_polar_node_names(value: &Value, network_id: &str) -> Vec<String> {
+    let mut names = required_polar_base_node_name_strings();
+    names.push(
+        find_any_taproot_assets_node_name(value, network_id)
+            .unwrap_or_else(|| TAPROOT_ASSETS_NODE_NAME.to_string()),
+    );
+    names
+}
+
 #[cfg(test)]
 fn required_polar_topology_is_ready(value: &Value, network_id: &str) -> bool {
     classify_required_polar_topology(value, network_id).is_ready()
 }
 
 fn classify_required_polar_topology(value: &Value, network_id: &str) -> PolarSetupReadiness {
-    if !required_polar_node_names()
+    let required_names = current_required_polar_node_names(value, network_id);
+    if !required_names
         .iter()
-        .copied()
         .all(|node_name| any_node_is_started(value, network_id, node_name))
     {
         return PolarSetupReadiness::NeedsWork;
@@ -417,7 +471,7 @@ fn classify_required_polar_topology(value: &Value, network_id: &str) -> PolarSet
     let extras = nodes
         .into_iter()
         .filter_map(|node| node.name.map(|name| (name, node.status)))
-        .filter(|(name, _)| !required_polar_node_names().contains(&name.as_str()))
+        .filter(|(name, _)| !required_names.contains(name))
         .filter_map(|(name, status)| {
             let status = status.unwrap_or_else(|| "unknown".to_string());
             if network_status_is_started(&status) {
@@ -448,14 +502,15 @@ async fn delete_unwanted_required_topology_nodes(
     profile: &PolarAutomationProfile,
     network_id: &str,
     report_progress: &mut impl FnMut(String),
-) -> Result<(), String> {
+) -> Result<bool, String> {
+    let mut changed_topology = false;
     loop {
         let networks = list_networks(profile).await?;
         let Some(node) = first_unexpected_required_topology_node(&networks, network_id) else {
-            return Ok(());
+            return Ok(changed_topology);
         };
         let Some(node_name) = node.name else {
-            return Ok(());
+            return Ok(changed_topology);
         };
 
         if node.is_bitcoin
@@ -471,11 +526,13 @@ async fn delete_unwanted_required_topology_nodes(
                 DEFAULT_BITCOIN_BACKEND_NAME,
             )
             .await?;
+            changed_topology = true;
             continue;
         }
 
         report_progress(format!("Deleting unexpected Polar node {node_name}..."));
         remove_demo_node_by_name(profile, network_id, &node_name).await?;
+        changed_topology = true;
     }
 }
 
@@ -486,6 +543,7 @@ fn first_unexpected_required_topology_node(
     let required = required_polar_node_names();
     network_node_summaries(value, network_id)
         .into_iter()
+        .filter(|node| !node.is_taproot)
         .find(|node| {
             node.name
                 .as_deref()
@@ -502,22 +560,22 @@ fn first_unexpected_required_topology_node_name(value: &Value, network_id: &str)
 async fn ensure_bitcoin_backend_node(
     profile: &PolarAutomationProfile,
     network_id: &str,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let networks = list_networks(profile).await?;
     if bitcoin_node_exists(&networks, network_id, DEFAULT_BITCOIN_BACKEND_NAME) {
-        return Ok(());
+        return Ok(false);
     }
 
     for (tool, arguments) in add_bitcoin_node_attempts(network_id) {
         match execute_tool(profile, tool, arguments).await {
-            Ok(_) => return Ok(()),
+            Ok(_) => return Ok(true),
             Err(_) => {}
         }
     }
 
     let networks = list_networks(profile).await?;
     if bitcoin_node_exists(&networks, network_id, DEFAULT_BITCOIN_BACKEND_NAME) {
-        Ok(())
+        Ok(true)
     } else {
         Err(format!(
             "Polar bridge could not create Bitcoin backend {DEFAULT_BITCOIN_BACKEND_NAME}."
@@ -649,26 +707,20 @@ pub async fn ensure_taproot_assets_node(
         return Err(game_treasury_missing_message());
     }
 
-    if find_taproot_assets_node_name(&networks, &network_id).is_some() {
-        return Ok(resolved_profile);
-    }
-
     let attempts = add_taproot_assets_node_attempts(&network_id, treasury_node_name, &backend_name);
-    let mut errors = Vec::new();
-    for (tool, arguments) in attempts {
-        match execute_tool(&resolved_profile, tool, arguments).await {
-            Ok(_) => {
-                wait_for_taproot_assets_node(&resolved_profile, &network_id).await?;
-                return Ok(resolved_profile);
-            }
-            Err(error) => errors.push(format!("{tool} failed: {error}")),
-        }
-    }
-
-    Err(format!(
-        "Polar bridge could not create Taproot Assets node {TAPROOT_ASSETS_NODE_NAME}. {}",
-        errors.join("; ")
-    ))
+    let node_name = find_or_create_node(
+        &resolved_profile,
+        &network_id,
+        PolarNodeKind::TaprootAssets,
+        TAPROOT_ASSETS_NODE_NAME,
+        attempts,
+    )
+    .await?;
+    wait_for_taproot_assets_node(&resolved_profile, &network_id).await?;
+    log_to_terminal(&format!(
+        "[polar-service] taproot-node-selected node={node_name} preferred={TAPROOT_ASSETS_NODE_NAME} network={network_id}"
+    ));
+    Ok(resolved_profile)
 }
 
 pub async fn close_demo_channels(
@@ -1407,6 +1459,7 @@ async fn create_or_prepare_demo_node(
     let before_add = list_networks(profile).await?;
 
     if let Some(existing_name) = find_lightning_node_name(&before_add, network_id, desired_name) {
+        let mut changed_topology = false;
         if existing_name != desired_name {
             report_progress(format!(
                 "Renaming {} to {}...",
@@ -1414,13 +1467,12 @@ async fn create_or_prepare_demo_node(
                 node_id.label()
             ));
             rename_demo_node(profile, network_id, &existing_name, desired_name).await?;
+            changed_topology = true;
         }
 
         set_lightning_backend(profile, network_id, desired_name, backend_name).await?;
 
-        return Ok(DemoNodePreparation {
-            created_node: false,
-        });
+        return Ok(DemoNodePreparation { changed_topology });
     }
 
     let before_add = list_networks(profile).await?;
@@ -1430,7 +1482,9 @@ async fn create_or_prepare_demo_node(
 
     set_lightning_backend(profile, network_id, desired_name, backend_name).await?;
 
-    Ok(DemoNodePreparation { created_node: true })
+    Ok(DemoNodePreparation {
+        changed_topology: true,
+    })
 }
 
 #[allow(dead_code)]
@@ -1574,16 +1628,16 @@ async fn ensure_game_treasury_node_shell(
     profile: &PolarAutomationProfile,
     network_id: &str,
     policy: TreasuryShellPolicy,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let networks = list_networks(profile).await?;
     let desired_name = polar_node_name(DemoNodeId::GameTreasury);
     if lightning_node_exists(&networks, network_id, desired_name) {
-        return Ok(());
+        return Ok(false);
     }
 
     if let Some(alice_name) = find_reclaimable_default_alice_node(&networks, network_id) {
         rename_demo_node(profile, network_id, &alice_name, desired_name).await?;
-        return Ok(());
+        return Ok(true);
     }
 
     if policy == TreasuryShellPolicy::ReclaimOnly {
@@ -1595,7 +1649,7 @@ async fn ensure_game_treasury_node_shell(
         create_lightning_node(profile, network_id, desired_name, &before_add).await?;
     debug_assert_eq!(created_name, desired_name);
 
-    Ok(())
+    Ok(true)
 }
 
 fn add_lightning_node_arguments(network_id: &str, desired_name: &str) -> Value {
@@ -1652,6 +1706,89 @@ fn add_taproot_assets_node_attempts(
             ),
         ),
     ]
+}
+
+async fn find_or_create_node(
+    profile: &PolarAutomationProfile,
+    network_id: &str,
+    kind: PolarNodeKind,
+    preferred_name: &str,
+    create_attempts: Vec<(&'static str, Value)>,
+) -> Result<String, String> {
+    let networks = list_networks(profile).await?;
+    if let Some(node_name) = find_node_name_by_kind(&networks, network_id, kind) {
+        log_found_node_by_type(network_id, kind, preferred_name, &node_name);
+        return Ok(node_name);
+    }
+
+    let mut errors = Vec::new();
+    for (tool, arguments) in create_attempts {
+        match execute_tool(profile, tool, arguments).await {
+            Ok(_) => {
+                log_to_terminal(&format!(
+                    "[polar-service] node-created kind={} preferred={preferred_name} network={network_id} tool={tool}",
+                    kind.log_label()
+                ));
+                restart_network_for_node_start_recovery(profile, network_id).await?;
+                let networks = list_networks(profile).await?;
+                if let Some(node_name) = find_node_name_by_kind(&networks, network_id, kind) {
+                    return Ok(node_name);
+                }
+            }
+            Err(error) => {
+                errors.push(format!("{tool} failed: {error}"));
+                let networks_after_error = list_networks(profile).await?;
+                if let Some(node_name) =
+                    find_node_name_by_kind(&networks_after_error, network_id, kind)
+                {
+                    log_to_terminal(&format!(
+                        "[polar-service] node-create-side-effect kind={} node={node_name} preferred={preferred_name} network={network_id} tool={tool}",
+                        kind.log_label()
+                    ));
+                    return Ok(node_name);
+                }
+            }
+        }
+    }
+
+    Err(format!(
+        "Polar bridge could not find or create {} node {preferred_name}. {}",
+        kind.log_label(),
+        errors.join("; ")
+    ))
+}
+
+fn find_node_name_by_kind(value: &Value, network_id: &str, kind: PolarNodeKind) -> Option<String> {
+    match kind {
+        PolarNodeKind::TaprootAssets => find_any_taproot_assets_node_name(value, network_id),
+    }
+}
+
+fn log_found_node_by_type(
+    network_id: &str,
+    kind: PolarNodeKind,
+    preferred_name: &str,
+    node_name: &str,
+) {
+    if node_name.eq_ignore_ascii_case(preferred_name) {
+        log_to_terminal(&format!(
+            "[polar-service] node-found kind={} node={node_name} network={network_id}",
+            kind.log_label()
+        ));
+    } else {
+        log_to_terminal(&format!(
+            "[polar-service] node-found-name-preserved kind={} node={node_name} preferred={preferred_name} network={network_id}",
+            kind.log_label()
+        ));
+    }
+}
+
+impl PolarNodeKind {
+    fn log_label(self) -> &'static str {
+        match self {
+            PolarNodeKind::TaprootAssets => "taproot",
+        }
+    }
 }
 
 fn add_taproot_assets_node_arguments(
@@ -2009,17 +2146,10 @@ async fn wait_for_lightning_nodes_started(
     ))
 }
 
-async fn wait_for_required_polar_nodes_started(
-    profile: &PolarAutomationProfile,
-    network_id: &str,
-) -> Result<(), String> {
-    wait_for_named_polar_nodes_started(profile, network_id, &required_polar_node_names()).await
-}
-
 async fn wait_for_named_polar_nodes_started(
     profile: &PolarAutomationProfile,
     network_id: &str,
-    node_names: &[&'static str],
+    node_names: &[String],
 ) -> Result<(), String> {
     let mut last_started_count = 0usize;
     let mut no_progress_polls = 0u8;
@@ -2031,7 +2161,7 @@ async fn wait_for_named_polar_nodes_started(
         let mut statuses = Vec::new();
         let mut started_count = 0usize;
 
-        for node_name in node_names.iter().copied() {
+        for node_name in node_names {
             let status = any_node_status(&networks, network_id, node_name)
                 .unwrap_or_else(|| "not started".to_string());
             statuses.push(format!("{node_name}={status}"));
@@ -2039,7 +2169,7 @@ async fn wait_for_named_polar_nodes_started(
             if any_node_is_started(&networks, network_id, node_name) {
                 started_count += 1;
             } else {
-                not_started_nodes.push(node_name);
+                not_started_nodes.push(node_name.clone());
             }
         }
 
@@ -2079,7 +2209,6 @@ async fn wait_for_named_polar_nodes_started(
     let networks = list_networks(profile).await?;
     let statuses = node_names
         .iter()
-        .copied()
         .map(|node_name| {
             format!(
                 "{node_name}={}",
@@ -2096,7 +2225,7 @@ async fn wait_for_named_polar_nodes_started(
 }
 
 fn required_node_restart_due(no_progress_polls: u8, restarted_network: bool) -> bool {
-    no_progress_polls >= 6 && !restarted_network
+    no_progress_polls >= 3 && !restarted_network
 }
 
 async fn wait_for_lightning_wallet_balance(
@@ -2189,9 +2318,9 @@ async fn wait_for_taproot_assets_node(
 
     for attempt in 1..=TAPROOT_NODE_START_ATTEMPTS {
         let networks = list_networks(profile).await?;
-        if taproot_assets_node_exists(&networks, network_id) {
+        if let Some(node_name) = find_any_taproot_assets_node_name(&networks, network_id) {
             log_to_terminal(&format!(
-                "[polar-service] taproot-node-ready node={TAPROOT_ASSETS_NODE_NAME} attempt={attempt}"
+                "[polar-service] taproot-node-ready node={node_name} attempt={attempt}"
             ));
             return Ok(());
         }
@@ -2210,7 +2339,7 @@ async fn wait_for_taproot_assets_node(
     }
 
     Err(format!(
-        "Polar did not list Taproot Assets node {TAPROOT_ASSETS_NODE_NAME} after creation. Retry Game Treasury (TRAs) after Polar finishes updating the network."
+        "Polar did not list {TAPROOT_ASSETS_NODE_NAME} after creation. Retry Game Treasury (TRAs) after Polar finishes updating the network."
     ))
 }
 
@@ -2773,10 +2902,6 @@ fn any_node_is_started(value: &Value, network_id: &str, node_name: &str) -> bool
         .unwrap_or(false)
 }
 
-fn taproot_assets_node_exists(value: &Value, network_id: &str) -> bool {
-    find_taproot_assets_node_name(value, network_id).is_some()
-}
-
 fn taproot_assets_node_names(value: &Value, network_id: &str) -> Vec<String> {
     non_bitcoin_node_summaries(value, network_id)
         .into_iter()
@@ -2786,20 +2911,24 @@ fn taproot_assets_node_names(value: &Value, network_id: &str) -> Vec<String> {
 }
 
 fn find_taproot_assets_node_name(value: &Value, network_id: &str) -> Option<String> {
-    let taproot_names = non_bitcoin_node_summaries(value, network_id)
+    non_bitcoin_node_summaries(value, network_id)
         .into_iter()
         .filter(|node| node.is_taproot)
         .filter_map(|node| node.name)
-        .collect::<Vec<_>>();
+        .find(|name| name.eq_ignore_ascii_case(TAPROOT_ASSETS_NODE_NAME))
+}
 
-    taproot_names
-        .iter()
-        .find(|name| {
-            name.eq_ignore_ascii_case(TAPROOT_ASSETS_NODE_NAME)
-                || name.eq_ignore_ascii_case(LEGACY_TAPROOT_ASSETS_NODE_NAME)
-        })
-        .cloned()
-        .or_else(|| taproot_names.into_iter().next())
+fn find_any_taproot_assets_node_name(value: &Value, network_id: &str) -> Option<String> {
+    find_taproot_assets_node_name(value, network_id)
+        .or_else(|| find_repairable_taproot_assets_node_name(value, network_id))
+}
+
+fn find_repairable_taproot_assets_node_name(value: &Value, network_id: &str) -> Option<String> {
+    non_bitcoin_node_summaries(value, network_id)
+        .into_iter()
+        .filter(|node| node.is_taproot)
+        .filter_map(|node| node.name)
+        .find(|name| !name.eq_ignore_ascii_case(TAPROOT_ASSETS_NODE_NAME))
 }
 
 fn find_network_value<'a>(value: &'a Value, requested: &str) -> Option<&'a Value> {
@@ -4519,10 +4648,72 @@ mod tests {
     }
 
     #[test]
-    fn required_node_restart_waits_for_six_no_progress_polls_once() {
-        assert!(!required_node_restart_due(5, false));
-        assert!(required_node_restart_due(6, false));
-        assert!(!required_node_restart_due(6, true));
+    fn required_topology_cleanup_preserves_generated_taproot_node_name() {
+        let networks = json!({
+            "networks": [{
+                "id": 1,
+                "name": DEFAULT_NETWORK_NAME,
+                "nodes": {
+                    "bitcoin": [{ "name": DEFAULT_BITCOIN_BACKEND_NAME }],
+                    "lightning": [
+                        { "name": "GAME_LND", "type": "lightning" },
+                        { "name": "Alice", "type": "lightning" },
+                        { "name": "Bob", "type": "lightning" },
+                        { "name": "Carol", "type": "lightning" }
+                    ],
+                    "taproot": [{ "name": "GAME_LND-tap", "type": "taproot" }]
+                }
+            }]
+        });
+
+        assert_eq!(
+            first_unexpected_required_topology_node_name(&networks, "1"),
+            None
+        );
+    }
+
+    #[test]
+    fn required_topology_ready_accepts_proper_taproot_type_with_generated_name() {
+        let networks = json!({
+            "networks": [{
+                "id": 1,
+                "name": DEFAULT_NETWORK_NAME,
+                "nodes": {
+                    "bitcoin": [
+                        { "name": DEFAULT_BITCOIN_BACKEND_NAME, "type": "bitcoin", "status": "Started" }
+                    ],
+                    "lightning": [
+                        { "name": "GAME_LND", "type": "lightning", "status": "Started" },
+                        { "name": "Alice", "type": "lightning", "status": "Started" },
+                        { "name": "Bob", "type": "lightning", "status": "Started" },
+                        { "name": "Carol", "type": "lightning", "status": "Started" }
+                    ],
+                    "tap": [
+                        { "name": "GAME_LND-tap", "type": "tap", "implementation": "tapd", "status": "Started" }
+                    ]
+                }
+            }]
+        });
+
+        assert!(required_polar_topology_is_ready(&networks, "1"));
+        assert_eq!(
+            current_required_polar_node_names(&networks, "1"),
+            vec![
+                DEFAULT_BITCOIN_BACKEND_NAME.to_string(),
+                "GAME_LND".to_string(),
+                "Alice".to_string(),
+                "Bob".to_string(),
+                "Carol".to_string(),
+                "GAME_LND-tap".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn required_node_restart_falls_back_after_three_no_progress_polls_once() {
+        assert!(!required_node_restart_due(2, false));
+        assert!(required_node_restart_due(3, false));
+        assert!(!required_node_restart_due(3, true));
     }
 
     #[test]
@@ -5367,11 +5558,11 @@ mod tests {
             ]
         });
 
-        assert!(taproot_assets_node_exists(&networks, "1"));
+        assert!(find_taproot_assets_node_name(&networks, "1").is_some());
     }
 
     #[test]
-    fn taproot_assets_node_exists_discovers_legacy_tapd_node() {
+    fn taproot_assets_node_finds_legacy_tapd_repair_candidate() {
         let networks = json!({
             "networks": [
                 {
@@ -5379,21 +5570,27 @@ mod tests {
                     "name": DEFAULT_NETWORK_NAME,
                     "nodes": {
                         "tap": [
-                            { "name": LEGACY_TAPROOT_ASSETS_NODE_NAME, "type": "taproot", "implementation": "tapd" }
+                            { "name": "tapd", "type": "taproot", "implementation": "tapd" }
                         ]
                     }
                 }
             ]
         });
 
+        assert_eq!(find_taproot_assets_node_name(&networks, "1"), None);
         assert_eq!(
-            find_taproot_assets_node_name(&networks, "1"),
-            Some(LEGACY_TAPROOT_ASSETS_NODE_NAME.to_string())
+            find_repairable_taproot_assets_node_name(&networks, "1"),
+            Some("tapd".to_string())
         );
+        assert_eq!(
+            find_any_taproot_assets_node_name(&networks, "1"),
+            Some("tapd".to_string())
+        );
+        assert!(find_any_taproot_assets_node_name(&networks, "1").is_some());
     }
 
     #[test]
-    fn taproot_assets_node_exists_accepts_polar_generated_treasury_tap_name() {
+    fn taproot_assets_node_finds_polar_generated_treasury_tap_repair_candidate() {
         let networks = json!({
             "networks": [
                 {
@@ -5414,11 +5611,16 @@ mod tests {
             ]
         });
 
+        assert_eq!(find_taproot_assets_node_name(&networks, "31"), None);
         assert_eq!(
-            find_taproot_assets_node_name(&networks, "31"),
+            find_repairable_taproot_assets_node_name(&networks, "31"),
             Some("GAME_LND-tap".to_string())
         );
-        assert!(taproot_assets_node_exists(&networks, "31"));
+        assert_eq!(
+            find_any_taproot_assets_node_name(&networks, "31"),
+            Some("GAME_LND-tap".to_string())
+        );
+        assert!(find_any_taproot_assets_node_name(&networks, "31").is_some());
     }
 
     #[test]

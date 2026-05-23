@@ -187,8 +187,8 @@ Fields:
 Validation:
 
 - The user-facing order must be exactly `Bridge URL`, `Server Name`, `Create Nodes`, `Game Treasury (Sats)`, `Game Treasury (TRAs)`, `User Nodes (Sats)`, `User Nodes (TRAs)`, `Block Height`, and `Unlock Routes`.
-- `Create Nodes` completes only after all required Polar nodes are found or created and report started/ready status: Bitcoin backend, Game Treasury, Taproot Assets, one player node, and two NPC nodes.
-- `Create Nodes` may restart the Polar network once after repeated readiness retries, then must report success or a recoverable failure.
+- `Create Nodes` completes only after all required Polar nodes are found or created and report started/ready status: Bitcoin backend, Game Treasury, `GAME_TAPROOT`, one player node, and two NPC nodes.
+- `Create Nodes` restarts the Polar network after node topology changes and may restart once more after repeated readiness retries, then must report success or a recoverable failure.
 - `User Nodes (Sats)` completes when target user-node sats balances are met, regardless of extra sats remaining in Game Treasury.
 - `User Nodes (TRAs)` completes when target user-node TRA inventory is met, regardless of extra TRAs remaining in Game Treasury.
 

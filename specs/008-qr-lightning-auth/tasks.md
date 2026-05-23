@@ -40,7 +40,7 @@
 - [X] T018 Update setup wizard labels, order, submit focus targets, and reset focus targets for Bridge URL, Server Name, Create Nodes, Game Treasury (Sats), Game Treasury (TRAs), User Nodes (Sats), User Nodes (TRAs), Block Height, and Unlock Routes in packages/ui/src/client/pages/setup.rs
 - [X] T019 Add setup wizard order tests for the nine-step Polar flow in packages/ui/src/client/pages/setup.rs
 - [X] T020 Split Polar node topology creation from value balancing in packages/ui/src/client/services/polar_bridge_service.rs
-- [X] T021 Add create_required_nodes wrapper behavior for Bitcoin backend, Game Treasury, Taproot Assets, Alice, Bob, and Carol readiness in packages/ui/src/client/services/lightning_server_functions.rs
+- [X] T021 Add create_required_nodes wrapper behavior for Bitcoin backend, Game Treasury, `GAME_TAPROOT`, Alice, Bob, and Carol readiness in packages/ui/src/client/services/lightning_server_functions.rs
 - [X] T022 Add one-time Polar network restart recovery after repeated node readiness retries in packages/ui/src/client/services/polar_bridge_service.rs
 - [X] T023 Add tests for Create Nodes readiness and one-time restart behavior in packages/ui/src/client/services/polar_bridge_service.rs
 - [X] T024 Implement Game Treasury sats top-up after Create Nodes in packages/ui/src/client/services/lightning_server_functions.rs

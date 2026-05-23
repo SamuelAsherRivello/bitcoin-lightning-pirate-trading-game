@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex YOLO"
+  short_description: "Plan cautious codex-yolo parallel agent runs."
+  default_prompt: "Use $codex-yolo to plan a cautious codex-yolo run for isolated parallel Codex agents."

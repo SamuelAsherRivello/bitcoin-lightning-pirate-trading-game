@@ -89,19 +89,6 @@ function Ensure-DioxusCli {
     Invoke-CheckedCommand "cargo" @("install", "dioxus-cli@$RequiredDxVersion", "--locked", "--force")
 }
 
-function Ensure-NodeDependencies {
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        throw "npm is required for Tailwind CSS. Install Node.js from https://nodejs.org/ and rerun this script."
-    }
-
-    if (-not (Test-Path (Join-Path $ProjectRoot "node_modules\.bin\tailwindcss.cmd"))) {
-        Write-Host "Installing Tailwind CSS dependencies..."
-        Invoke-CheckedCommand "npm" @("install")
-    } else {
-        Write-Host "Tailwind CSS dependencies are already installed."
-    }
-}
-
 function Ensure-PolarMcpPrerequisites {
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         throw "Node.js 18 or newer is required for the Polar MCP helper. Install Node.js from https://nodejs.org/ and rerun this script."
@@ -120,17 +107,10 @@ function Ensure-PolarMcpPrerequisites {
     Write-Host "Polar MCP prerequisites are available. Start the helper with .\Scripts\Common\RunPolarMcp.ps1 when using networked Polar setup."
 }
 
-function Build-TailwindCss {
-    Write-Host "Building Tailwind CSS..."
-    Invoke-CheckedCommand "npm" @("run", "tailwind:build")
-}
-
 Ensure-RustToolchain
 Ensure-WasmTarget
 Ensure-DioxusCli
-Ensure-NodeDependencies
 Ensure-PolarMcpPrerequisites
-Build-TailwindCss
 
 Write-Host ""
 Write-Host "Running validation build..."

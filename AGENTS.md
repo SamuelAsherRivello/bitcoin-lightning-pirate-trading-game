@@ -100,7 +100,7 @@ Polar setup steps have a required visual order, and execution/progression logic 
 8. `Block Height`
 9. `Unlock Routes`
 
-`Create Nodes` finds or creates every Polar node needed by later steps: the Bitcoin backend, Game Treasury LND node, Taproot Assets node, two NPC LND nodes, and one player LND node. It requests creation first, then checks all node start/status readiness. If several readiness retries still show unstable nodes, restart the Polar network once and re-check.
+`Create Nodes` finds or creates every Polar node needed by later steps: the Bitcoin backend, Game Treasury LND node, `GAME_TAPROOT` Taproot Assets node, two NPC LND nodes, and one player LND node. It requests creation first, restarts the Polar network after node topology changes such as creates, renames, or cleanup removals, then checks all node start/status readiness. If repeated readiness polls show nodes stuck in the same non-started state, restart the Polar network once and re-check.
 
 Required Polar node names are exact and case-sensitive in app requests:
 
@@ -121,7 +121,9 @@ Polar node mutation has lifecycle side effects. The live Polar MCP tool schema d
 2. If every required node already exists by exact name and all existing nodes are started/running, mark the step ready and report extra nodes without deleting, renaming, stopping, or restarting anything.
 3. Create any required node from the exact required list that does not exist yet. Do not rename existing nodes into the required names; node rename can stop a running network.
 4. After the exact required list exists, request start only for required nodes that are not already started/running.
-5. Poll required nodes every 3 seconds until they are started. If there is no progress after 6 polls, stop/start the network once as the Polar stability workaround, then continue polling.
+5. Poll required nodes every 3 seconds until they are started. If there is no progress after 3 polls, stop/start the network once as the Polar stability workaround, then continue polling.
+
+Exception: if Polar already has a Taproot Assets node under a generated or legacy name such as `GAME_LND-tap`, `GAME_TREASURY-tap`, or `tapd`, treat the proper Taproot node type as usable state. Do not delete or rename it just because the name is wrong. Continue with the existing Taproot node name. Only when no Taproot node exists at all should setup create one with the preferred name `GAME_TAPROOT`.
 
 `User Nodes (Sats)` and `User Nodes (TRAs)` rebalance existing or newly created networks by transferring value to or from Game Treasury until the player/NPC user nodes match the requested demo balances and inventory. Game Treasury may retain extra sats or TRAs after rebalancing; do not require exact treasury depletion.
 
