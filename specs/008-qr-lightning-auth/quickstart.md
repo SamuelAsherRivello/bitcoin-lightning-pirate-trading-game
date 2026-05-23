@@ -30,13 +30,20 @@ Browser-visible verification when UI changes are implemented:
 .\Scripts\Common\RunWeb.ps1
 ```
 
+For phone scanning on the same Wi-Fi network, serve the app on the laptop's Wi-Fi IPv4 address so the phone can reach both the web app and the LNAuth callback bridge:
+
+```powershell
+.\Scripts\Common\RunWeb.ps1 -Address <this laptop's Wi-Fi IPv4>
+```
+
 Verify in the served app:
 
 - Set Up starts with `User Auth`, showing exactly `App`, `Mock LNAuth`, and `LNAuth`.
 - Set Up labels `App` as the development convenience path and `LNAuth` as the scalable authorization path.
 - Set Up labels `Mock LNAuth` as the automated-wallet development path.
-- Set Up shows an info icon next to `LNAuth` that promotes Alby Go as the primary Android/iOS test wallet.
-- Set Up keeps `User Auth` separate from the Polar workflow, then uses this Polar order: `Bridge URL`, `Server Name`, `Create Nodes`, `Game Treasury (Sats)`, `Game Treasury (TRAs)`, `User Nodes (Sats)`, `User Nodes (TRAs)`, `Block Height`, `Unlock Routes`.
+- Set Up shows an info icon next to `LNAuth` that promotes ZEUS as the primary Android/iOS test wallet.
+- Set Up keeps `User Auth` separate from the Polar workflow, then uses this Polar order: `Bridge URLs`, `Server Name`, `Create Nodes`, `Game Treasury (Sats)`, `Game Treasury (TRAs)`, `User Nodes (Sats)`, `User Nodes (TRAs)`, `Block Height`, `Unlock Routes`.
+- Step 1 always tests the Polar Bridge URL; when `LNAuth` is selected, Step 1 also shows and tests the LNAuth Bridge URL before allowing setup to continue.
 - `Create Nodes` finds or creates the Bitcoin backend, Game Treasury, Taproot Assets node, two NPC nodes, and one player node before later funding or inventory steps run.
 - `Create Nodes` requests creation first, then checks all required node statuses; after several readiness retries, it restarts the Polar network once and checks again.
 - `User Nodes (Sats)` balances sats to or from Game Treasury until the user nodes have the right balances, while allowing Game Treasury to keep extra sats.
@@ -50,20 +57,20 @@ Verify in the served app:
 - `Mock LNAuth` and `LNAuth` gate Play Game login and the Buy/Sell sats sends before completion.
 - `LNAuth` does not prompt for low-risk actions such as navigation, dashboard refreshes, inventory inspection, channel/TRA display, or educational content.
 - Network Dashboard shows auth mode, player identity fingerprint, auth session state, and approval history without exposing secrets.
-- Home explains `App` and `LNAuth` at a concept level, including why Alby Go is the test wallet and why the external wallet is not a Polar node.
-- Mobile QA verifies the exact `LNAuth` QR flow with Alby Go, or records a compatibility blocker and fallback decision.
+- Home explains `App` and `LNAuth` at a concept level, including why ZEUS is the test wallet and why the external wallet is not a Polar node.
+- Mobile QA verifies the exact `LNAuth` QR flow with ZEUS over the local LNAuth bridge, or records a compatibility blocker and fallback decision.
 
 Implementation order:
 
 1. Finish and test `App` mode with the new User Auth selector.
 2. Finish and test `Mock LNAuth` end-to-end, including modal overlay, cancel, login auto-complete, sats-send auto-complete, service tests, and browser QA.
-3. Implement real `LNAuth` last using the same modal/service path, then pause for Alby Go mobile validation.
+3. Implement real `LNAuth` last using the same modal/service path, then validate with ZEUS mobile scanning.
 
 Current status:
 
 - `App` mode remains the no-QR development path.
 - `Mock LNAuth` has the shared QR modal, one-second login completion, one-second Buy/Sell send approval, cancel handling, approval history recording, and a trade-service guard that requires approved authorization before value-moving trades run.
-- `LNAuth` uses the same modal surface but still needs the real Alby Go callback validation step before protected sends can complete.
+- `LNAuth` uses the same modal surface and a repo-owned local callback bridge. The bridge verifies the wallet LNURL-auth signature, the app polls for the verified session, and approved login/sends attach the wallet linking key fingerprint to the player identity.
 
 ## Dependency Caution
 

@@ -1,5 +1,6 @@
 pub mod database_service;
 pub mod lightning_server_functions;
+pub mod lnauth_bridge_service;
 pub mod localization_service;
 pub mod polar_bridge_service;
 pub mod polar_mcp_connector;

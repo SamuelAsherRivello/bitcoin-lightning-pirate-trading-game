@@ -2,6 +2,7 @@
 resolver = "2"
 default-members = ["packages/web"]
 members = [
+    "packages/lnauth-bridge",
     "packages/lightning-service",
     "packages/ui",
     "packages/web",

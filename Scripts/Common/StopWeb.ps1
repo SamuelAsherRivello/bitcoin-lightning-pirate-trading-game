@@ -1,5 +1,6 @@
 param(
-    [int]$Port = 8080
+    [int]$Port = 8080,
+    [int]$AuthBridgePort = 37374
 )
 
 $ErrorActionPreference = "Stop"
@@ -61,6 +62,12 @@ $gameServers = $allProcesses |
             -and $_.CommandLine -match "\\target\\dx\\web\\"
     }
 
+$authBridgeProcesses = $allProcesses |
+    Where-Object {
+        ($_.Name -ieq "lnauth-bridge.exe" -or ($_.Name -ieq "cargo.exe" -and $_.CommandLine -match "\brun\b" -and $_.CommandLine -match "\blnauth-bridge\b")) `
+            -and $_.CommandLine -match $escapedRepoRoot
+    }
+
 $dioxusServers |
     ForEach-Object {
         Stop-ProcessById -ProcessId $_.ProcessId -Reason "Dioxus static/hot-reload server on port $Port"
@@ -69,6 +76,11 @@ $dioxusServers |
 $gameServers |
     ForEach-Object {
         Stop-ProcessById -ProcessId $_.ProcessId -Reason "generated app server for this repository"
+    }
+
+$authBridgeProcesses |
+    ForEach-Object {
+        Stop-ProcessById -ProcessId $_.ProcessId -Reason "LNAuth bridge for this repository"
     }
 
 Stop-DioxusPortListeners

@@ -72,7 +72,7 @@ pub fn Home() -> Element {
                             h3 { "Why is the player wallet outside Polar?" }
                         }
                         p {
-                            "Polar runs local regtest nodes for the lab. The player's external wallet supplies identity and approval only; it is not imported into Polar and the app does not store wallet secrets. Alby Go is the first mobile wallet target for LNAuth testing with Alby Hub or another NWC wallet service."
+                            "Polar runs local regtest nodes for the lab. The player's external wallet supplies identity and approval only; it is not imported into Polar and the app does not store wallet secrets. ZEUS is the first mobile wallet target for LNAuth testing because its docs list LNURL auth support."
                         }
                     }
                     article { class: "lab-panel faq-concept",

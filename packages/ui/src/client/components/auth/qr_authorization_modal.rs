@@ -21,6 +21,9 @@ pub fn QrAuthorizationModalRegion(mut prompt: Signal<Option<QrAuthorizationModal
                         h2 { "{active_prompt.title}" }
                         p { "{active_prompt.description}" }
                         QrCodeView { payload: active_prompt.qr_payload.clone() }
+                        if active_prompt.status == QrAuthorizationStatus::Open {
+                            span { class: "qr-auth-modal__status", "Waiting for wallet scan..." }
+                        }
                         if active_prompt.status == QrAuthorizationStatus::MockCompleting {
                             span { class: "qr-auth-modal__status", "Mock wallet approval pending..." }
                         }

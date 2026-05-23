@@ -6,6 +6,7 @@ pub const DEFAULT_BITCOIN_BACKEND_NAME: &str = "BITCOIN_TESTNET";
 pub const DEFAULT_SATS_PER_TRANSACTION: u64 = 1_000;
 pub const MAX_SATS_PER_TRANSACTION: u64 = 100_000;
 pub const DEFAULT_ROUTE_CAPACITY_SATS: u64 = 250_000;
+pub const DEFAULT_LNAUTH_BRIDGE_URL: &str = "http://localhost:37374";
 pub const MAX_TRA_ITEMS_PER_NODE: usize = 3;
 pub const BOOK_ITEM_ID: u32 = 1;
 pub const APPLE_ITEM_ID: u32 = 2;
@@ -168,17 +169,16 @@ pub struct WalletRecommendationTip {
 impl Default for WalletRecommendationTip {
     fn default() -> Self {
         Self {
-            wallet_name: "Alby Go".to_string(),
+            wallet_name: "ZEUS".to_string(),
             platforms: vec!["Android".to_string(), "iOS".to_string()],
             recommendation_reason:
-                "Works with Alby Hub or another NWC wallet service for mobile testing."
-                    .to_string(),
+                "Mainstream mobile Lightning wallet with documented LNURL auth support.".to_string(),
             official_links: vec![
-                "https://getalby.com/alby-go".to_string(),
-                "https://guides.getalby.com/user-guide/alby-go".to_string(),
+                "https://zeusln.app/".to_string(),
+                "https://docs.zeusln.app/".to_string(),
             ],
             fallback_note: Some(
-                "Validate the exact LNAuth QR callback before treating this wallet as fully supported."
+                "Phone scans require this app's LNAuth bridge URL to be reachable from the phone."
                     .to_string(),
             ),
             compatibility_status: WalletCompatibilityStatus::PendingValidation,
@@ -442,7 +442,7 @@ impl PolarSetupStepId {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::BridgeUrl => "Bridge URL",
+            Self::BridgeUrl => "Bridge URLs",
             Self::ServerName => "Server Name",
             Self::CreateNodes => "Create Nodes",
             Self::GameTreasurySats => "Game Treasury (Sats)",
@@ -717,6 +717,8 @@ pub struct SetupProfile {
     pub player_identity: Option<PlayerIdentity>,
     #[serde(default)]
     pub last_auth_status: Option<AuthSessionStatus>,
+    #[serde(default = "default_lnauth_bridge_url")]
+    pub lnauth_bridge_url: String,
     #[serde(default)]
     pub polar_connection: PolarConnectionProfile,
     #[serde(default)]
@@ -746,6 +748,7 @@ impl Default for SetupProfile {
             user_auth_mode: UserAuthMode::default(),
             player_identity: None,
             last_auth_status: None,
+            lnauth_bridge_url: default_lnauth_bridge_url(),
             polar_connection: PolarConnectionProfile::default(),
             polar_automation: PolarAutomationProfile::default(),
             polar_block_height_confirmed: false,
@@ -755,6 +758,10 @@ impl Default for SetupProfile {
             connection_status: ConnectionStatus::NotConfigured,
         }
     }
+}
+
+fn default_lnauth_bridge_url() -> String {
+    DEFAULT_LNAUTH_BRIDGE_URL.to_string()
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

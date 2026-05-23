@@ -1,6 +1,7 @@
 param(
     [string]$Address = "",
     [int]$Port = 8080,
+    [int]$AuthBridgePort = 37374,
     [switch]$NoOpen,
     [switch]$Restart
 )
@@ -50,6 +51,12 @@ $gameServers = $allProcesses |
             -and $_.CommandLine -match "\\target\\dx\\web\\"
     }
 
+$authBridgeProcesses = $allProcesses |
+    Where-Object {
+        ($_.Name -ieq "lnauth-bridge.exe" -or ($_.Name -ieq "cargo.exe" -and $_.CommandLine -match "\brun\b" -and $_.CommandLine -match "\blnauth-bridge\b")) `
+            -and $_.CommandLine -match $escapedRepoRoot
+    }
+
 function Stop-DioxusPortListeners {
     $listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
 
@@ -73,6 +80,11 @@ $dioxusServers |
 $gameServers |
     ForEach-Object {
         Stop-ProcessById -ProcessId $_.ProcessId -Reason "generated app server for this repository"
+    }
+
+$authBridgeProcesses |
+    ForEach-Object {
+        Stop-ProcessById -ProcessId $_.ProcessId -Reason "LNAuth bridge for this repository"
     }
 
 Stop-DioxusPortListeners
@@ -142,11 +154,14 @@ Write-Host "Starting web app."
 Write-Host "Laptop: $appUrl"
 if ($browserHost -eq "localhost") {
     Write-Host "Polar:  use this localhost URL when testing Polar Automation with http://localhost:37373."
+    Write-Host "LNAuth: phone scanning needs a LAN address. Restart with -Address <this laptop's Wi-Fi IPv4>."
 } elseif ($bindAddress -eq $wifiAddress) {
     Write-Host "Phone:  http://$bindAddress`:$Port"
+    Write-Host "LNAuth: phone wallet callbacks use http://$bindAddress`:$AuthBridgePort."
     Write-Host "Polar:  browser calls to http://localhost:37373 may fail from non-localhost origins. Use -Address 127.0.0.1 for Polar Automation."
 } else {
     Write-Host "Phone:  not available unless you pass this laptop's Wi-Fi IPv4 address with -Address."
+    Write-Host "LNAuth: phone wallet callbacks use http://$bindAddress`:$AuthBridgePort if your phone can reach that address."
 }
 Write-Host ""
 
@@ -156,6 +171,16 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
 
 Write-Host "Building Tailwind CSS..."
 npm run tailwind:build
+
+$env:LNAUTH_BRIDGE_ADDRESS = $bindAddress
+$env:LNAUTH_BRIDGE_PORT = "$AuthBridgePort"
+Write-Host "Starting LNAuth bridge at http://$bindAddress`:$AuthBridgePort."
+Write-Host "Building LNAuth bridge..."
+cargo build -p lnauth-bridge
+$authBridgeExe = Join-Path $repoRootPath "target\debug\lnauth-bridge.exe"
+Start-Process -FilePath $authBridgeExe `
+    -WorkingDirectory $repoRootPath `
+    -WindowStyle Hidden | Out-Null
 
 if (-not $NoOpen) {
     Write-Host "Browser: will open $appUrl when the web server is ready."

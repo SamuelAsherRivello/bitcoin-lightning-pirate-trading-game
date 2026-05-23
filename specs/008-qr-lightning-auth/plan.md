@@ -19,7 +19,7 @@ Research found no published Rust crate named `lnauth` through `cargo search`. Th
 **Project Type**: Rust workspace with reusable service crate plus Dioxus web/desktop app.  
 **Performance Goals**: QR challenge generation and status updates should be perceptibly instant locally; successful wallet callbacks should update auth state within the spec's 5 second goal.  
 **Constraints**: No wallet secrets, macaroons, seed material, or private keys in browser localStorage; no browser SQLite or OPFS worker; Dioxus pages must not own LNURL verification, TRA transfer rules, invoice/payment rules, authorization-event policy, or route/channel policy; the player's external wallet does not need to be created as a Polar node; the QR modal cancel path exists for development convenience and must leave the protected action incomplete.  
-**Scale/Scope**: Primary routes are `Home`, `Set Up`, `Play Game`, and `Network Dashboard`; current setup is being reorganized so the Polar workflow runs `Bridge URL`, `Server Name`, `Create Nodes`, `Game Treasury (Sats)`, `Game Treasury (TRAs)`, `User Nodes (Sats)`, `User Nodes (TRAs)`, `Block Height`, and `Unlock Routes`; current gameplay sends sats through `execute_tra_item_trade` for Buy/Sell and debug sends through invoice/payment helpers.
+**Scale/Scope**: Primary routes are `Home`, `Set Up`, `Play Game`, and `Network Dashboard`; current setup is being reorganized so the Polar workflow runs `Bridge URLs`, `Server Name`, `Create Nodes`, `Game Treasury (Sats)`, `Game Treasury (TRAs)`, `User Nodes (Sats)`, `User Nodes (TRAs)`, `Block Height`, and `Unlock Routes`; current gameplay sends sats through `execute_tra_item_trade` for Buy/Sell and debug sends through invoice/payment helpers.
 
 ## Constitution Check
 
@@ -96,7 +96,7 @@ packages/
 
 The Polar setup flow must separate topology creation from value balancing:
 
-1. `Bridge URL`: verify the Polar bridge URL exactly as before.
+1. `Bridge URLs`: verify the Polar bridge URL exactly as before; when `LNAuth` mode is selected, also verify the LNAuth bridge URL before continuing.
 2. `Server Name`: find/create/start the named Polar network exactly as before.
 3. `Create Nodes`: find or create all required Polar nodes before any funding, minting, or user rebalancing: Bitcoin backend, Game Treasury LND node, Taproot Assets node, Alice/player LND node, Bob NPC LND node, and Carol NPC LND node. This step inspects first; if the exact required nodes already exist and the visible network nodes are started/running, it returns ready and reports extras without cleanup. If required nodes are missing, it creates only the missing required nodes, starts only nodes that are not already started/running, then polls every required node for started/ready status. If repeated readiness retries still show unstable or not-started nodes, restart the Polar network once and re-check readiness.
 4. `Game Treasury (Sats)`: fund or top up Game Treasury sats after all node shells exist.
@@ -158,19 +158,19 @@ For v1 user-facing behavior, trigger the login modal on Play Game entry and trig
 
 As of the latest codebase pass, the app already has the `User Auth` selector, current nine-step Polar setup order, portable auth/session DTOs, and snapshot safety checks. This implementation pass adds the app-level QR prompt context, reusable centered QR modal, QR rendering dependency, Mock LNAuth login auto-completion on Play Game entry, Mock LNAuth Buy/Sell send approval auto-completion, and a service-level guard in `execute_tra_item_trade` so LNAuth-mode trades cannot create/pay invoices or transfer TRA ownership without an approved `TransactionApproval`.
 
-Real `LNAuth` now uses the same modal surface and challenge payload shape, but callback verification remains intentionally blocked pending Alby Go mobile validation. In real `LNAuth`, protected sends display the QR and do not execute the trade until callback completion is implemented and tested.
+Real `LNAuth` now uses the same modal surface and a repo-owned `lnauth-bridge` callback service. The bridge creates phone-reachable LNURL-auth sessions, verifies wallet callback signatures, and lets the Dioxus app poll until the player identity or send approval is confirmed. In real `LNAuth`, protected sends execute only after the scanned wallet signs with the same linking key used for login.
 
 ## Wallet Recommendation
 
-Promote Alby Go in the `LNAuth` info tip as the primary test wallet. Current Alby documentation says Alby Go is available on iOS and Android, is open source, works with Alby Hub or another NWC wallet service, and can authorize new app connections to Alby Hub from a phone. Because the Alby Go docs found during planning describe NWC/app-connection authorization but do not explicitly state LNURL-auth callback support, implementation must verify the exact `LNAuth` QR flow with Alby Go before treating it as fully supported.
+Promote ZEUS in the `LNAuth` info tip as the primary test wallet. Current ZEUS documentation says it is available on Android, iOS, and F-Droid and lists full LNURL support including auth. Phone scanning still requires the local `lnauth-bridge` callback URL to be reachable from the phone.
 
 Suggested tip text:
 
 ```text
-Testing wallet: Alby Go. It works on Android and iOS with Alby Hub or another NWC wallet service. Use it to test LNAuth login and key-event approval QR codes. Your wallet stays outside Polar; Polar only runs the local lab nodes.
+Testing wallet: ZEUS. It works on Android and iOS and its docs list LNURL auth support. Use it to scan LNAuth login and key-event approval QR codes. Your wallet stays outside Polar; Polar only runs the local lab nodes.
 ```
 
-Fallback rule: if mobile testing shows Alby Go cannot complete the exact LNURL-auth callback flow, document the blocker and choose a fallback wallet for the app tip rather than silently shipping a broken recommendation.
+Fallback rule: if mobile testing shows ZEUS cannot complete the exact local LNURL-auth callback flow, document the blocker and choose a fallback wallet or HTTPS/tunnel setup rather than silently shipping a broken recommendation.
 
 ## Complexity Tracking
 

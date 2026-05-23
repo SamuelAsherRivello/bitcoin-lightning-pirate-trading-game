@@ -16,10 +16,11 @@ use crate::client::models::{
 };
 use crate::client::services::lightning_server_functions::{
     complete_polar_setup, confirm_polar_block_height, count_polar_networks,
-    create_required_polar_nodes_with_progress, delete_all_polar_networks_with_progress,
-    delete_created_polar_server, destroy_polar_demo_nodes, ensure_polar_server, get_lab_state,
-    prepare_game_treasury, prepare_game_treasury_tras, prepare_user_node_sats,
-    prepare_user_node_tras, reset_lab, test_setup, verify_polar_bridge, PolarDeleteAllProgress,
+    create_required_polar_nodes_with_progress, default_lnauth_bridge_url,
+    delete_all_polar_networks_with_progress, delete_created_polar_server, destroy_polar_demo_nodes,
+    ensure_polar_server, get_lab_state, is_valid_lnauth_bridge_url, prepare_game_treasury,
+    prepare_game_treasury_tras, prepare_user_node_sats, prepare_user_node_tras, reset_lab,
+    test_lnauth_bridge_url, test_setup, verify_polar_bridge, PolarDeleteAllProgress,
     PolarServerEnsureResult, PolarServerEnsureStatus,
 };
 use crate::client::services::storage_service;
@@ -72,7 +73,7 @@ impl PolarWizardStep {
 
 fn polar_wizard_step_label(step: PolarWizardStep) -> &'static str {
     match step {
-        PolarWizardStep::BridgeUrl => "Bridge URL",
+        PolarWizardStep::BridgeUrl => "Bridge URLs",
         PolarWizardStep::ServerName => "Server Name",
         PolarWizardStep::CreateNodes => "Create Nodes",
         PolarWizardStep::GameTreasury => "Game Treasury (Sats)",
@@ -130,6 +131,14 @@ pub fn SetUp() -> Element {
     let mut user_auth_mode = use_signal(|| setup_profile().user_auth_mode);
     let mut polar_connection_tab = use_signal(PolarConnectionTab::load);
     let mut polar_bridge_url = use_signal(|| setup_profile().polar_automation.bridge_url.clone());
+    let mut lnauth_bridge_url = use_signal(|| {
+        let saved = setup_profile().lnauth_bridge_url;
+        if saved.trim().is_empty() {
+            default_lnauth_bridge_url()
+        } else {
+            saved
+        }
+    });
     let mut polar_server_name = use_signal(|| setup_profile().network_name.clone());
     let mut polar_block_height = use_signal(|| {
         lab_state()
@@ -148,8 +157,11 @@ pub fn SetUp() -> Element {
     let current_lab_state = lab_state();
     let active_step = polar_wizard_step(&current_profile, current_lab_state.as_ref());
     let bridge_url_is_valid = is_valid_local_bridge_url(&polar_bridge_url());
+    let lnauth_bridge_url_is_valid = user_auth_mode() != UserAuthMode::LnAuth
+        || is_valid_lnauth_bridge_url(&lnauth_bridge_url());
     let browser_origin_is_valid = browser_origin_allows_polar_bridge();
-    let bridge_url_can_submit = bridge_url_is_valid && browser_origin_is_valid;
+    let bridge_url_can_submit =
+        bridge_url_is_valid && lnauth_bridge_url_is_valid && browser_origin_is_valid;
     let server_name_is_valid = !polar_server_name().trim().is_empty();
 
     rsx! {
@@ -229,7 +241,7 @@ pub fn SetUp() -> Element {
                                     },
                                     "LNAuth"
                                     FieldHelpIcon {
-                                        label: "Testing wallet: Alby Go. It works on Android and iOS with Alby Hub or another NWC wallet service. Use it to test LNAuth login and key-event approval QR codes. Your wallet stays outside Polar; Polar only runs the local lab nodes.".to_string()
+                                        label: "Testing wallet: ZEUS. It works on Android and iOS and its docs list LNURL auth support. Use it to scan LNAuth login and key-event approval QR codes. Your wallet stays outside Polar; Polar only runs the local lab nodes.".to_string()
                                     }
                                 }
                             }
@@ -332,6 +344,7 @@ pub fn SetUp() -> Element {
                                                     setup_mode.set(default_profile.setup_mode);
                                                     user_auth_mode.set(default_profile.user_auth_mode);
                                                     polar_bridge_url.set(default_profile.polar_automation.bridge_url.clone());
+                                                    lnauth_bridge_url.set(default_profile.lnauth_bridge_url.clone());
                                                     polar_server_name.set(default_profile.network_name.clone());
                                                     push_toast(toast, toast_sequence, "Local setup reset.", ToastTone::Success);
                                                 }
@@ -476,6 +489,7 @@ pub fn SetUp() -> Element {
                                                         amount_text(),
                                                         polar_server_name,
                                                         polar_bridge_url(),
+                                                        lnauth_bridge_url(),
                                                         polar_block_height,
                                                         autopilot_enabled,
                                                         autopilot_status,
@@ -521,10 +535,15 @@ pub fn SetUp() -> Element {
                                             id: "polar-step-bridge-url".to_string(),
                                             class: wizard_step_class(active_step, PolarWizardStep::BridgeUrl).to_string(),
                                             number: 1,
-                                            info: "Default localhost bridge while Polar is open".to_string(),
+                                            info: if user_auth_mode() == UserAuthMode::LnAuth {
+                                                "Test the Polar bridge and the LNAuth callback bridge".to_string()
+                                            } else {
+                                                "Test the Polar bridge while Polar is open".to_string()
+                                            },
                                             name: rsx! { "{polar_wizard_step_label(PolarWizardStep::BridgeUrl)}" },
                                             value: Some(rsx! {
-                                                label { class: "setup-field-row",
+                                                label { class: "setup-field-row setup-field-row--stacked",
+                                                    span { "Polar Bridge URL" }
                                                     input {
                                                         id: "polar-bridge-url-input",
                                                         r#type: "text",
@@ -537,10 +556,29 @@ pub fn SetUp() -> Element {
                                                         },
                                                     }
                                                 }
+                                                if user_auth_mode() == UserAuthMode::LnAuth {
+                                                    label { class: "setup-field-row setup-field-row--stacked",
+                                                        span { "LNAuth Bridge URL" }
+                                                        input {
+                                                            id: "lnauth-bridge-url-input",
+                                                            r#type: "text",
+                                                            placeholder: "http://192.168.1.20:37374",
+                                                            value: lnauth_bridge_url(),
+                                                            disabled: active_step != PolarWizardStep::BridgeUrl,
+                                                            oninput: move |event| {
+                                                                bridge_connection_error.set(String::new());
+                                                                lnauth_bridge_url.set(event.value());
+                                                            },
+                                                        }
+                                                    }
+                                                }
                                             }),
                                             value_after: Some(rsx! {
                                                 if !bridge_url_is_valid && active_step == PolarWizardStep::BridgeUrl {
                                                     p { class: "field-error", "Use a local bridge URL such as http://localhost:37373." }
+                                                }
+                                                if user_auth_mode() == UserAuthMode::LnAuth && !lnauth_bridge_url_is_valid && active_step == PolarWizardStep::BridgeUrl {
+                                                    p { class: "field-error", "Use an LNAuth bridge URL with host and port, such as http://192.168.1.20:37374." }
                                                 }
                                                 if bridge_url_is_valid && !browser_origin_is_valid && active_step == PolarWizardStep::BridgeUrl {
                                                     p { class: "field-error",
@@ -568,7 +606,7 @@ pub fn SetUp() -> Element {
                                                         let operation_id = begin_operation_prompt(
                                                             operation_prompt,
                                                             prompt_sequence,
-                                                            "Connect Polar bridge",
+                                                            "Connect bridge URLs",
                                                             "Checking bridge URL...",
                                                             false,
                                                         )
@@ -585,6 +623,7 @@ pub fn SetUp() -> Element {
                                                                 setup_profile(),
                                                             ) {
                                                                 Ok(mut profile) => {
+                                                                    profile.lnauth_bridge_url = lnauth_bridge_url().trim().to_string();
                                                                     update_operation_prompt(
                                                                         operation_prompt,
                                                                         operation_id,
@@ -599,12 +638,43 @@ pub fn SetUp() -> Element {
                                                                     profile.polar_automation.network_id.clear();
                                                                     match verify_polar_bridge(profile.clone()).await {
                                                                         Ok(saved_profile) => {
-                                                                            bridge_connection_error.set(String::new());
-                                                                            setup_profile.set(saved_profile);
-                                                                            lab_state.set(None);
-                                                                            close_operation_prompt(operation_prompt, operation_id);
-                                                                            push_toast(toast, toast_sequence, "Connected to Polar bridge.", ToastTone::Success);
-                                                                            focus_step_control("polar-server-name-input").await;
+                                                                            let mut saved_profile = saved_profile;
+                                                                            saved_profile.lnauth_bridge_url = profile.lnauth_bridge_url.clone();
+                                                                            if saved_profile.user_auth_mode == UserAuthMode::LnAuth {
+                                                                                update_operation_prompt(
+                                                                                    operation_prompt,
+                                                                                    operation_id,
+                                                                                    "Contacting the LNAuth bridge...",
+                                                                                    ToastTone::Info,
+                                                                                    true,
+                                                                                    false,
+                                                                                )
+                                                                                .await;
+                                                                                match test_lnauth_bridge_url(saved_profile.lnauth_bridge_url.clone()).await {
+                                                                                    Ok(()) => {
+                                                                                        bridge_connection_error.set(String::new());
+                                                                                        setup_profile.set(saved_profile.clone());
+                                                                                        storage_service::save_setup_profile(&saved_profile);
+                                                                                        lab_state.set(None);
+                                                                                        close_operation_prompt(operation_prompt, operation_id);
+                                                                                        push_toast(toast, toast_sequence, "Connected to Polar and LNAuth bridges.", ToastTone::Success);
+                                                                                        focus_step_control("polar-server-name-input").await;
+                                                                                    }
+                                                                                    Err(message) => {
+                                                                                        let message = format!("LNAuth bridge check failed: {message}");
+                                                                                        bridge_connection_error.set(message.clone());
+                                                                                        close_operation_prompt(operation_prompt, operation_id);
+                                                                                        push_toast(toast, toast_sequence, message, ToastTone::Error);
+                                                                                    }
+                                                                                }
+                                                                            } else {
+                                                                                bridge_connection_error.set(String::new());
+                                                                                setup_profile.set(saved_profile);
+                                                                                lab_state.set(None);
+                                                                                close_operation_prompt(operation_prompt, operation_id);
+                                                                                push_toast(toast, toast_sequence, "Connected to Polar bridge.", ToastTone::Success);
+                                                                                focus_step_control("polar-server-name-input").await;
+                                                                            }
                                                                         }
                                                                         Err(message) => {
                                                                             let message = bridge_step_error_message(message);
@@ -1734,6 +1804,9 @@ fn apply_user_auth_mode(
     }
 
     profile.user_auth_mode = mode;
+    if mode == UserAuthMode::LnAuth && profile.lnauth_bridge_url.trim().is_empty() {
+        profile.lnauth_bridge_url = default_lnauth_bridge_url();
+    }
     profile.player_identity = None;
     profile.last_auth_status = None;
     if profile.is_connected() {
@@ -2422,7 +2495,7 @@ mod tests {
         assert_eq!(
             labels,
             [
-                "Bridge URL",
+                "Bridge URLs",
                 "Server Name",
                 "Create Nodes",
                 "Game Treasury (Sats)",
@@ -2692,6 +2765,7 @@ async fn run_polar_setup_autopilot(
     amount_text: String,
     mut polar_server_name: Signal<String>,
     polar_bridge_url: String,
+    lnauth_bridge_url: String,
     mut polar_block_height: Signal<String>,
     mut autopilot_enabled: Signal<bool>,
     mut autopilot_status: Signal<String>,
@@ -2718,6 +2792,7 @@ async fn run_polar_setup_autopilot(
         amount_text,
         &mut polar_server_name,
         polar_bridge_url,
+        lnauth_bridge_url,
         &mut polar_block_height,
         &mut autopilot_status,
     )
@@ -2997,6 +3072,7 @@ async fn run_polar_setup_autopilot_inner(
     amount_text: String,
     polar_server_name: &mut Signal<String>,
     polar_bridge_url: String,
+    lnauth_bridge_url: String,
     polar_block_height: &mut Signal<String>,
     autopilot_status: &mut Signal<String>,
 ) -> Result<LabState, String> {
@@ -3037,6 +3113,7 @@ async fn run_polar_setup_autopilot_inner(
         ),
         setup_profile(),
     )?;
+    profile.lnauth_bridge_url = lnauth_bridge_url.trim().to_string();
 
     if should_start_fresh && profile.is_connected() {
         profile.connection_status = ConnectionStatus::NotConfigured;
@@ -3055,13 +3132,17 @@ async fn run_polar_setup_autopilot_inner(
             operation_prompt,
             operation_id,
             PolarWizardStep::BridgeUrl,
-            "Connecting to the Polar bridge...",
+            if profile.user_auth_mode == UserAuthMode::LnAuth {
+                "Connecting to the Polar and LNAuth bridges..."
+            } else {
+                "Connecting to the Polar bridge..."
+            },
             ToastTone::Info,
             true,
             false,
         )
         .await;
-        autopilot_status.set("Step 1 of 9: Bridge URL".to_string());
+        autopilot_status.set("Step 1 of 9: Bridge URLs".to_string());
         profile.connection_status = ConnectionStatus::SavedOffline;
         profile.last_verified_at = None;
         profile.polar_automation.network_id.clear();
@@ -3069,6 +3150,15 @@ async fn run_polar_setup_autopilot_inner(
             *bridge_connection_error.write() = bridge_step_error_message(message.clone());
             bridge_step_error_message(message)
         })?;
+        if profile.user_auth_mode == UserAuthMode::LnAuth {
+            test_lnauth_bridge_url(profile.lnauth_bridge_url.clone())
+                .await
+                .map_err(|message| {
+                    let message = format!("LNAuth bridge check failed: {message}");
+                    *bridge_connection_error.write() = message.clone();
+                    message
+                })?;
+        }
         bridge_connection_error.set(String::new());
         setup_profile.set(profile.clone());
         lab_state.set(None);

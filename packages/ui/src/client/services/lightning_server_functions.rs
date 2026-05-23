@@ -5,7 +5,7 @@ use crate::client::models::{
     TransactionApprovalStatus, TransferTraRequest, TreasuryImpactPreview, APPLE_ITEM_ID,
     BOOK_ITEM_ID, DEFAULT_BITCOIN_BACKEND_NAME, DEFAULT_ROUTE_CAPACITY_SATS,
 };
-use crate::client::services::{polar_bridge_service, storage_service};
+use crate::client::services::{lnauth_bridge_service, polar_bridge_service, storage_service};
 
 pub use polar_bridge_service::{
     PolarDeleteAllProgress, PolarDeleteAllResult, PolarLabHealthIssue, PolarServerEnsureResult,
@@ -23,6 +23,11 @@ pub async fn begin_player_auth(
     profile: SetupProfile,
     action: AuthAction,
 ) -> Result<PlayerAuthSession, String> {
+    if lnauth_bridge_service::should_use_real_bridge(profile.user_auth_mode) {
+        return lnauth_bridge_service::begin_real_player_auth(profile.lnauth_bridge_url, action)
+            .await;
+    }
+
     lightning_service::begin_player_auth(&profile, action).map_err(|error| error.to_string())
 }
 
@@ -42,6 +47,25 @@ pub async fn complete_player_auth(
 ) -> Result<PlayerAuthSession, String> {
     lightning_service::complete_player_auth(session, linking_key_fingerprint)
         .map_err(|error| error.to_string())
+}
+
+pub async fn get_real_player_auth_session(
+    bridge_url: String,
+    session_id: String,
+) -> Result<PlayerAuthSession, String> {
+    lnauth_bridge_service::get_real_player_auth_session(bridge_url, &session_id).await
+}
+
+pub async fn test_lnauth_bridge_url(bridge_url: String) -> Result<(), String> {
+    lnauth_bridge_service::test_lnauth_bridge_url(bridge_url).await
+}
+
+pub fn is_valid_lnauth_bridge_url(bridge_url: &str) -> bool {
+    lnauth_bridge_service::is_valid_lnauth_bridge_url(bridge_url)
+}
+
+pub fn default_lnauth_bridge_url() -> String {
+    lnauth_bridge_service::default_bridge_base_url()
 }
 
 pub async fn cancel_player_auth_session(session: PlayerAuthSession) -> PlayerAuthSession {

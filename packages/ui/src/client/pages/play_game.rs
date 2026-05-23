@@ -11,19 +11,21 @@ use crate::client::components::toast::{
 };
 use crate::client::models::{
     ApprovalOperationKind, AuthAction, AuthSessionStatus, ConnectionStatus, DemoNode, DemoNodeId,
-    GameItemDefinition, LabState, QrAuthorizationKind, QrAuthorizationModal, QrAuthorizationStatus,
-    RouteStatus, SetupMode, SetupProfile, TraItem, TraOwnershipStatus, TraTransferStatus,
-    TradeRoute, TransactionApproval, TransactionApprovalStatus, TransferTraRequest,
-    DEFAULT_ROUTE_CAPACITY_SATS, DEFAULT_SATS_PER_TRANSACTION, MAX_TRA_ITEMS_PER_NODE,
+    GameItemDefinition, LabState, PlayerAuthSession, QrAuthorizationKind, QrAuthorizationModal,
+    QrAuthorizationStatus, RouteStatus, SetupMode, SetupProfile, TraItem, TraOwnershipStatus,
+    TraTransferStatus, TradeRoute, TransactionApproval, TransactionApprovalStatus,
+    TransferTraRequest, DEFAULT_ROUTE_CAPACITY_SATS, DEFAULT_SATS_PER_TRANSACTION,
+    MAX_TRA_ITEMS_PER_NODE,
 };
 use crate::client::services::lightning_server_functions::{
     approve_mock_player_auth_session, approve_transaction_approval, begin_player_auth,
     begin_transaction_approval, close_polar_demo_channels_with_progress, close_trade_route,
     complete_polar_setup, create_polar_demo_nodes_with_progress, destroy_polar_demo_nodes,
     display_player_auth_session, ensure_polar_server, execute_tra_item_trade,
-    initial_tra_setup_items, mint_tra, open_trade_route, preview_tra_setup,
-    record_transaction_approval, recover_if_polar_lab_unhealthy, reset_tra_inventory,
-    verify_polar_bridge, verify_tra_setup, wait_for_next_block, PolarLabRecovery,
+    get_real_player_auth_session, initial_tra_setup_items, mint_tra, open_trade_route,
+    preview_tra_setup, record_transaction_approval, recover_if_polar_lab_unhealthy,
+    reset_tra_inventory, verify_polar_bridge, verify_tra_setup, wait_for_next_block,
+    PolarLabRecovery,
 };
 use crate::client::Route;
 
@@ -735,6 +737,20 @@ async fn begin_play_game_login_auth(
     qr_prompt.set(Some(modal));
 
     if !profile.user_auth_mode.is_mock() {
+        match wait_for_real_lnauth_login(
+            profile,
+            session,
+            setup_profile,
+            lab_state,
+            qr_prompt,
+            toast,
+            toast_sequence,
+        )
+        .await
+        {
+            Ok(()) => {}
+            Err(message) => push_toast(toast, toast_sequence, message, ToastTone::Error),
+        }
         return;
     }
 
@@ -806,6 +822,97 @@ async fn begin_play_game_login_auth(
     }
 }
 
+async fn wait_for_real_lnauth_login(
+    profile: SetupProfile,
+    session: PlayerAuthSession,
+    mut setup_profile: Signal<SetupProfile>,
+    mut lab_state: Signal<Option<LabState>>,
+    mut qr_prompt: Signal<Option<QrAuthorizationModal>>,
+    toast: Signal<Option<Toast>>,
+    toast_sequence: Signal<u64>,
+) -> Result<(), String> {
+    for _ in 0..120 {
+        wait_for_real_lnauth_poll_interval().await;
+
+        if qr_prompt.peek().as_ref().is_some_and(|modal| {
+            modal.modal_id == session.session_id && modal.status == QrAuthorizationStatus::Canceled
+        }) {
+            qr_prompt.set(None);
+            let canceled =
+                crate::client::services::lightning_server_functions::cancel_player_auth_session(
+                    session,
+                )
+                .await;
+            let mut state = lab_state
+                .peek()
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| lightning_service::default_lab_state(profile.clone()));
+            state.player_auth_session = Some(canceled.clone());
+            state.profile.last_auth_status = Some(canceled.status);
+            crate::client::services::storage_service::save_lab_state_snapshot(&state);
+            lab_state.set(Some(state));
+            return Err("Wallet login was canceled.".to_string());
+        }
+
+        if !qr_prompt
+            .peek()
+            .as_ref()
+            .is_some_and(|modal| modal.modal_id == session.session_id)
+        {
+            return Ok(());
+        }
+
+        let latest = get_real_player_auth_session(
+            profile.lnauth_bridge_url.clone(),
+            session.session_id.clone(),
+        )
+        .await?;
+        match latest.status {
+            AuthSessionStatus::Approved => {
+                qr_prompt.set(None);
+                let mut next_profile = profile.clone();
+                next_profile.player_identity = latest.player_identity.clone();
+                next_profile.last_auth_status = Some(latest.status);
+                setup_profile.set(next_profile.clone());
+                crate::client::services::storage_service::save_setup_profile(&next_profile);
+
+                let mut state =
+                    lab_state.peek().as_ref().cloned().unwrap_or_else(|| {
+                        lightning_service::default_lab_state(next_profile.clone())
+                    });
+                state.profile = next_profile;
+                state.player_auth_session = Some(latest);
+                crate::client::services::storage_service::save_lab_state_snapshot(&state);
+                lab_state.set(Some(state));
+                push_toast(
+                    toast,
+                    toast_sequence,
+                    "LNAuth wallet login approved.",
+                    ToastTone::Success,
+                );
+                return Ok(());
+            }
+            AuthSessionStatus::Expired => {
+                qr_prompt.set(None);
+                return Err(
+                    "LNAuth login expired. Open Play Game again to create a fresh QR.".to_string(),
+                );
+            }
+            AuthSessionStatus::Failed | AuthSessionStatus::Rejected => {
+                qr_prompt.set(None);
+                return Err(latest
+                    .failure_reason
+                    .unwrap_or_else(|| "LNAuth wallet login failed.".to_string()));
+            }
+            _ => {}
+        }
+    }
+
+    qr_prompt.set(None);
+    Err("LNAuth login did not complete before the local polling timeout.".to_string())
+}
+
 async fn authorize_trade_with_qr(
     profile: SetupProfile,
     amount_sats: u64,
@@ -824,14 +931,30 @@ async fn authorize_trade_with_qr(
         return Ok(None);
     }
 
+    let real_lnauth_session = if profile.user_auth_mode.is_mock() {
+        None
+    } else {
+        Some(begin_player_auth(profile.clone(), AuthAction::Auth).await?)
+    };
+    let modal_id = real_lnauth_session
+        .as_ref()
+        .map(|session| session.session_id.clone())
+        .unwrap_or_else(|| approval.approval_id.clone());
+    let qr_payload = real_lnauth_session
+        .as_ref()
+        .map(|session| session.qr_payload.clone())
+        .unwrap_or_else(|| {
+            format!(
+                "lnurl-auth://local-regtest/approval/{}",
+                approval.approval_id
+            )
+        });
+
     let modal = QrAuthorizationModal {
-        modal_id: approval.approval_id.clone(),
+        modal_id: modal_id.clone(),
         title: "Scan with wallet".to_string(),
         description: format!("You are sending {amount_sats} sats."),
-        qr_payload: format!(
-            "lnurl-auth://local-regtest/approval/{}",
-            approval.approval_id
-        ),
+        qr_payload,
         qr_kind: QrAuthorizationKind::SendSats,
         amount_sats: Some(amount_sats),
         status: if profile.user_auth_mode.is_mock() {
@@ -848,11 +971,32 @@ async fn authorize_trade_with_qr(
     };
     qr_prompt.set(Some(modal));
 
-    if !profile.user_auth_mode.is_mock() {
-        return Err(
-            "Real LNAuth approval is displayed, but wallet callback completion still needs Alby Go validation."
-                .to_string(),
-        );
+    if let Some(session) = real_lnauth_session {
+        let approved_session = wait_for_real_lnauth_session(
+            profile.lnauth_bridge_url.clone(),
+            session,
+            &mut qr_prompt,
+        )
+        .await?;
+        let login_fingerprint = profile
+            .player_identity
+            .as_ref()
+            .map(|identity| identity.linking_key_fingerprint.as_str());
+        let approval_fingerprint = approved_session
+            .player_identity
+            .as_ref()
+            .map(|identity| identity.linking_key_fingerprint.as_str());
+        if login_fingerprint != approval_fingerprint {
+            qr_prompt.set(None);
+            return Err(
+                "Wallet approval used a different LNAuth key than the logged-in player."
+                    .to_string(),
+            );
+        }
+
+        qr_prompt.set(None);
+        let approval = approve_transaction_approval(approval).await;
+        return Ok(Some(approval));
     }
 
     wait_for_mock_lnauth_auto_complete().await;
@@ -880,6 +1024,48 @@ async fn authorize_trade_with_qr(
     qr_prompt.set(None);
     let approval = approve_transaction_approval(approval).await;
     Ok(Some(approval))
+}
+
+async fn wait_for_real_lnauth_session(
+    bridge_url: String,
+    session: PlayerAuthSession,
+    qr_prompt: &mut Signal<Option<QrAuthorizationModal>>,
+) -> Result<PlayerAuthSession, String> {
+    for _ in 0..120 {
+        wait_for_real_lnauth_poll_interval().await;
+
+        if qr_prompt.peek().as_ref().is_some_and(|modal| {
+            modal.modal_id == session.session_id && modal.status == QrAuthorizationStatus::Canceled
+        }) {
+            qr_prompt.set(None);
+            return Err("Wallet approval was canceled. The trade was not sent.".to_string());
+        }
+
+        if !qr_prompt
+            .peek()
+            .as_ref()
+            .is_some_and(|modal| modal.modal_id == session.session_id)
+        {
+            return Err("Wallet approval did not complete. The trade was not sent.".to_string());
+        }
+
+        let latest =
+            get_real_player_auth_session(bridge_url.clone(), session.session_id.clone()).await?;
+        match latest.status {
+            AuthSessionStatus::Approved => return Ok(latest),
+            AuthSessionStatus::Expired => {
+                return Err("Wallet approval expired. The trade was not sent.".to_string());
+            }
+            AuthSessionStatus::Failed | AuthSessionStatus::Rejected => {
+                return Err(latest.failure_reason.unwrap_or_else(|| {
+                    "Wallet approval failed. The trade was not sent.".to_string()
+                }));
+            }
+            _ => {}
+        }
+    }
+
+    Err("Wallet approval did not complete before the local polling timeout.".to_string())
 }
 
 fn can_sell_item_to_current_npc(
@@ -1370,6 +1556,16 @@ async fn wait_for_mock_lnauth_auto_complete() {
         MOCK_LNAUTH_AUTO_COMPLETE_MS.into(),
     ))
     .await;
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn wait_for_real_lnauth_poll_interval() {
+    gloo_timers::future::TimeoutFuture::new(500).await;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn wait_for_real_lnauth_poll_interval() {
+    futures_timer::Delay::new(std::time::Duration::from_millis(500)).await;
 }
 
 #[cfg(target_arch = "wasm32")]
