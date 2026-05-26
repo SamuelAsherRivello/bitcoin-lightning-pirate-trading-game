@@ -17,13 +17,13 @@ The static web build is exported and hosted automatically with each push to the 
 ### Screenshot
 
 <a href="./documentation/images/screenshot01.png">
-  <img src="./documentation/images/screenshot01.png" width="500">
+  <img src="./documentation/images/screenshot01.png" width="600">
 </a>
 
 ### Infographic
 
 <a href="./documentation/images/infographic01.png">
-  <img src="./documentation/images/infographic01.png" width="500">
+  <img src="./documentation/images/infographic01.png" width="600">
 </a>
 
 <BR>
