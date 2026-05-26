@@ -2041,7 +2041,10 @@ fn is_retryable_polar_start_error(message: &str) -> bool {
 }
 
 fn bridge_step_error_message(_message: impl AsRef<str>) -> String {
-    "Error: Cannot connect to Polar, revisit 1. Environment step 04 for more info".to_string()
+    format!(
+        "Error: Cannot connect to Polar, revisit 1. {} for more info",
+        polar_wizard_step_label(PolarWizardStep::BridgeUrl)
+    )
 }
 
 fn push_toast(
@@ -2684,7 +2687,7 @@ mod tests {
 
         assert_eq!(
             message,
-            "Error: Cannot connect to Polar, revisit 1. Environment step 04 for more info"
+            "Error: Cannot connect to Polar, revisit 1. Bridge URLs for more info"
         );
     }
 

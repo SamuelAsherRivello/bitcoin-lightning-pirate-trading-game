@@ -106,6 +106,12 @@ pub fn format_mcp_error(tool: &str, error: &str) -> String {
         );
     }
 
+    if is_docker_desktop_linux_engine_unavailable_error(error) {
+        return format!(
+            "Polar MCP tool {tool} could not reach Docker Desktop's Linux engine. Start Docker Desktop, wait until it reports Docker is running, then retry this setup step. If Docker is already running, switch Docker Desktop to Linux containers and restart Polar."
+        );
+    }
+
     format!(
         "Polar MCP tool {tool} failed: {}",
         redact_sensitive_log_text(error)
@@ -238,6 +244,15 @@ fn is_sensitive_log_key(key: &str) -> bool {
 fn is_missing_mcp_helper_error(error: &str) -> bool {
     let normalized = error.to_ascii_lowercase();
     normalized.contains("enoent") && normalized.contains("no such file")
+}
+
+fn is_docker_desktop_linux_engine_unavailable_error(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("dockerdesktoplinuxengine")
+        && normalized.contains("docker api")
+        && (normalized.contains("daemon is running")
+            || normalized.contains("system cannot find the file specified")
+            || normalized.contains("cannot find the file specified"))
 }
 
 fn log_service_request(

@@ -68,6 +68,19 @@ fn connector_formats_missing_helper_error_with_recovery() {
 }
 
 #[test]
+fn connector_formats_missing_docker_engine_with_recovery() {
+    let message = format_mcp_error(
+        "start_node",
+        "failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine; check if the path is correct and if the daemon is running: open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.",
+    );
+
+    assert_eq!(
+        message,
+        "Polar MCP tool start_node could not reach Docker Desktop's Linux engine. Start Docker Desktop, wait until it reports Docker is running, then retry this setup step. If Docker is already running, switch Docker Desktop to Linux containers and restart Polar."
+    );
+}
+
+#[test]
 fn connector_redacts_sensitive_error_text() {
     assert_eq!(
         redact_sensitive_log_text("macaroon path C:\\secret\\admin.macaroon"),
