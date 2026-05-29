@@ -915,6 +915,8 @@ pub struct SetupProfile {
     pub polar_connection: PolarConnectionProfile,
     #[serde(default)]
     pub polar_automation: PolarAutomationProfile,
+    #[serde(default = "default_local_app_url_ready")]
+    pub local_app_url_ready: bool,
     #[serde(default)]
     pub polar_block_height_confirmed: bool,
     #[serde(default)]
@@ -943,6 +945,7 @@ impl Default for SetupProfile {
             lnauth_bridge_url: default_lnauth_bridge_url(),
             polar_connection: PolarConnectionProfile::default(),
             polar_automation: PolarAutomationProfile::default(),
+            local_app_url_ready: false,
             polar_block_height_confirmed: false,
             game_treasury_ready: false,
             game_treasury_funded_sats: 0,
@@ -954,6 +957,10 @@ impl Default for SetupProfile {
 
 fn default_lnauth_bridge_url() -> String {
     DEFAULT_LNAUTH_BRIDGE_URL.to_string()
+}
+
+fn default_local_app_url_ready() -> bool {
+    true
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1418,6 +1425,7 @@ mod tests {
         assert_eq!(profile.user_auth_mode, UserAuthMode::App);
         assert_eq!(profile.player_identity, None);
         assert_eq!(profile.last_auth_status, None);
+        assert!(profile.local_app_url_ready);
     }
 
     #[test]

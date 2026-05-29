@@ -27,6 +27,7 @@ const DELETE_NETWORK_ATTEMPTS: u8 = 4;
 const DELETE_NETWORK_STATUS_ATTEMPTS: u8 = 10;
 const DELETE_ALL_NETWORK_PASSES: u8 = 3;
 const TAPROOT_ASSETS_NODE_NAME: &str = "GAME_TAPROOT";
+const TAPROOT_ASSETS_LEGACY_NODE_NAMES: [&str; 3] = ["GAME_LND-tap", "GAME_TREASURY-tap", "tapd"];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TreasuryShellPolicy {
@@ -3082,6 +3083,18 @@ fn looks_like_removable_non_bitcoin_node(value: &Value) -> bool {
         return false;
     };
 
+    if map
+        .get("name")
+        .or_else(|| map.get("nodeName"))
+        .or_else(|| map.get("displayName"))
+        .or_else(|| map.get("alias"))
+        .and_then(Value::as_str)
+        .map(is_known_taproot_assets_node_name)
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
     let type_text = map
         .get("type")
         .or_else(|| map.get("implementation"))
@@ -3109,6 +3122,18 @@ fn looks_like_taproot_assets_node(value: &Value) -> bool {
         return false;
     };
 
+    if map
+        .get("name")
+        .or_else(|| map.get("nodeName"))
+        .or_else(|| map.get("displayName"))
+        .or_else(|| map.get("alias"))
+        .and_then(Value::as_str)
+        .map(is_known_taproot_assets_node_name)
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
     let type_text = map
         .get("type")
         .or_else(|| map.get("implementation"))
@@ -3118,6 +3143,13 @@ fn looks_like_taproot_assets_node(value: &Value) -> bool {
         .to_ascii_lowercase();
 
     type_text.contains("tap") || type_text.contains("taproot") || type_text.contains("litd")
+}
+
+fn is_known_taproot_assets_node_name(value: &str) -> bool {
+    value.eq_ignore_ascii_case(TAPROOT_ASSETS_NODE_NAME)
+        || TAPROOT_ASSETS_LEGACY_NODE_NAMES
+            .iter()
+            .any(|candidate| value.eq_ignore_ascii_case(candidate))
 }
 
 fn looks_like_bitcoin_node(value: &Value) -> bool {
@@ -5621,6 +5653,46 @@ mod tests {
             Some("GAME_LND-tap".to_string())
         );
         assert!(find_any_taproot_assets_node_name(&networks, "31").is_some());
+    }
+
+    #[test]
+    fn taproot_assets_node_finds_generated_name_without_type_metadata() {
+        let networks = json!({
+            "networks": [
+                {
+                    "id": 35,
+                    "name": "autopilot-1779139644401",
+                    "nodes": {
+                        "tap": [
+                            {
+                                "name": "GAME_LND-tap",
+                                "status": "Started"
+                            }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        assert_eq!(
+            find_any_taproot_assets_node_name(&networks, "35"),
+            Some("GAME_LND-tap".to_string())
+        );
+        assert_eq!(
+            any_node_status(&networks, "35", "GAME_LND-tap"),
+            Some("Started".to_string())
+        );
+        assert_eq!(
+            current_required_polar_node_names(&networks, "35"),
+            vec![
+                DEFAULT_BITCOIN_BACKEND_NAME.to_string(),
+                "GAME_LND".to_string(),
+                "Alice".to_string(),
+                "Bob".to_string(),
+                "Carol".to_string(),
+                "GAME_LND-tap".to_string(),
+            ]
+        );
     }
 
     #[test]
