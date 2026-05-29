@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 use url::form_urlencoded;
 
-const DEFAULT_BIND_ADDRESS: &str = "127.0.0.1";
+const DEFAULT_BIND_ADDRESS: &str = "0.0.0.0";
 const DEFAULT_PORT: u16 = 37374;
 const SESSION_TTL_MINUTES: i64 = 5;
 
@@ -76,6 +76,9 @@ fn main() {
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(DEFAULT_PORT);
+    let public_callback_base_url = env::var("LNAUTH_BRIDGE_PUBLIC_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
     let listen = format!("{bind_address}:{port}");
 
     let server = Server::http(&listen).unwrap_or_else(|error| {
@@ -84,15 +87,24 @@ fn main() {
     let sessions = Arc::new(Mutex::new(HashMap::new()));
 
     println!("LNAuth bridge listening at http://{listen}");
-    println!("Use the same LAN address in the Dioxus QR when scanning from a phone.");
+    if let Some(public_url) = &public_callback_base_url {
+        println!("LNAuth phone callback URL: {public_url}");
+    } else {
+        println!("LNAuth phone callback URL: auto-detecting this laptop's LAN address.");
+    }
 
     for request in server.incoming_requests() {
         let sessions = sessions.clone();
-        handle_request(request, sessions);
+        let public_callback_base_url = public_callback_base_url.clone();
+        handle_request(request, sessions, public_callback_base_url);
     }
 }
 
-fn handle_request(mut request: Request, sessions: Sessions) {
+fn handle_request(
+    mut request: Request,
+    sessions: Sessions,
+    public_callback_base_url: Option<String>,
+) {
     let method = request.method().clone();
     let url = request.url().to_string();
 
@@ -112,7 +124,7 @@ fn handle_request(mut request: Request, sessions: Sessions) {
             .as_reader()
             .read_to_string(&mut body)
             .map_err(|error| format!("Could not read request body: {error}"))
-            .and_then(|_| begin_session(&sessions, &body))
+            .and_then(|_| begin_session(&sessions, &body, public_callback_base_url.as_deref()))
     } else if method == Method::Get && url.starts_with("/api/lnauth/session/") {
         let session_id = url.trim_start_matches("/api/lnauth/session/");
         get_session(&sessions, session_id)
@@ -139,13 +151,12 @@ fn handle_request(mut request: Request, sessions: Sessions) {
 fn begin_session(
     sessions: &Sessions,
     body: &str,
+    public_callback_base_url: Option<&str>,
 ) -> Result<Response<std::io::Cursor<Vec<u8>>>, String> {
     let request: BeginSessionRequest =
         serde_json::from_str(body).map_err(|error| format!("Invalid JSON: {error}"))?;
-    let callback_base_url = request.callback_base_url.trim().trim_end_matches('/');
-    if !callback_base_url.starts_with("http://") && !callback_base_url.starts_with("https://") {
-        return Err("callback_base_url must start with http:// or https://".to_string());
-    }
+    let callback_base_url =
+        phone_callback_base_url(&request.callback_base_url, public_callback_base_url)?;
 
     let mut k1_bytes = [0_u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut k1_bytes);
@@ -154,7 +165,8 @@ fn begin_session(
     let suffix = now.timestamp_millis();
     let session_id = format!("player-auth-{suffix}");
     let callback_url = format!(
-        "{callback_base_url}/api/lnauth/callback?tag=login&k1={k1_hex}&action={}",
+        "{}/api/lnauth/callback?tag=login&k1={k1_hex}&action={}",
+        callback_base_url.trim_end_matches('/'),
         request.action.as_lnurl_action()
     );
     let lnurl = bech32::encode(
@@ -187,6 +199,74 @@ fn begin_session(
         .insert(session_id, session);
 
     Ok(json_response(StatusCode(201), &response))
+}
+
+fn phone_callback_base_url(
+    requested_callback_base_url: &str,
+    public_callback_base_url: Option<&str>,
+) -> Result<String, String> {
+    if let Some(public_url) = public_callback_base_url {
+        return validate_callback_base_url(public_url);
+    }
+
+    let requested = validate_callback_base_url(requested_callback_base_url)?;
+    if !uses_loopback_host(&requested) {
+        return Ok(requested);
+    }
+
+    let port = requested
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
+        .unwrap_or(DEFAULT_PORT);
+    let local_ip = detect_lan_ipv4().ok_or_else(|| {
+        "Could not auto-detect a LAN IPv4 address for phone LNAuth callbacks.".to_string()
+    })?;
+
+    Ok(format!("http://{local_ip}:{port}"))
+}
+
+fn validate_callback_base_url(callback_base_url: &str) -> Result<String, String> {
+    let trimmed = callback_base_url.trim().trim_end_matches('/');
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        return Err("callback_base_url must start with http:// or https://".to_string());
+    }
+    let without_scheme = trimmed
+        .strip_prefix("http://")
+        .or_else(|| trimmed.strip_prefix("https://"))
+        .unwrap_or(trimmed);
+    if without_scheme.contains('/') || without_scheme.contains('?') || without_scheme.contains('#')
+    {
+        return Err("callback_base_url must be an origin without a path or query.".to_string());
+    }
+    if !without_scheme
+        .rsplit_once(':')
+        .is_some_and(|(host, port)| !host.is_empty() && port.parse::<u16>().is_ok())
+    {
+        return Err("callback_base_url must include a host and port.".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn uses_loopback_host(callback_base_url: &str) -> bool {
+    let without_scheme = callback_base_url
+        .strip_prefix("http://")
+        .or_else(|| callback_base_url.strip_prefix("https://"))
+        .unwrap_or(callback_base_url);
+    without_scheme
+        .rsplit_once(':')
+        .map(|(host, _)| matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]"))
+        .unwrap_or(false)
+}
+
+fn detect_lan_ipv4() -> Option<std::net::Ipv4Addr> {
+    let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket
+        .connect((std::net::Ipv4Addr::new(8, 8, 8, 8), 80))
+        .ok()?;
+    match socket.local_addr().ok()?.ip() {
+        std::net::IpAddr::V4(ip) if !ip.is_loopback() => Some(ip),
+        _ => None,
+    }
 }
 
 fn get_session(
@@ -380,5 +460,29 @@ mod tests {
         let sig_hex = hex::encode(signature.serialize_der());
 
         assert!(verify_lnurl_auth_signature(&wrong_k1_hex, &key_hex, &sig_hex).is_err());
+    }
+
+    #[test]
+    fn public_callback_url_overrides_localhost_request_for_phone_qr() {
+        let callback =
+            phone_callback_base_url("http://localhost:37374", Some("http://192.168.1.50:37374"))
+                .expect("callback URL");
+
+        assert_eq!(callback, "http://192.168.1.50:37374");
+    }
+
+    #[test]
+    fn non_loopback_callback_url_is_kept() {
+        let callback =
+            phone_callback_base_url("http://192.168.1.51:37374", None).expect("callback URL");
+
+        assert_eq!(callback, "http://192.168.1.51:37374");
+    }
+
+    #[test]
+    fn loopback_detection_covers_localhost_and_ipv4() {
+        assert!(uses_loopback_host("http://localhost:37374"));
+        assert!(uses_loopback_host("http://127.0.0.1:37374"));
+        assert!(!uses_loopback_host("http://192.168.1.51:37374"));
     }
 }

@@ -11,13 +11,14 @@ use crate::client::components::toast::{
     wait_for_prompt_message_minimum, OperationPrompt, Toast, ToastTone,
 };
 use crate::client::models::{
-    ApprovalOperationKind, AuthAction, AuthSessionStatus, ConnectionStatus, DemoNode, DemoNodeId,
-    GameItemDefinition, LabState, NostrAuthorizationSession, NostrAuthorizationStatus,
-    NostrProfile, NostrProfileAction, NostrProfileError, PlayerAuthSession, QrAuthorizationKind,
-    QrAuthorizationModal, QrAuthorizationStatus, RouteStatus, SetupMode, SetupProfile, TraItem,
-    TraOwnershipStatus, TraTransferStatus, TradeRoute, TransactionApproval,
-    TransactionApprovalStatus, TransferTraRequest, DEFAULT_ROUTE_CAPACITY_SATS,
-    DEFAULT_SATS_PER_TRANSACTION, MAX_TRA_ITEMS_PER_NODE,
+    validate_nostr_username, ApprovalOperationKind, AuthAction, AuthSessionStatus,
+    ConnectionStatus, DemoNode, DemoNodeId, GameItemDefinition, LabState,
+    NostrAuthorizationSession, NostrAuthorizationStatus, NostrProfile, NostrProfileAction,
+    NostrProfileError, PlayerAuthSession, QrAuthorizationKind, QrAuthorizationModal,
+    QrAuthorizationStatus, RouteStatus, SetupMode, SetupProfile, TraItem, TraOwnershipStatus,
+    TraTransferStatus, TradeRoute, TransactionApproval, TransactionApprovalStatus,
+    TransferTraRequest, UserAuthMode, DEFAULT_ROUTE_CAPACITY_SATS, DEFAULT_SATS_PER_TRANSACTION,
+    MAX_TRA_ITEMS_PER_NODE,
 };
 use crate::client::services::lightning_server_functions::{
     approve_mock_player_auth_session, approve_transaction_approval, begin_player_auth,
@@ -36,17 +37,17 @@ use crate::client::services::nostr_profile_service::{
 };
 use crate::client::Route;
 
-const GAME_LEFT_BG: Asset = asset!("/assets/images/game/left-bg.svg");
-const GAME_DESERT_BG: Asset = asset!("/assets/images/game/right-bg.svg");
-const GAME_BLIZZARD_BG: Asset = asset!("/assets/images/game/blizzard-bg.svg");
-const GAME_JUNGLE_BG: Asset = asset!("/assets/images/game/jungle-bg.svg");
-const GAME_OCEAN_BG: Asset = asset!("/assets/images/game/ocean-bg.svg");
-const GAME_PLAYER: Asset = asset!("/assets/images/game/player.svg");
-const GAME_NPC: Asset = asset!("/assets/images/game/npc.svg");
-const GAME_NPC_ALT: Asset = asset!("/assets/images/game/npc-alt.svg");
-const GAME_PURSE: Asset = asset!("/assets/images/game/purse.svg");
-const GAME_CHANNEL: Asset = asset!("/assets/images/game/channel.svg");
-const GAME_CHANNEL_DOTTED: Asset = asset!("/assets/images/game/channel-dotted.svg");
+const GAME_LEFT_BG: Asset = asset!("/assets/images/game/left-bg.png");
+const GAME_DESERT_BG: Asset = asset!("/assets/images/game/right-bg.png");
+const GAME_BLIZZARD_BG: Asset = asset!("/assets/images/game/blizzard-bg.png");
+const GAME_JUNGLE_BG: Asset = asset!("/assets/images/game/jungle-bg.png");
+const GAME_OCEAN_BG: Asset = asset!("/assets/images/game/ocean-bg.png");
+const GAME_PLAYER: Asset = asset!("/assets/images/game/player.png");
+const GAME_NPC: Asset = asset!("/assets/images/game/npc.png");
+const GAME_NPC_ALT: Asset = asset!("/assets/images/game/npc-alt.png");
+const GAME_PURSE: Asset = asset!("/assets/images/game/purse.png");
+const GAME_CHANNEL: Asset = asset!("/assets/images/game/channel.png");
+const GAME_CHANNEL_DOTTED: Asset = asset!("/assets/images/game/channel-dotted.png");
 const MOCK_LNAUTH_AUTO_COMPLETE_MS: u32 = 3_000;
 const MOCK_LNAUTH_PROMPT_POLL_MS: u32 = 50;
 
@@ -135,7 +136,7 @@ pub fn PlayGame() -> Element {
     let mut location_index = use_signal(|| 0_usize);
     let mut play_game_refresh_status = use_signal(PlayGameRefreshStatus::default);
     let mut nostr_profile = use_signal(|| None::<NostrProfile>);
-    let mut nostr_profile_loaded = use_signal(|| false);
+    let mut nostr_profile_loaded_for = use_signal(|| None::<String>);
     let mut nostr_profile_status = use_signal(|| None::<String>);
     let mut show_profile_prompt = use_signal(|| false);
     let mut profile_username_draft = use_signal(String::new);
@@ -144,14 +145,23 @@ pub fn PlayGame() -> Element {
     let navigator = navigator();
 
     use_effect(move || {
-        if nostr_profile_loaded() {
+        let profile = setup_profile();
+        let Some(identity_public_key) = nostr_profile_identity_public_key(&profile) else {
+            if profile.user_auth_mode.requires_player_auth() {
+                nostr_profile.set(None);
+                nostr_profile_status.set(Some("Waiting for player identity.".to_string()));
+            }
+            return;
+        };
+        if nostr_profile_loaded_for.peek().as_deref() == Some(identity_public_key.as_str()) {
             return;
         }
-        nostr_profile_loaded.set(true);
+        nostr_profile_loaded_for.set(Some(identity_public_key.clone()));
         spawn(async move {
             match get_nostr_profile_summary(GetNostrProfileSummaryRequest {
                 preferred_relays: Vec::new(),
                 allow_local_snapshot: true,
+                identity_public_key: Some(identity_public_key),
             })
             .await
             {
@@ -732,6 +742,7 @@ pub fn PlayGame() -> Element {
                                 nostr_profile,
                                 nostr_profile_status,
                                 qr_authorization_prompt,
+                                setup_profile(),
                                 toast,
                                 toast_sequence,
                             )
@@ -1598,6 +1609,18 @@ async fn begin_operation_prompt(
     operation_id
 }
 
+fn nostr_profile_identity_public_key(profile: &SetupProfile) -> Option<String> {
+    match profile.user_auth_mode {
+        UserAuthMode::App => {
+            Some("0000000000000000000000000000000000000000000000000000000000000ace".to_string())
+        }
+        UserAuthMode::MockLnAuth | UserAuthMode::LnAuth => profile
+            .player_identity
+            .as_ref()
+            .map(|identity| identity.linking_key_fingerprint.clone()),
+    }
+}
+
 async fn submit_profile_name_from_prompt(
     username: String,
     mut profile_submit_pending: Signal<bool>,
@@ -1606,6 +1629,7 @@ async fn submit_profile_name_from_prompt(
     mut nostr_profile: Signal<Option<NostrProfile>>,
     mut nostr_profile_status: Signal<Option<String>>,
     mut qr_authorization_prompt: Signal<Option<QrAuthorizationModal>>,
+    setup_profile: SetupProfile,
     toast: Signal<Option<Toast>>,
     toast_sequence: Signal<u64>,
 ) {
@@ -1616,10 +1640,28 @@ async fn submit_profile_name_from_prompt(
     profile_submit_pending.set(true);
     profile_validation_error.set(None);
 
+    let username = match validate_nostr_username(&username) {
+        Ok(username) => username,
+        Err(error) => {
+            profile_validation_error.set(Some(profile_error_message(error)));
+            profile_submit_pending.set(false);
+            return;
+        }
+    };
+
+    let Some(identity_public_key) = nostr_profile_identity_public_key(&setup_profile) else {
+        profile_validation_error.set(Some(
+            "Complete player QR login before editing the Nostr profile.".to_string(),
+        ));
+        profile_submit_pending.set(false);
+        return;
+    };
+
     let authorization =
         match start_nostr_profile_authorization(StartNostrProfileAuthorizationRequest {
             action: NostrProfileAction::SetProfileName,
             draft_username: Some(username.clone()),
+            identity_public_key: Some(identity_public_key),
         })
         .await
         {
@@ -1631,23 +1673,14 @@ async fn submit_profile_name_from_prompt(
             }
         };
 
-    qr_authorization_prompt.set(Some(QrAuthorizationModal {
-        modal_id: authorization.session_id.clone(),
-        title: "Authorize Nostr profile".to_string(),
-        description:
-            "Scan this QR code with a Nostr identity signer to approve the profile name change."
-                .to_string(),
-        qr_payload: authorization.qr_payload.clone(),
-        qr_kind: QrAuthorizationKind::NostrProfile,
-        amount_sats: None,
-        status: QrAuthorizationStatus::MockCompleting,
-        can_cancel: true,
-        opened_at: chrono::Utc::now(),
-        auto_complete_after_ms: Some(MOCK_LNAUTH_AUTO_COMPLETE_MS.into()),
-    }));
+    let use_mock_nostr = should_mock_nostr_profile_authorization(setup_profile.user_auth_mode);
+    qr_authorization_prompt.set(Some(nostr_profile_authorization_modal(
+        &authorization,
+        use_mock_nostr,
+    )));
 
     let authorization =
-        wait_for_mock_nostr_authorization(qr_authorization_prompt, authorization).await;
+        wait_for_nostr_authorization(qr_authorization_prompt, authorization, use_mock_nostr).await;
     if authorization.status == NostrAuthorizationStatus::Canceled {
         let _ = cancel_nostr_profile_edit(CancelNostrProfileEditRequest {
             session_id: Some(authorization.session_id),
@@ -1661,6 +1694,16 @@ async fn submit_profile_name_from_prompt(
             "Nostr profile authorization canceled.",
             ToastTone::Info,
         );
+        return;
+    }
+    if authorization.status == NostrAuthorizationStatus::Expired {
+        let _ = cancel_nostr_profile_edit(CancelNostrProfileEditRequest {
+            session_id: Some(authorization.session_id),
+        })
+        .await;
+        profile_submit_pending.set(false);
+        profile_validation_error.set(Some("Nostr profile authorization timed out.".to_string()));
+        qr_authorization_prompt.set(None);
         return;
     }
 
@@ -1691,11 +1734,50 @@ async fn submit_profile_name_from_prompt(
     profile_submit_pending.set(false);
 }
 
-async fn wait_for_mock_nostr_authorization(
+fn should_mock_nostr_profile_authorization(user_auth_mode: UserAuthMode) -> bool {
+    matches!(user_auth_mode, UserAuthMode::App | UserAuthMode::MockLnAuth)
+}
+
+fn nostr_profile_authorization_modal(
+    authorization: &NostrAuthorizationSession,
+    use_mock_nostr: bool,
+) -> QrAuthorizationModal {
+    QrAuthorizationModal {
+        modal_id: authorization.session_id.clone(),
+        title: "Authorize Nostr profile".to_string(),
+        description:
+            "Scan this QR code with a Nostr identity signer to approve the profile name change."
+                .to_string(),
+        qr_payload: authorization.qr_payload.clone(),
+        qr_kind: QrAuthorizationKind::NostrProfile,
+        amount_sats: None,
+        status: if use_mock_nostr {
+            QrAuthorizationStatus::MockCompleting
+        } else {
+            QrAuthorizationStatus::Open
+        },
+        can_cancel: true,
+        opened_at: chrono::Utc::now(),
+        auto_complete_after_ms: use_mock_nostr.then_some(MOCK_LNAUTH_AUTO_COMPLETE_MS.into()),
+    }
+}
+
+async fn wait_for_nostr_authorization(
     qr_prompt: Signal<Option<QrAuthorizationModal>>,
     mut session: NostrAuthorizationSession,
+    use_mock_nostr: bool,
 ) -> NostrAuthorizationSession {
-    wait_for_mock_lnauth_auto_complete(qr_prompt, &session.session_id).await;
+    if use_mock_nostr {
+        wait_for_mock_lnauth_auto_complete(qr_prompt, &session.session_id).await;
+    } else {
+        for _ in 0..120 {
+            wait_for_real_lnauth_poll_interval().await;
+            if mock_lnauth_prompt_finished(qr_prompt, &session.session_id) {
+                break;
+            }
+        }
+    }
+
     match qr_prompt.peek().as_ref() {
         Some(modal)
             if modal.modal_id == session.session_id
@@ -1709,9 +1791,10 @@ async fn wait_for_mock_nostr_authorization(
         {
             session.status = NostrAuthorizationStatus::Approved;
         }
-        _ => {
+        _ if use_mock_nostr => {
             session.status = NostrAuthorizationStatus::Approved;
         }
+        _ => session.status = NostrAuthorizationStatus::Expired,
     }
     session.public_key = Some(session.public_key.unwrap_or_else(|| {
         "0000000000000000000000000000000000000000000000000000000000000ace".to_string()
@@ -2166,5 +2249,60 @@ mod tests {
             DemoNodeId::Bob,
             Some(&selected_player_item)
         ));
+    }
+
+    #[test]
+    fn nostr_profile_auth_mode_uses_mock_for_app_and_mock_lnauth_only() {
+        assert!(should_mock_nostr_profile_authorization(UserAuthMode::App));
+        assert!(should_mock_nostr_profile_authorization(
+            UserAuthMode::MockLnAuth
+        ));
+        assert!(!should_mock_nostr_profile_authorization(
+            UserAuthMode::LnAuth
+        ));
+    }
+
+    #[test]
+    fn nostr_profile_identity_waits_for_lnauth_player() {
+        let mut profile = SetupProfile {
+            user_auth_mode: UserAuthMode::LnAuth,
+            ..SetupProfile::default()
+        };
+
+        assert_eq!(nostr_profile_identity_public_key(&profile), None);
+
+        profile.player_identity = Some(crate::client::models::PlayerIdentity {
+            linking_key_fingerprint: "wallet-public-fingerprint".to_string(),
+            display_label: "LNAuth player".to_string(),
+            authenticated_at: chrono::Utc::now(),
+            last_seen_at: None,
+        });
+
+        assert_eq!(
+            nostr_profile_identity_public_key(&profile).as_deref(),
+            Some("wallet-public-fingerprint")
+        );
+    }
+
+    #[test]
+    fn nostr_profile_modal_keeps_lnauth_on_real_qr_path() {
+        let session = NostrAuthorizationSession {
+            session_id: "nostr-profile-test".to_string(),
+            action: NostrProfileAction::SetProfileName,
+            qr_payload: "nostr+profile://set-profile-name".to_string(),
+            status: NostrAuthorizationStatus::Pending,
+            public_key: None,
+            expires_at: chrono::Utc::now(),
+            last_error: None,
+        };
+
+        let real_modal = nostr_profile_authorization_modal(&session, false);
+        let mock_modal = nostr_profile_authorization_modal(&session, true);
+
+        assert_eq!(real_modal.qr_kind, QrAuthorizationKind::NostrProfile);
+        assert_eq!(real_modal.status, QrAuthorizationStatus::Open);
+        assert_eq!(real_modal.auto_complete_after_ms, None);
+        assert_eq!(mock_modal.status, QrAuthorizationStatus::MockCompleting);
+        assert!(mock_modal.auto_complete_after_ms.is_some());
     }
 }

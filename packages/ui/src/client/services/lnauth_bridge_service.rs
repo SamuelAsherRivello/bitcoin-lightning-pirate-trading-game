@@ -73,7 +73,7 @@ pub async fn test_lnauth_bridge_url(bridge_url: String) -> Result<(), String> {
 
 pub fn real_lnauth_bridge_hint() -> String {
     format!(
-        "Start the LNAuth bridge and serve the app on a phone-reachable LAN address. Example: .\\Scripts\\Common\\RunWeb.ps1 -Address <this laptop's Wi-Fi IPv4>. The bridge listens on port {LNAUTH_BRIDGE_PORT}."
+        "Start the LNAuth bridge with .\\Scripts\\Common\\RunWeb.ps1. The app may use localhost, and the bridge advertises a phone-reachable LAN callback on port {LNAUTH_BRIDGE_PORT} when a Wi-Fi IPv4 address is available."
     )
 }
 
@@ -119,7 +119,19 @@ fn normalize_bridge_url(bridge_url: &str) -> Result<String, String> {
         return Err("Use a valid LNAuth bridge host and port.".to_string());
     }
 
-    Ok(trimmed.to_string())
+    let scheme = if trimmed.starts_with("https://") {
+        "https"
+    } else {
+        "http"
+    };
+    let normalized_host =
+        if host.eq_ignore_ascii_case("localhost") || matches!(host, "::1" | "[::1]") {
+            "127.0.0.1"
+        } else {
+            host
+        };
+
+    Ok(format!("{scheme}://{normalized_host}:{port}"))
 }
 
 impl BridgeSessionResponse {
@@ -274,5 +286,13 @@ mod tests {
         assert!(!is_valid_lnauth_bridge_url(
             "http://192.168.15.51:37374/api/lnauth/health"
         ));
+    }
+
+    #[test]
+    fn normalizes_localhost_bridge_url_to_ipv4_loopback() {
+        assert_eq!(
+            normalize_bridge_url("http://localhost:37374").as_deref(),
+            Ok("http://127.0.0.1:37374")
+        );
     }
 }

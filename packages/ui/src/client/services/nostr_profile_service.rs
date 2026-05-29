@@ -16,6 +16,7 @@ const SESSION_TTL_SECONDS: i64 = 30;
 pub struct GetNostrProfileSummaryRequest {
     pub preferred_relays: Vec<String>,
     pub allow_local_snapshot: bool,
+    pub identity_public_key: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -30,6 +31,7 @@ pub struct GetNostrProfileSummaryResponse {
 pub struct StartNostrProfileAuthorizationRequest {
     pub action: NostrProfileAction,
     pub draft_username: Option<String>,
+    pub identity_public_key: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -63,11 +65,16 @@ pub struct CancelNostrProfileEditResponse {
 pub async fn get_nostr_profile_summary(
     request: GetNostrProfileSummaryRequest,
 ) -> Result<GetNostrProfileSummaryResponse, String> {
-    let profile = if request.allow_local_snapshot {
-        storage_service::load_nostr_profile_snapshot()
-    } else {
-        None
-    };
+    let profile = request
+        .allow_local_snapshot
+        .then(storage_service::load_nostr_profile_snapshot)
+        .flatten()
+        .filter(|profile| {
+            request
+                .identity_public_key
+                .as_ref()
+                .is_none_or(|public_key| profile.public_key == *public_key)
+        });
     let identity = profile.as_ref().map(identity_for_profile);
     let status_message = profile
         .as_ref()
@@ -92,6 +99,7 @@ pub async fn start_nostr_profile_authorization(
     let session_id = format!("nostr-profile-{}", now.timestamp_millis());
     let draft = request.draft_username.unwrap_or_default();
     let qr_payload = format!("nostr+profile://{action}?session={session_id}&name={draft}");
+    let public_key = request.identity_public_key;
 
     Ok(StartNostrProfileAuthorizationResponse {
         session: NostrAuthorizationSession {
@@ -99,7 +107,7 @@ pub async fn start_nostr_profile_authorization(
             action: request.action,
             qr_payload,
             status: NostrAuthorizationStatus::Pending,
-            public_key: None,
+            public_key,
             expires_at: now + Duration::seconds(SESSION_TTL_SECONDS),
             last_error: None,
         },
@@ -115,10 +123,7 @@ pub async fn submit_nostr_profile_name(
     {
         return Err(NostrProfileError::AuthorizationExpired);
     }
-    if !matches!(
-        request.session.status,
-        NostrAuthorizationStatus::Approved | NostrAuthorizationStatus::Pending
-    ) {
+    if !matches!(request.session.status, NostrAuthorizationStatus::Approved) {
         return Err(NostrProfileError::AuthorizationRequired);
     }
 
@@ -209,12 +214,14 @@ mod tests {
             StartNostrProfileAuthorizationRequest {
                 action: NostrProfileAction::SetProfileName,
                 draft_username: Some("alice".to_string()),
+                identity_public_key: Some("abcdef123456".to_string()),
             },
         ))
         .expect("authorization starts");
 
         assert!(response.session.qr_payload.starts_with("nostr+profile://"));
         assert_eq!(response.session.status, NostrAuthorizationStatus::Pending);
+        assert_eq!(response.session.public_key.as_deref(), Some("abcdef123456"));
     }
 
     #[test]
@@ -235,6 +242,43 @@ mod tests {
     }
 
     #[test]
+    fn profile_summary_is_scoped_to_current_identity() {
+        storage_service::clear_nostr_profile_snapshot();
+        let profile = NostrProfile {
+            public_key: "alice-key".to_string(),
+            username: Some("alice".to_string()),
+            source: NostrProfileSource::Mock,
+            publish_status: NostrProfilePublishStatus::Published,
+            updated_at: Some(Utc::now()),
+            relay_urls: Vec::new(),
+            last_error: None,
+        };
+        storage_service::save_nostr_profile_snapshot(&profile);
+
+        let matching =
+            futures::executor::block_on(get_nostr_profile_summary(GetNostrProfileSummaryRequest {
+                preferred_relays: Vec::new(),
+                allow_local_snapshot: true,
+                identity_public_key: Some("alice-key".to_string()),
+            }))
+            .expect("matching summary");
+        let switched =
+            futures::executor::block_on(get_nostr_profile_summary(GetNostrProfileSummaryRequest {
+                preferred_relays: Vec::new(),
+                allow_local_snapshot: true,
+                identity_public_key: Some("bob-key".to_string()),
+            }))
+            .expect("switched summary");
+
+        assert_eq!(
+            matching.profile.and_then(|profile| profile.username),
+            Some("alice".to_string())
+        );
+        assert!(switched.profile.is_none());
+        storage_service::clear_nostr_profile_snapshot();
+    }
+
+    #[test]
     fn submit_profile_name_rejects_expired_authorization() {
         let mut session = approved_session();
         session.expires_at = Utc::now() - Duration::seconds(1);
@@ -247,6 +291,21 @@ mod tests {
             }));
 
         assert_eq!(result, Err(NostrProfileError::AuthorizationExpired));
+    }
+
+    #[test]
+    fn submit_profile_name_rejects_pending_authorization() {
+        let mut session = approved_session();
+        session.status = NostrAuthorizationStatus::Pending;
+
+        let result =
+            futures::executor::block_on(submit_nostr_profile_name(SubmitNostrProfileNameRequest {
+                session,
+                username: "alice".to_string(),
+                preferred_relays: Vec::new(),
+            }));
+
+        assert_eq!(result, Err(NostrProfileError::AuthorizationRequired));
     }
 
     #[test]

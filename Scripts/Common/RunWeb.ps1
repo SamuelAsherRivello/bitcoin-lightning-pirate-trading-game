@@ -154,7 +154,7 @@ Write-Host "Starting web app."
 Write-Host "Laptop: $appUrl"
 if ($browserHost -eq "localhost") {
     Write-Host "Polar:  use this localhost URL when testing Polar Automation with http://localhost:37373."
-    Write-Host "LNAuth: phone scanning needs a LAN address. Restart with -Address <this laptop's Wi-Fi IPv4>."
+    Write-Host "LNAuth: app requests use IPv4 loopback; phone wallet callbacks use the LAN bridge URL printed below when available."
 } elseif ($bindAddress -eq $wifiAddress) {
     Write-Host "Phone:  http://$bindAddress`:$Port"
     Write-Host "LNAuth: phone wallet callbacks use http://$bindAddress`:$AuthBridgePort."
@@ -165,15 +165,63 @@ if ($browserHost -eq "localhost") {
 }
 Write-Host ""
 
-$env:LNAUTH_BRIDGE_ADDRESS = $bindAddress
+$lnauthBridgeAddress = "0.0.0.0"
+$lnauthPublicUrl = $null
+if ($wifiAddress) {
+    $lnauthPublicUrl = "http://$wifiAddress`:$AuthBridgePort"
+} else {
+    $lnauthPublicUrl = "http://$bindAddress`:$AuthBridgePort"
+}
+
+$env:LNAUTH_BRIDGE_ADDRESS = $lnauthBridgeAddress
 $env:LNAUTH_BRIDGE_PORT = "$AuthBridgePort"
-Write-Host "Starting LNAuth bridge at http://$bindAddress`:$AuthBridgePort."
+if ($wifiAddress) {
+    $env:LNAUTH_BRIDGE_PUBLIC_URL = $lnauthPublicUrl
+} else {
+    Remove-Item Env:\LNAUTH_BRIDGE_PUBLIC_URL -ErrorAction SilentlyContinue
+}
+Write-Host "Starting LNAuth bridge at http://$bindAddress`:$AuthBridgePort for app requests."
+if ($wifiAddress) {
+    Write-Host "LNAuth phone callbacks will use $lnauthPublicUrl."
+}
 Write-Host "Building LNAuth bridge..."
 cargo build -p lnauth-bridge
 $authBridgeExe = Join-Path $repoRootPath "target\debug\lnauth-bridge.exe"
-Start-Process -FilePath $authBridgeExe `
+$authBridgeOutLog = Join-Path $repoRootPath "target\lnauth-bridge.out.log"
+$authBridgeErrLog = Join-Path $repoRootPath "target\lnauth-bridge.err.log"
+$authBridgeProcess = Start-Process -FilePath $authBridgeExe `
     -WorkingDirectory $repoRootPath `
-    -WindowStyle Hidden | Out-Null
+    -WindowStyle Hidden `
+    -RedirectStandardOutput $authBridgeOutLog `
+    -RedirectStandardError $authBridgeErrLog `
+    -PassThru
+
+$lnauthBridgeHealthUrl = "http://127.0.0.1`:$AuthBridgePort/api/lnauth/health"
+$lnauthBridgeReady = $false
+for ($attempt = 0; $attempt -lt 20; $attempt += 1) {
+    if ($authBridgeProcess.HasExited) {
+        $stdout = Get-Content -Path $authBridgeOutLog -Raw -ErrorAction SilentlyContinue
+        $stderr = Get-Content -Path $authBridgeErrLog -Raw -ErrorAction SilentlyContinue
+        throw "LNAuth bridge exited before becoming healthy. stdout: $stdout stderr: $stderr"
+    }
+
+    try {
+        $health = Invoke-RestMethod -Uri $lnauthBridgeHealthUrl -TimeoutSec 2
+        if ($health.ok -eq $true) {
+            $lnauthBridgeReady = $true
+            Write-Host "LNAuth bridge health: OK at $lnauthBridgeHealthUrl."
+            break
+        }
+    } catch {
+        Start-Sleep -Milliseconds 300
+    }
+}
+
+if (-not $lnauthBridgeReady) {
+    $stdout = Get-Content -Path $authBridgeOutLog -Raw -ErrorAction SilentlyContinue
+    $stderr = Get-Content -Path $authBridgeErrLog -Raw -ErrorAction SilentlyContinue
+    throw "LNAuth bridge did not become healthy at $lnauthBridgeHealthUrl. stdout: $stdout stderr: $stderr"
+}
 
 if (-not $NoOpen) {
     Write-Host "Browser: will open $appUrl when the web server is ready."

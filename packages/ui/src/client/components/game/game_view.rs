@@ -495,8 +495,8 @@ fn inventory_slot_class(slot: &GameInventorySlot) -> &'static str {
     }
 }
 
-const GAME_BOOK: Asset = asset!("/assets/images/game/book.svg");
-const GAME_APPLE: Asset = asset!("/assets/images/game/apple.svg");
+const GAME_BOOK: Asset = asset!("/assets/images/game/book.png");
+const GAME_APPLE: Asset = asset!("/assets/images/game/apple.png");
 
 fn inventory_item_asset(visual_key: &str) -> Asset {
     match visual_key {

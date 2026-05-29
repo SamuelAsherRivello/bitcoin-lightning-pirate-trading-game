@@ -19,6 +19,9 @@ pub struct PolarLabRecovery {
     pub message: String,
 }
 
+const GAME_TREASURY_REQUIRED_MESSAGE: &str =
+    "Create and fund the Game Treasury before continuing setup.";
+
 pub async fn begin_player_auth(
     profile: SetupProfile,
     action: AuthAction,
@@ -281,6 +284,7 @@ where
 
 pub async fn prepare_user_node_sats(profile: SetupProfile) -> Result<LabState, String> {
     lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
+    require_game_treasury_ready(&profile)?;
     let mut profile = profile;
     let required_balance_sats = profile
         .sats_per_transaction
@@ -349,9 +353,7 @@ pub async fn prepare_game_treasury(profile: SetupProfile) -> Result<LabState, St
 
 pub async fn prepare_game_treasury_tras(profile: SetupProfile) -> Result<LabState, String> {
     lightning_service::validate_setup_profile(&profile).map_err(|error| error.to_string())?;
-    if !profile.game_treasury_ready {
-        return Err("Complete Game Treasury (Sats) before creating treasury TRAs.".to_string());
-    }
+    require_game_treasury_ready(&profile)?;
     let mut profile = profile;
     if let Some(mut state) = matching_setup_snapshot(&profile) {
         if setup_has_treasury_tras(&state) {
@@ -1283,6 +1285,16 @@ mod tests {
     }
 
     #[test]
+    fn game_treasury_guard_requires_treasury_before_continuing_setup() {
+        let mut profile = connected_profile();
+        profile.game_treasury_ready = false;
+
+        let error =
+            require_game_treasury_ready(&profile).expect_err("treasury should be required");
+        assert_eq!(error, GAME_TREASURY_REQUIRED_MESSAGE);
+    }
+
+    #[test]
     fn stale_refresh_result_does_not_replace_newer_open_route_snapshot() {
         let mut stale_refreshed = lightning_service::default_lab_state(connected_profile());
         stale_refreshed.local_revision = 1;
@@ -1517,4 +1529,12 @@ fn setup_successful_npc_transfer_count(
                 && transfer.status == TraTransferStatus::Succeeded
         })
         .count()
+}
+
+fn require_game_treasury_ready(profile: &SetupProfile) -> Result<(), String> {
+    if profile.game_treasury_ready {
+        Ok(())
+    } else {
+        Err(GAME_TREASURY_REQUIRED_MESSAGE.to_string())
+    }
 }
