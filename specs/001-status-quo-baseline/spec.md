@@ -1,4 +1,4 @@
-# Feature Specification: Dioxus Bitcoin Lightning Game Baseline
+# Feature Specification: Bitcoin Lightning Pirate Trading Game Baseline
 
 **Feature Branch**: `001-status-quo-baseline`  
 **Created**: 2026-04-30  

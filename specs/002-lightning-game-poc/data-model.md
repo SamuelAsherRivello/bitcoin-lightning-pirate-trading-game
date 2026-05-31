@@ -7,7 +7,7 @@ Represents learner-facing setup state.
 **Fields**:
 
 - `sats_per_transaction`: Whole number, default `1,000`, valid range `1..=100,000`.
-- `network_name`: Expected Polar network name, default `Dioxus Bitcoin Lightning Game`.
+- `network_name`: Expected Polar network name, default `Bitcoin Lightning Pirate Trading Game`.
 - `setup_mode`: `ServerConfig` for the visible `Polar Connection (Networked)` tab or `BrowserRegtestOnly` for the visible `Mock Connection (Offline)` tab.
 - `polar_automation`: UI-entered Polar bridge URL plus app-discovered Polar network and Bitcoin backend values.
 - `polar_block_height_confirmed`: Whether the learner has accepted or edited the Polar Setup `Block Height` row before final unlock.

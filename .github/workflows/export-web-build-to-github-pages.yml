@@ -64,7 +64,7 @@ jobs:
         run: cargo install dioxus-cli --version 0.7.6 --locked
 
       - name: Build web app
-        run: dx build --package web --platform web --release --base-path dioxus-bitcoin-lightning-game
+        run: dx build --package web --platform web --release --base-path bitcoin-lightning-pirate-trading-game
 
       - name: Prepare Pages artifact
         shell: bash
@@ -74,8 +74,8 @@ jobs:
           cp -a target/dx/web/release/web/public/. pages/
           cp pages/index.html pages/404.html
           touch pages/.nojekyll
-          grep -q "Dioxus Bitcoin Lightning Game" pages/index.html
-          grep -q "/dioxus-bitcoin-lightning-game/assets/web-" pages/index.html
+          grep -q "Bitcoin Lightning Pirate Trading Game" pages/index.html
+          grep -q "/bitcoin-lightning-pirate-trading-game/assets/web-" pages/index.html
           find pages/assets -maxdepth 1 -name 'web_bg-*.wasm' -print -quit | grep -q .
 
       - name: Upload Pages artifact

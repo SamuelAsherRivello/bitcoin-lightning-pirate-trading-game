@@ -91,7 +91,7 @@ pub fn Page01() -> Element {
             }
             a {
                 class: "template-page__readme-link",
-                href: "https://github.com/SamuelAsherRivello/dioxus-bitcoin-lightning-game#readme",
+                href: "https://github.com/SamuelAsherRivello/bitcoin-lightning-pirate-trading-game#readme",
                 target: "_blank",
                 rel: "noopener noreferrer",
                 {t!("readme-details-link")}

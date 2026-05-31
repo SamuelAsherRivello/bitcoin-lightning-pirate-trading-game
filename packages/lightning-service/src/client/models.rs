@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_NETWORK_NAME: &str = "Dioxus Bitcoin Lightning Game";
+pub const DEFAULT_NETWORK_NAME: &str = "Bitcoin Lightning Pirate Trading Game";
 pub const DEFAULT_BITCOIN_BACKEND_NAME: &str = "BITCOIN_TESTNET";
 pub const DEFAULT_SATS_PER_TRANSACTION: u64 = 1_000;
 pub const MAX_SATS_PER_TRANSACTION: u64 = 100_000;

@@ -1,4 +1,4 @@
-# Dioxus Bitcoin Lightning Game
+# Bitcoin Lightning Pirate Trading Game
 
 Reusable Dioxus 0.7 workspace template with a shared UI crate, separate web and desktop entrypoints, three routed pages, localization, theme persistence, toast status feedback, and a small local data-cache example.
 
@@ -6,7 +6,7 @@ Reusable Dioxus 0.7 workspace template with a shared UI crate, separate web and 
 
 ## Live Web App
 
-https://samuelasherrivello.github.io/dioxus-bitcoin-lightning-game/
+https://samuelasherrivello.github.io/bitcoin-lightning-pirate-trading-game/
 
 The static web build is exported and hosted automatically with each push to the main branch.
 

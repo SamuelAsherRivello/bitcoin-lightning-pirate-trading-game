@@ -129,7 +129,7 @@ mod tests {
 
     fn valid_profile() -> ServerLabProfile {
         ServerLabProfile {
-            network_name: "Dioxus Bitcoin Lightning Game".to_string(),
+            network_name: "Bitcoin Lightning Pirate Trading Game".to_string(),
             nodes: DemoNodeId::ALL
                 .into_iter()
                 .enumerate()

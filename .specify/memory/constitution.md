@@ -1,4 +1,4 @@
-# Dioxus Bitcoin Lightning Game Constitution
+# Bitcoin Lightning Pirate Trading Game Constitution
 
 ## Core Principles
 

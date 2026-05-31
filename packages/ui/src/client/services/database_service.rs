@@ -46,7 +46,7 @@ mod tests {
     #[test]
     fn create_database_if_missing_seeds_once_without_overwriting_existing_data() {
         let _guard = CurrentDirGuard::move_to_workspace_root();
-        let database_path = PathBuf::from("data").join("dioxus-bitcoin-lightning-game.sqlite");
+        let database_path = PathBuf::from("data").join("bitcoin-lightning-pirate-trading-game.sqlite");
 
         if database_path.exists() {
             fs::remove_file(&database_path).expect("remove generated template database");
@@ -213,7 +213,7 @@ mod platform {
 
         Ok(root
             .join("data")
-            .join("dioxus-bitcoin-lightning-game.sqlite"))
+            .join("bitcoin-lightning-pirate-trading-game.sqlite"))
     }
 
     fn create_schema(connection: &Connection) -> Result<(), String> {
