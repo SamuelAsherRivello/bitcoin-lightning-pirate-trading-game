@@ -10,9 +10,9 @@
 - Hosted LND provider: Useful later, but requires account setup and creates real credential risk earlier than needed.
 - WSL2 hand-built LND/Bitcoin Core: Educational, but slower and less appropriate for a pretty Dioxus app POC.
 
-## Decision: Use LND Nodes Alice, Bob, And Carol
+## Decision: Use LND Nodes Jack, Bob, And Carol
 
-**Rationale**: The user already created a Polar network using LND. LND has a broad API surface, common node-manager compatibility, and practical docs. Three nodes support the teaching model: Alice as player, Bob as Beach merchant, Carol as Mountain merchant.
+**Rationale**: The user already created a Polar network using LND. LND has a broad API surface, common node-manager compatibility, and practical docs. Three nodes support the teaching model: Jack as player, Bob as Beach merchant, Carol as Mountain merchant.
 
 **Alternatives considered**:
 
@@ -65,7 +65,7 @@ The crate can normalize LND details into app operations: test setup, open trade 
 
 ## Decision: Use "Trade Route" As The Channel Analogy
 
-**Rationale**: A channel is between nodes/personas, not places. "Trade Route: Alice <-> Bob" keeps the game language readable while preserving the person-to-person node relationship.
+**Rationale**: A channel is between nodes/personas, not places. "Trade Route: Jack <-> Bob" keeps the game language readable while preserving the person-to-person node relationship.
 
 **Alternatives considered**:
 

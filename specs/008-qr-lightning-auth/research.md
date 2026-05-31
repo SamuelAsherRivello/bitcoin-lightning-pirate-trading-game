@@ -50,7 +50,7 @@ The resulting Polar order is `Bridge URL`, `Server Name`, `Create Nodes`, `Game 
 
 ## Decision: Keep external player wallet separate from Polar lab nodes
 
-**Rationale**: The player's real wallet should not need to exist in Polar. Polar is a fake/local lab backend for creating Alice, Bob, Carol, Game Treasury, channels, regtest invoices/payments, and TRA state. `LNAuth` should use the external wallet only for identity and approval signatures. In local/regtest mode, QR approval for a sats send means "I authorize the app to perform this Polar lab payment on my behalf", not "my production wallet pays this regtest invoice."
+**Rationale**: The player's real wallet should not need to exist in Polar. Polar is a fake/local lab backend for creating Jack, Bob, Carol, Game Treasury, channels, regtest invoices/payments, and TRA state. `LNAuth` should use the external wallet only for identity and approval signatures. In local/regtest mode, QR approval for a sats send means "I authorize the app to perform this Polar lab payment on my behalf", not "my production wallet pays this regtest invoice."
 
 **Alternatives considered**:
 

@@ -107,7 +107,7 @@ Required Polar node names are exact and case-sensitive in app requests:
 - `BITCOIN_TESTNET`: the Polar Bitcoin backend / bitcoind node.
 - `GAME_LND`: the Game Treasury LND node.
 - `GAME_TAPROOT`: the Taproot Assets node attached to `GAME_LND` and `BITCOIN_TESTNET`.
-- `Alice`: the player LND node.
+- `Jack`: the player LND node.
 - `Bob`: NPC LND node 1.
 - `Carol`: NPC LND node 2.
 

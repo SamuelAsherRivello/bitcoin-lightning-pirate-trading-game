@@ -86,14 +86,14 @@ fn connector_sanitizes_sensitive_json_keys() {
         "macaroonPath": "C:\\secret\\admin.macaroon",
         "nested": {
             "tlsCert": "cert-body",
-            "name": "Alice"
+            "name": "Jack"
         }
     });
     let sanitized = sanitized_log_value(&value);
 
     assert_eq!(sanitized["macaroonPath"], "[redacted]");
     assert_eq!(sanitized["nested"]["tlsCert"], "[redacted]");
-    assert_eq!(sanitized["nested"]["name"], "Alice");
+    assert_eq!(sanitized["nested"]["name"], "Jack");
 }
 
 #[test]

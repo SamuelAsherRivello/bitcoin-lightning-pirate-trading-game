@@ -125,7 +125,7 @@ Play Game must render:
 
 - Group label: `Profile`
 - Button label when no name exists: `Set Name ()`
-- Button label when name exists: `Set Name (alice)`
+- Button label when name exists: `Set Name (jack)`
 - Prompt label: `username:`
 - Prompt buttons: `Submit`, `Cancel`
 

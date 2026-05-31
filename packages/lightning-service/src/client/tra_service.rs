@@ -717,12 +717,12 @@ mod tests {
             TransferTraRequest {
                 tra_id,
                 from_node: DemoNodeId::Bob,
-                to_node: DemoNodeId::Alice,
+                to_node: DemoNodeId::Jack,
             },
         )
         .expect("transfer TRA");
 
-        assert_eq!(state.tra_items[0].owner_node, DemoNodeId::Alice);
+        assert_eq!(state.tra_items[0].owner_node, DemoNodeId::Jack);
         assert_eq!(
             state.tra_items[0].transfer_status,
             TraTransferStatus::Succeeded
@@ -792,7 +792,7 @@ mod tests {
             TransferTraRequest {
                 tra_id,
                 from_node: DemoNodeId::Carol,
-                to_node: DemoNodeId::Alice,
+                to_node: DemoNodeId::Jack,
             },
         )
         .expect_err("owner mismatch should fail");

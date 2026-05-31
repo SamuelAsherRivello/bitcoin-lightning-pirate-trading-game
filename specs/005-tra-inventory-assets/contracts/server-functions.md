@@ -159,7 +159,7 @@ Buy item flow:
 
 Sell item flow:
 
-1. Select a concrete Alice-owned `TraItem` from `LabState.tra_items`.
+1. Select a concrete Jack-owned `TraItem` from `LabState.tra_items`.
 2. Reject the action unless the selected item is `Verified`, has a supported `item_id`, and the NPC has an empty inventory slot.
 3. Resolve the item price and visuals from the game catalog using the selected item's `item_id`.
 4. Create/pay Lightning invoice from player for the selected item's catalog price.

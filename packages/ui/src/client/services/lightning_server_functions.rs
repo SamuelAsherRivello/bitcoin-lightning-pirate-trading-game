@@ -758,7 +758,7 @@ pub async fn open_trade_route(
     let state = get_lab_state(profile).await?;
     let route_capacity_sats = state.profile.sats_per_transaction.saturating_mul(3);
     let state =
-        lightning_service::open_trade_route(state, DemoNodeId::Alice, to_node, route_capacity_sats)
+        lightning_service::open_trade_route(state, DemoNodeId::Jack, to_node, route_capacity_sats)
             .map_err(|error| error.to_string())?;
     let state = save_mutated_lab_state_snapshot(state);
     Ok(state)
@@ -769,7 +769,7 @@ pub async fn close_trade_route(
     to_node: DemoNodeId,
 ) -> Result<LabState, String> {
     let state = get_lab_state(profile).await?;
-    let state = lightning_service::close_trade_route(state, DemoNodeId::Alice, to_node)
+    let state = lightning_service::close_trade_route(state, DemoNodeId::Jack, to_node)
         .map_err(|error| error.to_string())?;
     let state = save_mutated_lab_state_snapshot(state);
     Ok(state)
@@ -1080,7 +1080,7 @@ fn recovery_message(issue: &PolarLabHealthIssue) -> String {
         }
         PolarLabHealthIssue::DemoNodeMissing { node_id, .. } => {
             format!(
-                "Polar demo node {} is missing. Recreate Alice, Bob, and Carol in Set Up.",
+                "Polar demo node {} is missing. Recreate Jack, Bob, and Carol in Set Up.",
                 node_id.label()
             )
         }
@@ -1153,7 +1153,7 @@ mod tests {
             connected_profile(),
             PolarLabHealthIssue::DemoNodeMissing {
                 network_id: "1".to_string(),
-                node_id: DemoNodeId::Alice,
+                node_id: DemoNodeId::Jack,
             },
         );
 
@@ -1301,7 +1301,7 @@ mod tests {
         let mut current = stale_refreshed.clone();
         current = lightning_service::open_trade_route(
             current,
-            DemoNodeId::Alice,
+            DemoNodeId::Jack,
             DemoNodeId::Bob,
             DEFAULT_ROUTE_CAPACITY_SATS,
         )

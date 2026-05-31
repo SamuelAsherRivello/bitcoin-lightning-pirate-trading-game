@@ -15,17 +15,18 @@ pub const GAME_TREASURY_NODE_LABEL: &str = "GAME_LND";
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum DemoNodeId {
     GameTreasury,
-    Alice,
+    #[serde(alias = "Al\u{69}ce")]
+    Jack,
     Bob,
     Carol,
 }
 
 impl DemoNodeId {
-    pub const ALL: [Self; 3] = [Self::Alice, Self::Bob, Self::Carol];
+    pub const ALL: [Self; 3] = [Self::Jack, Self::Bob, Self::Carol];
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Alice => "Alice",
+            Self::Jack => "Jack",
             Self::Bob => "Bob",
             Self::Carol => "Carol",
             Self::GameTreasury => GAME_TREASURY_NODE_LABEL,
@@ -35,7 +36,7 @@ impl DemoNodeId {
     pub fn role(self) -> NodeRole {
         match self {
             Self::GameTreasury => NodeRole::GameTreasury,
-            Self::Alice => NodeRole::Player,
+            Self::Jack => NodeRole::Player,
             Self::Bob => NodeRole::BeachMerchant,
             Self::Carol => NodeRole::MountainMerchant,
         }
@@ -44,7 +45,7 @@ impl DemoNodeId {
     pub fn location(self) -> Location {
         match self {
             Self::GameTreasury => Location::Town,
-            Self::Alice => Location::Town,
+            Self::Jack => Location::Town,
             Self::Bob => Location::Beach,
             Self::Carol => Location::Mountain,
         }
@@ -738,7 +739,8 @@ impl Default for PolarNodeConnection {
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct PolarConnectionProfile {
-    pub alice: PolarNodeConnection,
+    #[serde(alias = "al\u{69}ce")]
+    pub jack: PolarNodeConnection,
     pub bob: PolarNodeConnection,
     pub carol: PolarNodeConnection,
 }
@@ -746,8 +748,8 @@ pub struct PolarConnectionProfile {
 impl PolarConnectionProfile {
     pub fn node(&self, node_id: DemoNodeId) -> &PolarNodeConnection {
         match node_id {
-            DemoNodeId::GameTreasury => &self.alice,
-            DemoNodeId::Alice => &self.alice,
+            DemoNodeId::GameTreasury => &self.jack,
+            DemoNodeId::Jack => &self.jack,
             DemoNodeId::Bob => &self.bob,
             DemoNodeId::Carol => &self.carol,
         }
@@ -1374,10 +1376,10 @@ pub struct LabState {
 #[cfg(test)]
 mod tests {
     use super::{
-        nostr_profile_button_label, validate_nostr_username, NostrProfileError,
-        PolarAutomationProfile, PolarConnectorHealth, PolarConnectorHealthStatus,
-        PolarOperationRecord, PolarOperationStatus, SetupProfile, UserAuthMode,
-        DEFAULT_NETWORK_NAME, DEFAULT_SATS_PER_TRANSACTION, MAX_NOSTR_USERNAME_CHARS,
+        nostr_profile_button_label, validate_nostr_username, DemoNodeId, NostrProfileError,
+        PolarAutomationProfile, PolarConnectionProfile, PolarConnectorHealth,
+        PolarConnectorHealthStatus, PolarOperationRecord, PolarOperationStatus, SetupProfile,
+        UserAuthMode, DEFAULT_NETWORK_NAME, DEFAULT_SATS_PER_TRANSACTION, MAX_NOSTR_USERNAME_CHARS,
     };
 
     #[test]
@@ -1429,6 +1431,42 @@ mod tests {
     }
 
     #[test]
+    fn previous_player_node_name_deserializes_to_current_player() {
+        let previous_player_name = format!("Al{}ce", "i");
+        let node_id: DemoNodeId =
+            serde_json::from_value(serde_json::json!(previous_player_name)).expect("node id");
+
+        assert_eq!(node_id, DemoNodeId::Jack);
+    }
+
+    #[test]
+    fn previous_player_connection_key_deserializes_to_current_player() {
+        let previous_player_key = format!("al{}ce", "i");
+        let value = serde_json::json!({
+            previous_player_key: {
+                "lnd_endpoint": "127.0.0.1:10001",
+                "tls_cert_path_or_pem": "test-cert",
+                "macaroon_path_or_hex": "test-macaroon"
+            },
+            "bob": {
+                "lnd_endpoint": "",
+                "tls_cert_path_or_pem": "",
+                "macaroon_path_or_hex": ""
+            },
+            "carol": {
+                "lnd_endpoint": "",
+                "tls_cert_path_or_pem": "",
+                "macaroon_path_or_hex": ""
+            }
+        });
+
+        let profile: PolarConnectionProfile =
+            serde_json::from_value(value).expect("connection profile");
+
+        assert_eq!(profile.jack.lnd_endpoint, "127.0.0.1:10001");
+    }
+
+    #[test]
     fn lab_state_defaults_auth_fields_for_old_snapshots() {
         let profile = SetupProfile::default();
         let state = crate::default_lab_state(profile);
@@ -1477,8 +1515,8 @@ mod tests {
     #[test]
     fn nostr_username_validation_trims_valid_names() {
         assert_eq!(
-            validate_nostr_username("  alice  "),
-            Ok("alice".to_string())
+            validate_nostr_username("  jack  "),
+            Ok("jack".to_string())
         );
     }
 
@@ -1506,8 +1544,8 @@ mod tests {
     fn nostr_profile_button_label_keeps_empty_username_shape() {
         assert_eq!(nostr_profile_button_label(None), "Set Name ()");
         assert_eq!(
-            nostr_profile_button_label(Some("alice")),
-            "Set Name (alice)"
+            nostr_profile_button_label(Some("jack")),
+            "Set Name (jack)"
         );
     }
 

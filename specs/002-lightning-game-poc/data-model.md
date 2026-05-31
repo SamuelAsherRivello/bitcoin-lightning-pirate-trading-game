@@ -17,7 +17,7 @@ Represents learner-facing setup state.
 **Validation**:
 
 - Transaction amount must be a positive whole number within the demo range.
-- Setup is complete only when the app has created Alice, Bob, and Carol or mock mode is connected.
+- Setup is complete only when the app has created Jack, Bob, and Carol or mock mode is connected.
 - Polar Connection setup requires the learner to confirm a whole-number Block Height before final unlock; `0` is valid and sets the app's initial lab baseline without rewinding Polar's actual chain.
 - Mock Connection mode must show fake offline-data messaging and must not require credential acknowledgement.
 - Polar Connection mode must include a local bridge URL. The app ensures the named Polar server exists through the bridge, discovers the Bitcoin backend when possible, and falls back to the `My Bitcoin Node` backend convention.
@@ -49,7 +49,7 @@ Represents credential-bearing connection data for one LND node. This is retained
 
 **Fields**:
 
-- `node_id`: `Alice`, `Bob`, or `Carol`.
+- `node_id`: `Jack`, `Bob`, or `Carol`.
 - `display_name`: Human-readable node name.
 - `lnd_endpoint`: gRPC endpoint for the Polar LND node.
 - `tls_cert_path_or_pem`: TLS certificate reference or content.
@@ -70,7 +70,7 @@ Represents a node/persona shown in the UI.
 
 **Fields**:
 
-- `node_id`: `Alice`, `Bob`, or `Carol`.
+- `node_id`: `Jack`, `Bob`, or `Carol`.
 - `role`: Player, BeachMerchant, or MountainMerchant.
 - `location`: Town, Beach, Mountain, or Desert.
 - `alias`: LND node alias if available.
@@ -88,7 +88,7 @@ Game-facing representation of a Lightning channel.
 - `route_id`: Stable app id for a node pair.
 - `from_node`: Node id.
 - `to_node`: Node id.
-- `game_label`: Example `Alice to Bob trade route`.
+- `game_label`: Example `Jack to Bob trade route`.
 - `lnd_channel_point`: Optional channel point when known.
 - `capacity_sats`: Channel capacity.
 - `local_balance_sats`: Local balance from the perspective of the left node.

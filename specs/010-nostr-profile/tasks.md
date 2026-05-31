@@ -48,7 +48,7 @@
 
 **Goal**: A player can open the Play Game Profile group, authorize with a Nostr identity, submit a username, and see the button update without adding a game profile database.
 
-**Independent Test**: Start with no profile name, select `Set Name ()`, complete Nostr QR authorization, submit `alice`, and confirm Play Game shows `Set Name (alice)` while cancel, invalid input, auth failure, auth timeout, and publish failure preserve the previous username.
+**Independent Test**: Start with no profile name, select `Set Name ()`, complete Nostr QR authorization, submit `jack`, and confirm Play Game shows `Set Name (jack)` while cancel, invalid input, auth failure, auth timeout, and publish failure preserve the previous username.
 
 ### Tests for User Story 1
 

@@ -413,7 +413,7 @@ fn required_polar_node_names() -> [&'static str; 6] {
         DEFAULT_BITCOIN_BACKEND_NAME,
         polar_node_name(DemoNodeId::GameTreasury),
         TAPROOT_ASSETS_NODE_NAME,
-        polar_node_name(DemoNodeId::Alice),
+        polar_node_name(DemoNodeId::Jack),
         polar_node_name(DemoNodeId::Bob),
         polar_node_name(DemoNodeId::Carol),
     ]
@@ -423,7 +423,7 @@ fn required_polar_base_node_names() -> [&'static str; 5] {
     [
         DEFAULT_BITCOIN_BACKEND_NAME,
         polar_node_name(DemoNodeId::GameTreasury),
-        polar_node_name(DemoNodeId::Alice),
+        polar_node_name(DemoNodeId::Jack),
         polar_node_name(DemoNodeId::Bob),
         polar_node_name(DemoNodeId::Carol),
     ]
@@ -840,7 +840,7 @@ pub async fn destroy_demo_nodes(
     let resolved_profile = resolve_started_automation_profile(profile).await?;
     let network_id = clean_network_id(&resolved_profile);
 
-    for node_id in [DemoNodeId::Carol, DemoNodeId::Bob, DemoNodeId::Alice] {
+    for node_id in [DemoNodeId::Carol, DemoNodeId::Bob, DemoNodeId::Jack] {
         remove_demo_node_by_name(&resolved_profile, &network_id, polar_node_name(node_id)).await?;
     }
 
@@ -1636,8 +1636,8 @@ async fn ensure_game_treasury_node_shell(
         return Ok(false);
     }
 
-    if let Some(alice_name) = find_reclaimable_default_alice_node(&networks, network_id) {
-        rename_demo_node(profile, network_id, &alice_name, desired_name).await?;
+    if let Some(jack_name) = find_reclaimable_default_jack_node(&networks, network_id) {
+        rename_demo_node(profile, network_id, &jack_name, desired_name).await?;
         return Ok(true);
     }
 
@@ -2486,7 +2486,7 @@ fn network_id_argument(network_id: &str) -> Value {
 
 #[allow(dead_code)]
 fn wallet_balance_matches_app_rules(balance: u64, required_balance_sats: u64) -> bool {
-    node_wallet_balance_matches_app_rules(DemoNodeId::Alice, balance, required_balance_sats)
+    node_wallet_balance_matches_app_rules(DemoNodeId::Jack, balance, required_balance_sats)
 }
 
 fn node_wallet_balance_matches_app_rules(
@@ -2498,7 +2498,7 @@ fn node_wallet_balance_matches_app_rules(
         DemoNodeId::GameTreasury => {
             balance >= demo_node_funding_target(node_id, required_balance_sats)
         }
-        DemoNodeId::Alice | DemoNodeId::Bob | DemoNodeId::Carol => {
+        DemoNodeId::Jack | DemoNodeId::Bob | DemoNodeId::Carol => {
             balance == demo_node_funding_target(node_id, required_balance_sats)
         }
     }
@@ -2560,14 +2560,14 @@ fn is_retryable_node_start_request_error(message: &str) -> bool {
 fn demo_node_funding_target(node_id: DemoNodeId, required_balance_sats: u64) -> u64 {
     match node_id {
         DemoNodeId::GameTreasury => DEMO_NODE_FUNDING_SATS.max(required_balance_sats),
-        DemoNodeId::Alice | DemoNodeId::Bob | DemoNodeId::Carol => DEMO_NODE_FUNDING_SATS,
+        DemoNodeId::Jack | DemoNodeId::Bob | DemoNodeId::Carol => DEMO_NODE_FUNDING_SATS,
     }
 }
 
 fn ready_attempts_for_node(node_id: DemoNodeId) -> u16 {
     match node_id {
         DemoNodeId::GameTreasury => GAME_TREASURY_READY_ATTEMPTS,
-        DemoNodeId::Alice | DemoNodeId::Bob | DemoNodeId::Carol => DEMO_NODE_READY_ATTEMPTS,
+        DemoNodeId::Jack | DemoNodeId::Bob | DemoNodeId::Carol => DEMO_NODE_READY_ATTEMPTS,
     }
 }
 
@@ -2583,7 +2583,7 @@ fn game_treasury_missing_message() -> String {
     )
 }
 
-fn find_reclaimable_default_alice_node(value: &Value, network_id: &str) -> Option<String> {
+fn find_reclaimable_default_jack_node(value: &Value, network_id: &str) -> Option<String> {
     let node_names: Vec<String> = lightning_node_summaries(value, network_id)
         .into_iter()
         .filter_map(|node| node.name)
@@ -2605,7 +2605,7 @@ fn find_reclaimable_default_alice_node(value: &Value, network_id: &str) -> Optio
 
     node_names
         .into_iter()
-        .find(|name| name.eq_ignore_ascii_case("Alice"))
+        .find(|name| name.eq_ignore_ascii_case("Jack"))
 }
 
 fn extract_channel_points(value: &Value) -> Vec<String> {
@@ -3657,7 +3657,7 @@ fn clean_backend_name(profile: &PolarAutomationProfile) -> String {
 fn polar_node_name(node_id: DemoNodeId) -> &'static str {
     match node_id {
         DemoNodeId::GameTreasury => lightning_service::GAME_TREASURY_NODE_LABEL,
-        DemoNodeId::Alice => "Alice",
+        DemoNodeId::Jack => "Jack",
         DemoNodeId::Bob => "Bob",
         DemoNodeId::Carol => "Carol",
     }
@@ -4297,7 +4297,7 @@ mod tests {
             },
             "nodes": [
                 {
-                    "name": "Alice",
+                    "name": "Jack",
                     "token": "abc",
                     "ports": { "grpc": 10001 }
                 }
@@ -4386,7 +4386,7 @@ mod tests {
     fn delete_network_error_explains_locked_windows_files() {
         let message = delete_network_error_message(
             "12",
-            "Polar MCP tool delete_network failed: EPERM: operation not permitted, lstat 'C:\\Users\\example\\.polar\\networks\\12\\volumes\\lnd\\alice\\logs\\bitcoin\\regtest\\lnd.log'".to_string(),
+            "Polar MCP tool delete_network failed: EPERM: operation not permitted, lstat 'C:\\Users\\example\\.polar\\networks\\12\\volumes\\lnd\\jack\\logs\\bitcoin\\regtest\\lnd.log'".to_string(),
         );
 
         assert!(message.contains("Windows still has Polar/LND files locked"));
@@ -4511,7 +4511,7 @@ mod tests {
                         ],
                         "lightning": [
                             {
-                                "name": "Alice",
+                                "name": "Jack",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Started"
@@ -4551,14 +4551,14 @@ mod tests {
                 "BITCOIN_TESTNET",
                 "GAME_LND",
                 "GAME_TAPROOT",
-                "Alice",
+                "Jack",
                 "Bob",
                 "Carol"
             ]
         );
         assert_eq!(
             required_polar_base_node_names(),
-            ["BITCOIN_TESTNET", "GAME_LND", "Alice", "Bob", "Carol"]
+            ["BITCOIN_TESTNET", "GAME_LND", "Jack", "Bob", "Carol"]
         );
     }
 
@@ -4574,7 +4574,7 @@ mod tests {
                     ],
                     "lightning": [
                         { "name": "GAME_LND", "type": "lightning", "status": "Started" },
-                        { "name": "Alice", "type": "lightning", "status": "Started" },
+                        { "name": "Jack", "type": "lightning", "status": "Started" },
                         { "name": "Bob", "type": "lightning", "status": "Started" },
                         { "name": "Carol", "type": "lightning", "status": "Started" },
                         { "name": "Extra", "type": "lightning", "status": "Started" }
@@ -4601,7 +4601,7 @@ mod tests {
                     ],
                     "lightning": [
                         { "name": "GAME_LND", "type": "lightning", "status": "Started" },
-                        { "name": "Alice", "type": "lightning", "status": "Started" },
+                        { "name": "Jack", "type": "lightning", "status": "Started" },
                         { "name": "Bob", "type": "lightning", "status": "Started" },
                         { "name": "Carol", "type": "lightning", "status": "Started" },
                         { "name": "Extra", "type": "lightning", "status": "Started" }
@@ -4639,7 +4639,7 @@ mod tests {
                     ],
                     "lightning": [
                         { "name": "GAME_LND", "type": "lightning", "status": "Started" },
-                        { "name": "Alice", "type": "lightning", "status": "Started" },
+                        { "name": "Jack", "type": "lightning", "status": "Started" },
                         { "name": "Bob", "type": "lightning", "status": "Started" },
                         { "name": "Carol", "type": "lightning", "status": "Started" },
                         { "name": "Extra", "type": "lightning", "status": "Error" }
@@ -4664,7 +4664,7 @@ mod tests {
                     "bitcoin": [{ "name": DEFAULT_BITCOIN_BACKEND_NAME }],
                     "lightning": [
                         { "name": "GAME_LND", "type": "lightning" },
-                        { "name": "alice", "type": "lightning" },
+                        { "name": "jack", "type": "lightning" },
                         { "name": "Bob", "type": "lightning" },
                         { "name": "Carol", "type": "lightning" }
                     ],
@@ -4675,7 +4675,7 @@ mod tests {
 
         assert_eq!(
             first_unexpected_required_topology_node_name(&networks, "1"),
-            Some("alice".to_string())
+            Some("jack".to_string())
         );
     }
 
@@ -4689,7 +4689,7 @@ mod tests {
                     "bitcoin": [{ "name": DEFAULT_BITCOIN_BACKEND_NAME }],
                     "lightning": [
                         { "name": "GAME_LND", "type": "lightning" },
-                        { "name": "Alice", "type": "lightning" },
+                        { "name": "Jack", "type": "lightning" },
                         { "name": "Bob", "type": "lightning" },
                         { "name": "Carol", "type": "lightning" }
                     ],
@@ -4716,7 +4716,7 @@ mod tests {
                     ],
                     "lightning": [
                         { "name": "GAME_LND", "type": "lightning", "status": "Started" },
-                        { "name": "Alice", "type": "lightning", "status": "Started" },
+                        { "name": "Jack", "type": "lightning", "status": "Started" },
                         { "name": "Bob", "type": "lightning", "status": "Started" },
                         { "name": "Carol", "type": "lightning", "status": "Started" }
                     ],
@@ -4733,7 +4733,7 @@ mod tests {
             vec![
                 DEFAULT_BITCOIN_BACKEND_NAME.to_string(),
                 "GAME_LND".to_string(),
-                "Alice".to_string(),
+                "Jack".to_string(),
                 "Bob".to_string(),
                 "Carol".to_string(),
                 "GAME_LND-tap".to_string(),
@@ -5071,7 +5071,7 @@ mod tests {
                         "bitcoin": [],
                         "lightning": [
                             {
-                                "name": "Alice",
+                                "name": "Jack",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Started"
@@ -5082,8 +5082,8 @@ mod tests {
             ]
         });
 
-        assert!(lightning_node_exists(&networks, "1", "Alice"));
-        assert!(lightning_node_is_started(&networks, "1", "Alice"));
+        assert!(lightning_node_exists(&networks, "1", "Jack"));
+        assert!(lightning_node_is_started(&networks, "1", "Jack"));
     }
 
     #[test]
@@ -5098,7 +5098,7 @@ mod tests {
                         "bitcoin": [],
                         "lightning": [
                             {
-                                "name": "Alice",
+                                "name": "Jack",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Started"
@@ -5110,12 +5110,12 @@ mod tests {
         });
 
         assert_eq!(
-            find_lightning_node_name(&networks, "1", "Alice"),
-            Some("Alice".to_string())
+            find_lightning_node_name(&networks, "1", "Jack"),
+            Some("Jack".to_string())
         );
         assert_ne!(
             find_lightning_node_name(&networks, "1", "Bob"),
-            Some("Alice".to_string())
+            Some("Jack".to_string())
         );
     }
 
@@ -5158,12 +5158,12 @@ mod tests {
     fn game_treasury_gets_extended_wallet_readiness_window() {
         assert!(
             ready_attempts_for_node(DemoNodeId::GameTreasury)
-                > ready_attempts_for_node(DemoNodeId::Alice)
+                > ready_attempts_for_node(DemoNodeId::Jack)
         );
     }
 
     #[test]
-    fn game_treasury_step_rejects_alice_as_treasury_shell() {
+    fn game_treasury_step_rejects_jack_as_treasury_shell() {
         let networks = json!({
             "networks": [
                 {
@@ -5174,7 +5174,7 @@ mod tests {
                         "bitcoin": [],
                         "lightning": [
                             {
-                                "name": "Alice",
+                                "name": "Jack",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Started"
@@ -5186,7 +5186,7 @@ mod tests {
         });
 
         let error = require_game_treasury_node_name(&networks, "1")
-            .expect_err("alice must not satisfy treasury setup");
+            .expect_err("jack must not satisfy treasury setup");
 
         assert!(error.contains("GAME_LND is missing"));
         assert!(error.contains("Retry Game Treasury"));
@@ -5232,14 +5232,14 @@ mod tests {
     #[test]
     fn lightning_node_already_started_error_is_idempotent() {
         assert!(is_lightning_node_already_started_error(
-            "Polar MCP tool start_node failed: Cannot start node \"alice\". Node is currently Started. Only Stopped or Error nodes can be started."
+            "Polar MCP tool start_node failed: Cannot start node \"jack\". Node is currently Started. Only Stopped or Error nodes can be started."
         ));
     }
 
     #[test]
     fn unrelated_lightning_node_start_error_is_not_idempotent() {
         assert!(!is_lightning_node_already_started_error(
-            "Polar MCP tool start_node failed: Cannot start node \"alice\". Wallet is locked."
+            "Polar MCP tool start_node failed: Cannot start node \"jack\". Wallet is locked."
         ));
     }
 
@@ -5251,7 +5251,7 @@ mod tests {
     }
 
     #[test]
-    fn treasury_shell_can_reclaim_default_alice_before_user_nodes_exist() {
+    fn treasury_shell_can_reclaim_default_jack_before_user_nodes_exist() {
         let networks = json!({
             "networks": [
                 {
@@ -5262,7 +5262,7 @@ mod tests {
                         "bitcoin": [],
                         "lightning": [
                             {
-                                "name": "Alice",
+                                "name": "Jack",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Stopped"
@@ -5274,8 +5274,8 @@ mod tests {
         });
 
         assert_eq!(
-            find_reclaimable_default_alice_node(&networks, "1"),
-            Some("Alice".to_string())
+            find_reclaimable_default_jack_node(&networks, "1"),
+            Some("Jack".to_string())
         );
     }
 
@@ -5324,7 +5324,7 @@ mod tests {
     }
 
     #[test]
-    fn treasury_shell_does_not_reclaim_alice_after_user_nodes_exist() {
+    fn treasury_shell_does_not_reclaim_jack_after_user_nodes_exist() {
         let networks = json!({
             "networks": [
                 {
@@ -5335,7 +5335,7 @@ mod tests {
                         "bitcoin": [],
                         "lightning": [
                             {
-                                "name": "Alice",
+                                "name": "Jack",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Started"
@@ -5352,7 +5352,7 @@ mod tests {
             ]
         });
 
-        assert_eq!(find_reclaimable_default_alice_node(&networks, "1"), None);
+        assert_eq!(find_reclaimable_default_jack_node(&networks, "1"), None);
     }
 
     #[test]
@@ -5397,12 +5397,12 @@ mod tests {
 
     #[test]
     fn add_lightning_node_arguments_send_all_known_name_fields() {
-        let args = add_lightning_node_arguments("1", "Alice");
+        let args = add_lightning_node_arguments("1", "Jack");
 
-        assert_eq!(args["name"], json!("Alice"));
-        assert_eq!(args["nodeName"], json!("Alice"));
-        assert_eq!(args["displayName"], json!("Alice"));
-        assert_eq!(args["alias"], json!("Alice"));
+        assert_eq!(args["name"], json!("Jack"));
+        assert_eq!(args["nodeName"], json!("Jack"));
+        assert_eq!(args["displayName"], json!("Jack"));
+        assert_eq!(args["alias"], json!("Jack"));
     }
 
     #[test]
@@ -5424,10 +5424,10 @@ mod tests {
             "nodeName": "dave"
         });
 
-        let error = validate_created_lightning_node_name("Alice", &response)
+        let error = validate_created_lightning_node_name("Jack", &response)
             .expect_err("generated fallback node name must not be accepted");
 
-        assert!(error.contains("asked Polar to create Alice"));
+        assert!(error.contains("asked Polar to create Jack"));
         assert!(error.contains("created dave"));
         assert!(error.contains("Remove dave"));
     }
@@ -5457,7 +5457,7 @@ mod tests {
         });
 
         let created_name = validate_created_lightning_node_after_add(
-            "Alice",
+            "Jack",
             &json!({ "success": true }),
             &before_add,
             &after_add,
@@ -5506,7 +5506,7 @@ mod tests {
                                 "status": "Started"
                             },
                             {
-                                "name": "Alice",
+                                "name": "Jack",
                                 "type": "lightning",
                                 "implementation": "LND",
                                 "status": "Started"
@@ -5528,7 +5528,7 @@ mod tests {
                                 "implementation": "LND"
                             },
                             {
-                                "name": "Alice",
+                                "name": "Jack",
                                 "type": "lightning",
                                 "implementation": "LND"
                             }
@@ -5540,13 +5540,13 @@ mod tests {
 
         assert_eq!(
             validate_created_lightning_node_after_add(
-                "Alice",
+                "Jack",
                 &response,
                 &before_add,
                 &after_add,
                 "1",
             ),
-            Ok("Alice".to_string())
+            Ok("Jack".to_string())
         );
     }
 
@@ -5687,7 +5687,7 @@ mod tests {
             vec![
                 DEFAULT_BITCOIN_BACKEND_NAME.to_string(),
                 "GAME_LND".to_string(),
-                "Alice".to_string(),
+                "Jack".to_string(),
                 "Bob".to_string(),
                 "Carol".to_string(),
                 "GAME_LND-tap".to_string(),
@@ -5733,7 +5733,7 @@ mod tests {
     fn extracts_wallet_balance_from_lnd_wallet_info() {
         let wallet_info = json!({
             "success": true,
-            "nodeName": "Alice",
+            "nodeName": "Jack",
             "confirmed_balance": "250000",
             "unconfirmed_balance": "750000"
         });
@@ -5745,7 +5745,7 @@ mod tests {
     fn extracts_wallet_balance_from_text_sats() {
         let wallet_info = json!({
             "success": true,
-            "result": "Wallet balance for Alice: 1,000,000 sats"
+            "result": "Wallet balance for Jack: 1,000,000 sats"
         });
 
         assert_eq!(extract_wallet_balance_sats(&wallet_info), Some(1_000_000));
@@ -5902,7 +5902,7 @@ mod tests {
         let mut networks = healthy_polar_lab_response();
         networks["networks"][0]["nodes"]["lightning"] = json!([
             {
-                "name": "Alice",
+                "name": "Jack",
                 "type": "lightning",
                 "implementation": "LND",
                 "status": "Started"

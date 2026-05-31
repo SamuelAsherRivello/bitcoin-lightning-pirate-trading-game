@@ -1152,6 +1152,12 @@ table {
 }
 
 .game-view__stage {
+    /* Edit these four values to move the trade-route connection endpoints. */
+    --game-channel-left-end-x: 18%;
+    --game-channel-left-end-y: 42%;
+    --game-channel-right-end-x: 82%;
+    --game-channel-right-end-y: 70%;
+
     position: relative;
     min-height: 400px;
     overflow: hidden;
@@ -1190,11 +1196,11 @@ table {
 }
 
 .game-view__channel {
-    left: 18%;
-    top: 42%;
+    left: var(--game-channel-left-end-x);
+    top: var(--game-channel-left-end-y);
     z-index: 4;
-    width: 64%;
-    height: 28%;
+    width: calc(var(--game-channel-right-end-x) - var(--game-channel-left-end-x));
+    height: calc(var(--game-channel-right-end-y) - var(--game-channel-left-end-y));
     object-fit: fill;
     opacity: 1;
 }
@@ -1499,16 +1505,27 @@ table {
 
 .game-view__actions {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 10px;
-    align-items: center;
+    align-items: stretch;
+    width: 100%;
+}
+
+.game-view__actions-row {
+    display: flex;
+    align-items: stretch;
+    width: 100%;
+    min-height: 68px;
+    gap: 10px;
 }
 
 .game-view__action-group {
     display: grid;
     grid-template-columns: max-content minmax(0, 1fr);
+    flex: 1 1 0;
     gap: 12px;
     align-items: center;
+    min-width: 0;
     max-width: 100%;
     padding: 10px 12px;
     border: 1px solid var(--app-border);
@@ -1528,8 +1545,17 @@ table {
 
 .game-view__action-controls {
     display: flex;
+    flex: 1 1 auto;
     flex-wrap: nowrap;
     gap: 10px;
+    min-width: 0;
+}
+
+.game-view__action-controls > button {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 44px;
+    white-space: normal;
 }
 
 @keyframes game-payment-travel {
@@ -1998,6 +2024,9 @@ table {
     }
 
     .game-view__stage {
+        --game-channel-left-end-x: 14%;
+        --game-channel-right-end-x: 86%;
+
         min-height: 400px;
     }
 
@@ -2031,14 +2060,23 @@ table {
         font-size: 9px;
     }
 
-    .game-view__channel {
-        left: 14%;
-        width: 72%;
-    }
-
     .game-view__action-group {
         grid-template-columns: 1fr;
         justify-items: start;
+    }
+
+    .game-view__actions-row {
+        flex-direction: column;
+        min-height: 0;
+    }
+
+    .game-view__action-controls {
+        flex-wrap: wrap;
+        width: 100%;
+    }
+
+    .game-view__action-controls > button {
+        flex-basis: min(100%, 160px);
     }
 
     .wizard-step__actions {

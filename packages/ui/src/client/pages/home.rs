@@ -19,7 +19,7 @@ pub fn Home() -> Element {
                     span { class: "eyebrow", "Polar regtest Lightning lab" }
                     h1 { {t!("home-title")} }
                     p {
-                        "Control Alice, Bob, and Carol in a local Lightning learning lab. The app separates game actions from the network mechanics behind channels, invoices, payments, and block confirmations."
+                        "Control Jack, Bob, and Carol in a local Lightning learning lab. The app separates game actions from the network mechanics behind channels, invoices, payments, and block confirmations."
                     }
                 }
                 div { class: "status-card",
@@ -40,7 +40,7 @@ pub fn Home() -> Element {
                         h3 { "Why this demo exists" }
                     }
                     p {
-                        "A Lightning channel is easier to understand when it feels like a trade route. Alice starts in Town, opens routes to Bob at the Beach and Carol at the Mountain, then buys items with real Lightning-shaped operations."
+                        "A Lightning channel is easier to understand when it feels like a trade route. Jack starts in Town, opens routes to Bob at the Beach and Carol at the Mountain, then buys items with real Lightning-shaped operations."
                     }
                     p {
                         "This is a lab tool. It controls all demo nodes so you can learn quickly. A production game would normally request payment from the player's own Lightning wallet instead of spending from it directly."

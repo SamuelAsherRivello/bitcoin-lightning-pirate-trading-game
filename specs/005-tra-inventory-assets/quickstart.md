@@ -5,7 +5,7 @@
 - Windows 11 development environment.
 - Project dependencies installed with `.\Scripts\Common\InstallDependencies.ps1`.
 - Polar available locally.
-- A Polar regtest lab with Alice, Bob, and Carol created through the app setup flow.
+- A Polar regtest lab with Jack, Bob, and Carol created through the app setup flow.
 - For real TRA integration tasks, use a Polar/Litd or `tapd` setup that exposes Taproot Assets capability on the same regtest network as the demo LND nodes.
 - Current implementation includes a server-only fake Taproot Assets adapter boundary for local tests. Real Polar/Litd or `tapd` wiring must provide the adapter endpoint/profile values server-side only.
 

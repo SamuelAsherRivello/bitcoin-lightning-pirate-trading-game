@@ -34,7 +34,7 @@ As a player, I want setup to transfer the NPC starting items from the Game Treas
 
 **Acceptance Scenarios**:
 
-1. **Given** Alice, Bob, and Carol user nodes exist, **When** setup reaches the NPC item transfer step, **Then** the game transfers Bob's and Carol's configured starting items from Game Treasury to those NPCs.
+1. **Given** Jack, Bob, and Carol user nodes exist, **When** setup reaches the NPC item transfer step, **Then** the game transfers Bob's and Carol's configured starting items from Game Treasury to those NPCs.
 2. **Given** an NPC starting item transfer succeeds, **When** the setup step is reviewed, **Then** the player can see which item moved from Game Treasury to which NPC.
 3. **Given** an NPC starting item transfer fails, **When** setup displays the result, **Then** setup keeps the failure recoverable and does not mark item distribution as complete.
 
@@ -78,7 +78,7 @@ As a player, I want gameplay actions to reflect treasury readiness so I know whe
 - **FR-002**: The Game Treasury setup step MUST create or verify a Lightning node named GAME_TREASURY.
 - **FR-003**: The Game Treasury setup step MUST fund the GAME_TREASURY node with enough sats to support configured game activity for the other players.
 - **FR-004**: The Game Treasury setup step MUST create or verify treasury-owned items that are intended for later NPC distribution.
-- **FR-005**: The User Nodes setup step MUST create or verify Alice, Bob, and Carol after the Game Treasury step is complete.
+- **FR-005**: The User Nodes setup step MUST create or verify Jack, Bob, and Carol after the Game Treasury step is complete.
 - **FR-006**: The NPC Item Transfers setup step MUST transfer the configured starting items for Bob and Carol from Game Treasury to those NPCs.
 - **FR-007**: Bob and Carol MUST end setup with the same starting items they currently receive in the game, but those items MUST originate from Game Treasury transfers.
 - **FR-008**: Each setup step that creates, funds, or transfers treasury resources MUST provide visible loading, success, and recoverable failure feedback.
@@ -103,7 +103,7 @@ As a player, I want gameplay actions to reflect treasury readiness so I know whe
 - **Treasury Impact Preview**: A pre-commit summary of how a pending game action is expected to affect treasury resources.
 - **Treasury Status**: The user-visible readiness state for treasury data, such as loading, ready, refreshing, degraded, or failed.
 - **Treasury Resource**: A spendable amount or inventory-backed item value that contributes to treasury understanding.
-- **User Node**: A gameplay participant node created after Game Treasury setup, including Alice, Bob, and Carol.
+- **User Node**: A gameplay participant node created after Game Treasury setup, including Jack, Bob, and Carol.
 - **NPC Item Transfer**: A setup-time movement of an item from Game Treasury to Bob or Carol to establish starting NPC inventory.
 
 ## Success Criteria *(mandatory)*
@@ -111,7 +111,7 @@ As a player, I want gameplay actions to reflect treasury readiness so I know whe
 ### Measurable Outcomes
 
 - **SC-001**: 95% of setup attempts show the Game Treasury step as a distinct step between Server Name and User Nodes.
-- **SC-002**: 95% of successful setup runs create or verify the GAME_TREASURY node before Alice, Bob, and Carol are created or verified.
+- **SC-002**: 95% of successful setup runs create or verify the GAME_TREASURY node before Jack, Bob, and Carol are created or verified.
 - **SC-003**: 100% of successful setup runs show Bob and Carol receiving their configured starting items through Game Treasury transfers.
 - **SC-004**: 95% of players can identify the current spendable treasury balance within 5 seconds of opening the treasury.
 - **SC-005**: 90% of treasury-affecting game actions produce a visible treasury update or pending-refresh state within 2 seconds of completion.

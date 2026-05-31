@@ -9,7 +9,7 @@
 
 ### User Story 1 - Complete Regtest Setup (Priority: P1)
 
-A learner opens the app, sees `Home`, learns why the demo is useful, visits `Set Up`, follows the Polar regtest checklist, enters the demo transaction amount, saves the Polar automation profile, and lets the app create Alice, Bob, and Carol from a Polar Bitcoin backend node.
+A learner opens the app, sees `Home`, learns why the demo is useful, visits `Set Up`, follows the Polar regtest checklist, enters the demo transaction amount, saves the Polar automation profile, and lets the app create Jack, Bob, and Carol from a Polar Bitcoin backend node.
 
 **Why this priority**: Without a clear setup path, the rest of the app cannot teach Lightning operations or run the game.
 
@@ -21,13 +21,13 @@ A learner opens the app, sees `Home`, learns why the demo is useful, visits `Set
 2. **Given** the learner is on `Home`, **When** they read `Why this demo exists`, **Then** they understand that this is a Polar regtest lab, the app controls all demo nodes, and setup validation rejects hosted, production, mainnet, and other non-regtest profiles.
 3. **Given** Polar and its localhost bridge are running, **When** the learner saves the bridge URL and submits a Polar server name, **Then** the app reuses that server if it exists or creates it if it does not, reports the result through a toast, and continues the setup wizard.
 4. **Given** a saved profile whose nodes are offline, **When** the learner reloads the app, **Then** the app explains that setup is saved but Polar is not reachable and keeps gameplay locked.
-5. **Given** the learner no longer wants the generated demo nodes, **When** they destroy demo nodes from `Set Up`, **Then** the app asks Polar to remove Alice, Bob, and Carol and locks gameplay until nodes are created again.
+5. **Given** the learner no longer wants the generated demo nodes, **When** they destroy demo nodes from `Set Up`, **Then** the app asks Polar to remove Jack, Bob, and Carol and locks gameplay until nodes are created again.
 
 ---
 
 ### User Story 2 - Play The Lightning Game (Priority: P2)
 
-A learner uses `Play Game` to control Alice, trade with Bob at the Beach and Carol at the Mountain, and see game actions become real Lightning operations using the configured sats-per-transaction amount.
+A learner uses `Play Game` to control Jack, trade with Bob at the Beach and Carol at the Mountain, and see game actions become real Lightning operations using the configured sats-per-transaction amount.
 
 **Why this priority**: This is the main approachable learning loop: game action first, Lightning concept second.
 
@@ -35,10 +35,10 @@ A learner uses `Play Game` to control Alice, trade with Bob at the Beach and Car
 
 **Acceptance Scenarios**:
 
-1. **Given** setup is complete and no Alice-Bob channel is active, **When** Alice opens a trade route to Bob, **Then** the app starts channel opening and marks the route as under construction until a Bitcoin block confirms it.
+1. **Given** setup is complete and no Jack-Bob channel is active, **When** Jack opens a trade route to Bob, **Then** the app starts channel opening and marks the route as under construction until a Bitcoin block confirms it.
 2. **Given** a route is under construction, **When** the learner clicks `Wait for Next Block`, **Then** the app advances the local regtest chain and updates the route to active after confirmation.
 3. **Given** a route is under construction, **When** the learner mines the next block directly in Polar, **Then** the app detects the higher block height while polling and updates the route to active without requiring `Wait for Next Block`.
-4. **Given** an active Alice-Bob route, **When** Alice buys an item from Bob, **Then** Bob creates an invoice for the configured sats-per-transaction amount and Alice pays it.
+4. **Given** an active Jack-Bob route, **When** Jack buys an item from Bob, **Then** Bob creates an invoice for the configured sats-per-transaction amount and Jack pays it.
 5. **Given** a payment completes, **When** the learner views the action summary, **Then** the summary states that the trade used Lightning and did not need a new Bitcoin block.
 
 ---
@@ -53,8 +53,8 @@ A learner opens `Network Dashboard` to inspect nodes, channels, balances, invoic
 
 **Acceptance Scenarios**:
 
-1. **Given** Alice and Bob have a channel, **When** the learner views `Network Dashboard`, **Then** the page shows a row with Alice on the left, Bob on the right, a purse-to-purse channel/payment visual, status, capacity, local/remote balances, and action buttons.
-2. **Given** Bob clicks `Create Invoice`, **When** Alice has `AutoSend` enabled for that channel, **Then** the app visibly creates the invoice, pays it from Alice, and logs both steps.
+1. **Given** Jack and Bob have a channel, **When** the learner views `Network Dashboard`, **Then** the page shows a row with Jack on the left, Bob on the right, a purse-to-purse channel/payment visual, status, capacity, local/remote balances, and action buttons.
+2. **Given** Bob clicks `Create Invoice`, **When** Jack has `AutoSend` enabled for that channel, **Then** the app visibly creates the invoice, pays it from Jack, and logs both steps.
 3. **Given** a channel is pending, **When** the learner views the row, **Then** the row states that a Bitcoin block is required before Lightning payments can use that channel.
 4. **Given** a channel is active, **When** the learner views recent payments, **Then** the page states that completed Lightning payments did not require a new Bitcoin block.
 
@@ -79,7 +79,7 @@ A learner opens `Home` to understand why the demo exists, Bitcoin, Lightning, th
 ### Edge Cases
 
 - Saved setup exists but one node is unreachable.
-- Saved setup exists but points to fewer than Alice, Bob, and Carol.
+- Saved setup exists but points to fewer than Jack, Bob, and Carol.
 - Polar is running but its localhost MCP bridge is unavailable.
 - The browser app is opened from an origin that Polar's localhost bridge CORS policy rejects.
 - Polar creates an LND node but does not return the generated node name to the app.
@@ -113,8 +113,8 @@ A learner opens `Home` to understand why the demo exists, Bitcoin, Lightning, th
 - **FR-010f**: The Block Height row MUST prepopulate from the current Polar block height after demo nodes are ready, allow the learner to enter a whole number including `0`, and save that value as the app's initial lab block height before unlock without trying to lower Polar's actual chain height.
 - **FR-011**: The app MUST let the learner paste the Polar bridge URL in the UI instead of manually editing setup files.
 - **FR-012**: The setup guidance MUST only appear inside the selected `Polar Connection (Networked)` tab and should separate local `1. Environment` setup from app-driven `2. Polar` setup with nested tabs.
-- **FR-013**: The app MUST model Alice, Bob, and Carol as demo node personas, not production users.
-- **FR-014**: The app MUST treat Alice as the player, Bob as the Beach merchant, and Carol as the Mountain merchant.
+- **FR-013**: The app MUST model Jack, Bob, and Carol as demo node personas, not production users.
+- **FR-014**: The app MUST treat Jack as the player, Bob as the Beach merchant, and Carol as the Mountain merchant.
 - **FR-015**: The game MUST use `Town`, `Beach`, `Mountain`, and optionally `Desert` as readable location labels.
 - **FR-016**: The game MUST represent a Lightning channel as a `Trade Route` between two node personas.
 - **FR-017**: The game MUST represent a pending channel as a trade route under construction until the next Bitcoin block.
@@ -133,15 +133,15 @@ A learner opens `Home` to understand why the demo exists, Bitcoin, Lightning, th
 - **FR-028**: The Home FAQ content MUST include a simplified operation table for create invoice, pay invoice, fund wallet, open channel, close channel, check payment status, and wait/mine block.
 - **FR-029**: The app MUST include a `Lab mode` warning explaining that controlling all demo nodes is appropriate for education but not for real player funds.
 - **FR-030**: The app MUST present production guidance that a real game would normally request payment from a player's own Lightning wallet rather than spending from it directly.
-- **FR-031**: The app MUST provide a `Create Demo Nodes` action that asks Polar to add, name, start, fund, and confirm Alice, Bob, and Carol LND nodes using the configured Bitcoin backend.
-- **FR-032**: The app MUST provide a `Destroy Demo Nodes` action that asks Polar to remove Alice, Bob, and Carol and clears the active lab state.
+- **FR-031**: The app MUST provide a `Create Demo Nodes` action that asks Polar to add, name, start, fund, and confirm Jack, Bob, and Carol LND nodes using the configured Bitcoin backend.
+- **FR-032**: The app MUST provide a `Destroy Demo Nodes` action that asks Polar to remove Jack, Bob, and Carol and clears the active lab state.
 - **FR-033**: The `packages/lightning-service` crate MUST keep its Lightning domain models, validation, and server-side adapter boundaries reusable enough for future Rust projects, avoiding Dioxus UI dependencies and app-specific presentation concerns inside the service crate.
 
 ### Key Entities
 
 - **Setup Profile**: The locally saved configuration needed to connect to the local lab and define the demo transaction amount.
 - **Polar Automation Profile**: The local Polar bridge URL plus discovered network/backend values used to create or destroy demo Lightning nodes.
-- **Demo Node**: Alice, Bob, or Carol, each representing a controlled LND node in the regtest lab.
+- **Demo Node**: Jack, Bob, or Carol, each representing a controlled LND node in the regtest lab.
 - **Location**: A readable game place such as Town, Beach, Mountain, or Desert.
 - **Trade Route**: Game-facing representation of a Lightning channel between two demo nodes.
 - **Invoice Request**: A request created by one node to receive the configured sats-per-transaction amount.

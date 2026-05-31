@@ -15,7 +15,7 @@ fn history_details_describe_channel_open_completion() {
     let state = service::default_lab_state(connected_profile());
     let state = service::open_trade_route(
         state,
-        DemoNodeId::Alice,
+        DemoNodeId::Jack,
         DemoNodeId::Bob,
         DEFAULT_ROUTE_CAPACITY_SATS,
     )
@@ -56,7 +56,7 @@ fn history_details_describe_invoice_payment() {
     let state = service::default_lab_state(connected_profile());
     let state = service::open_trade_route(
         state,
-        DemoNodeId::Alice,
+        DemoNodeId::Jack,
         DemoNodeId::Bob,
         DEFAULT_ROUTE_CAPACITY_SATS,
     )
@@ -77,9 +77,9 @@ fn history_details_describe_invoice_payment() {
     let state = service::create_invoice_and_maybe_autosend(
         state,
         DemoNodeId::Bob,
-        DemoNodeId::Alice,
+        DemoNodeId::Jack,
         DEFAULT_SATS_PER_TRANSACTION,
-        "Alice buys a Beach item".to_string(),
+        "Jack buys a Beach item".to_string(),
         true,
     )
     .expect("invoice should be paid");
@@ -99,7 +99,7 @@ fn reverse_invoice_payment_restores_player_liquidity() {
     let state = service::default_lab_state(connected_profile());
     let state = service::open_trade_route(
         state,
-        DemoNodeId::Alice,
+        DemoNodeId::Jack,
         DemoNodeId::Bob,
         DEFAULT_ROUTE_CAPACITY_SATS,
     )
@@ -120,7 +120,7 @@ fn reverse_invoice_payment_restores_player_liquidity() {
     let state = service::create_invoice_and_maybe_autosend(
         state,
         DemoNodeId::Bob,
-        DemoNodeId::Alice,
+        DemoNodeId::Jack,
         DEFAULT_SATS_PER_TRANSACTION,
         "Player buys a book from the NPC".to_string(),
         true,
@@ -128,7 +128,7 @@ fn reverse_invoice_payment_restores_player_liquidity() {
     .expect("buy invoice should be paid");
     let state = service::create_invoice_and_maybe_autosend(
         state,
-        DemoNodeId::Alice,
+        DemoNodeId::Jack,
         DemoNodeId::Bob,
         DEFAULT_SATS_PER_TRANSACTION,
         "Player sells a book to the NPC".to_string(),
@@ -142,5 +142,5 @@ fn reverse_invoice_payment_restores_player_liquidity() {
     );
     assert_eq!(state.trade_routes[0].remote_balance_sats, 0);
     assert_eq!(state.recent_payments[0].payer_node, DemoNodeId::Bob);
-    assert_eq!(state.recent_payments[0].payee_node, DemoNodeId::Alice);
+    assert_eq!(state.recent_payments[0].payee_node, DemoNodeId::Jack);
 }

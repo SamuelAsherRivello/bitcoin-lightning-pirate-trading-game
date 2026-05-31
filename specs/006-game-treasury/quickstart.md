@@ -16,7 +16,7 @@
 6. Run Game Treasury setup.
 7. Confirm the UI shows visible progress for node creation/verification, funding, and item preparation.
 8. Confirm the GAME_TREASURY node is shown as ready before User Nodes can complete.
-9. Complete User Nodes and confirm Alice, Bob, and Carol are created or verified.
+9. Complete User Nodes and confirm Jack, Bob, and Carol are created or verified.
 10. Run NPC Item Transfers.
 11. Confirm Bob and Carol receive their configured starting items from Game Treasury.
 12. Continue through Block Height and Unlock Routes.

@@ -173,7 +173,7 @@ pub fn SetUp() -> Element {
                         span { class: "eyebrow", "Polar regtest Lightning lab" }
                         h1 { {t!("setup-title")} }
                         p {
-                            "Control Alice, Bob, and Carol in a local Lightning learning lab. The app separates game actions from the network mechanics behind channels, invoices, payments, and block confirmations."
+                            "Control Jack, Bob, and Carol in a local Lightning learning lab. The app separates game actions from the network mechanics behind channels, invoices, payments, and block confirmations."
                         }
                     }
                     div { class: "status-card",
@@ -358,7 +358,7 @@ pub fn SetUp() -> Element {
                                 }
                             } else {
                                 p { class: "connection-tab-copy",
-                                    "Create the Bitcoin backend in Polar, then use the app setup steps to connect the local bridge and create Alice, Bob, and Carol."
+                                    "Create the Bitcoin backend in Polar, then use the app setup steps to connect the local bridge and create Jack, Bob, and Carol."
                                 }
                                 WarningCallout {
                                     title: "Testnet Only".to_string(),
@@ -923,7 +923,7 @@ pub fn SetUp() -> Element {
                                                     input {
                                                         id: "polar-create-nodes-input",
                                                         r#type: "text",
-                                                        value: "BITCOIN_TESTNET, GAME_LND, GAME_TAPROOT, Alice, Bob, Carol",
+                                                        value: "BITCOIN_TESTNET, GAME_LND, GAME_TAPROOT, Jack, Bob, Carol",
                                                         readonly: true,
                                                     }
                                                 }
@@ -1136,7 +1136,7 @@ pub fn SetUp() -> Element {
                                                     input {
                                                         id: "polar-user-nodes-sats-input",
                                                         r#type: "text",
-                                                        value: "Alice, Bob, Carol sats match the demo targets.",
+                                                        value: "Jack, Bob, Carol sats match the demo targets.",
                                                         readonly: true,
                                                     }
                                                 }
@@ -1209,7 +1209,7 @@ pub fn SetUp() -> Element {
                                                         input {
                                                             id: "polar-tra-assets-input",
                                                             r#type: "text",
-                                                            value: "Alice, Bob, Carol TRAs match the demo targets.",
+                                                            value: "Jack, Bob, Carol TRAs match the demo targets.",
                                                             readonly: true,
                                                             disabled: active_step != PolarWizardStep::UserNodesTras,
                                                         }
@@ -3879,7 +3879,7 @@ async fn create_demo_nodes_step(
                                 update_operation_prompt(
                                     operation_prompt,
                                     operation_id,
-                                    "Node creation canceled. Alice, Bob, and Carol were removed.",
+                                    "Node creation canceled. Jack, Bob, and Carol were removed.",
                                     ToastTone::Success,
                                     false,
                                     false,

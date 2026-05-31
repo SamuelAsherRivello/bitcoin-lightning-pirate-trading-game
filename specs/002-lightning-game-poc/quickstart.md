@@ -54,40 +54,40 @@ This quickstart describes the target workflow for validating the feature after i
    - `Polar Connection (Networked)`: selected by default, with nested `1. Environment` and `2. Polar` tabs. `1. Environment` shows install/run steps for Docker and Polar, and `2. Polar` shows compact form rows; the app saves the bridge URL, reuses or creates the named Polar server, discovers the backend for demo-node creation, and prepopulates an editable Block Height row from Polar.
    - `Mock Connection (Offline)`: the fake-data callout is visible after switching tabs.
 9. Click the enabled `SUBMIT` buttons in order: save Polar MCP bridge URL, ensure Polar server name, create 3 demo nodes, confirm or edit Block Height, and complete setup. `RESET` returns to the previous step.
-10. Confirm Alice, Bob, and Carol are created, started, funded, and gameplay unlocks only after `Complete Setup`.
+10. Confirm Jack, Bob, and Carol are created, started, funded, and gameplay unlocks only after `Complete Setup`.
 11. Refresh the page.
 12. Confirm `Play Game` and `Network Dashboard` are enabled.
 
 ## 4. Verify Play Game
 
 1. Open `Play Game`.
-2. Confirm Alice starts in Town.
-3. Open a trade route from Alice to Bob.
+2. Confirm Jack starts in Town.
+3. Open a trade route from Jack to Bob.
 4. Confirm the route appears as under construction.
 5. Mine the next block in Polar, or click `Wait for Next Block`.
 6. Confirm the app detects the new regtest block.
-7. Confirm the Alice-Bob trade route becomes active.
+7. Confirm the Jack-Bob trade route becomes active.
 8. Buy an item from Bob.
 9. Confirm the game log shows:
    - Bob created an invoice.
-   - Alice paid the invoice.
+   - Jack paid the invoice.
    - The transaction amount was `1,000 sats`.
    - No new Bitcoin block was required for the Lightning payment.
 
 ## 5. Verify Network Dashboard
 
 1. Open `Network Dashboard`.
-2. Confirm the Alice-Bob row shows:
-   - Alice node block.
+2. Confirm the Jack-Bob row shows:
+   - Jack node block.
    - Bob node block.
    - A visible wallet/purse-to-wallet/purse line.
    - Channel status.
    - Local and remote balances.
    - `Open Trade Route`, `Wait for Block <next height>`, `Create Invoice`, `Pay Invoice`, and AutoSend controls.
-3. Open the Alice-Bob trade route if it does not exist yet.
+3. Open the Jack-Bob trade route if it does not exist yet.
 4. Mine the next block in Polar, or click the `Wait for Block <next height>` action.
 5. Create an invoice from Bob.
-6. Pay it from Alice.
+6. Pay it from Jack.
 7. Confirm the row balances update.
 8. Confirm recent invoices and recent payments show the operation.
 ## 6. Verify Desktop
@@ -105,7 +105,7 @@ This quickstart describes the target workflow for validating the feature after i
 
 The app teaches the learner that:
 
-- Alice, Bob, and Carol are demo nodes controlled by the lab app.
+- Jack, Bob, and Carol are demo nodes controlled by the lab app.
 - A trade route is a Lightning channel.
 - Building a trade route requires the next Bitcoin block.
 - Trading over an active route uses Lightning and does not wait for a new Bitcoin block.

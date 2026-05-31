@@ -262,82 +262,86 @@ pub fn GameView(
                 }
             }
             div { class: "game-view__actions",
-                div { class: "game-view__action-group game-view__action-group--game",
-                    span { class: "game-view__action-label", "Game" }
-                    div { class: "game-view__action-controls",
-                        button {
-                            class: "primary-action",
-                            r#type: "button",
-                            disabled: is_busy,
-                            onclick: move |_| on_restart_game.call(()),
-                            "Restart Game"
+                div { class: "game-view__actions-row game-view__actions-row--top",
+                    div { class: "game-view__action-group game-view__action-group--game",
+                        span { class: "game-view__action-label", "Game" }
+                        div { class: "game-view__action-controls",
+                            button {
+                                class: "primary-action",
+                                r#type: "button",
+                                disabled: is_busy,
+                                onclick: move |_| on_restart_game.call(()),
+                                "Restart Game"
+                            }
+                            button {
+                                class: "secondary-action",
+                                r#type: "button",
+                                disabled: is_busy,
+                                onclick: move |_| on_change_location.call(()),
+                                "Change Location"
+                            }
                         }
-                        button {
-                            class: "secondary-action",
-                            r#type: "button",
-                            disabled: is_busy,
-                            onclick: move |_| on_change_location.call(()),
-                            "Change Location"
+                    }
+                    div { class: "game-view__action-group game-view__action-group--requires-wait",
+                        span { class: "game-view__action-label", "Requires" br {} "Wait" }
+                        div { class: "game-view__action-controls",
+                            button {
+                                class: "secondary-action",
+                                r#type: "button",
+                                disabled: is_busy || !can_open_trade,
+                                onclick: move |_| on_open_trade.call(()),
+                                if is_busy && can_open_trade {
+                                    "Opening..."
+                                } else {
+                                    "Open Trade Route"
+                                }
+                            }
+                            button {
+                                class: "secondary-action",
+                                r#type: "button",
+                                disabled: is_busy || !can_close_trade,
+                                onclick: move |_| on_close_trade.call(()),
+                                if is_busy && can_close_trade {
+                                    "Closing..."
+                                } else {
+                                    "Close Trade Route"
+                                }
+                            }
+                            button {
+                                class: "secondary-action",
+                                r#type: "button",
+                                disabled: is_busy || !can_wait_for_block,
+                                onclick: move |_| on_wait_for_block.call(()),
+                                "Wait for Block {next_block_height}"
+                            }
                         }
                     }
                 }
-                div { class: "game-view__action-group game-view__action-group--requires-wait",
-                    span { class: "game-view__action-label", "Requires" br {} "Wait" }
-                    div { class: "game-view__action-controls",
-                        button {
-                            class: "secondary-action",
-                            r#type: "button",
-                            disabled: is_busy || !can_open_trade,
-                            onclick: move |_| on_open_trade.call(()),
-                            if is_busy && can_open_trade {
-                                "Opening..."
-                            } else {
-                                "Open Trade Route"
+                div { class: "game-view__actions-row game-view__actions-row--bottom",
+                    div { class: "game-view__action-group game-view__action-group--requires-trade",
+                        span { class: "game-view__action-label", "Requires" br {} "Trade Route" }
+                        div { class: "game-view__action-controls",
+                            button {
+                                class: "secondary-action",
+                                r#type: "button",
+                                disabled: is_busy || !can_buy_item,
+                                onclick: move |_| on_buy_item.call(()),
+                                if is_busy && can_buy_item {
+                                    "Buying..."
+                                } else {
+                                    "Buy Item"
+                                }
                             }
-                        }
-                        button {
-                            class: "secondary-action",
-                            r#type: "button",
-                            disabled: is_busy || !can_close_trade,
-                            onclick: move |_| on_close_trade.call(()),
-                            if is_busy && can_close_trade {
-                                "Closing..."
-                            } else {
-                                "Close Trade Route"
-                            }
-                        }
-                        button {
-                            class: "secondary-action",
-                            r#type: "button",
-                            disabled: is_busy || !can_wait_for_block,
-                            onclick: move |_| on_wait_for_block.call(()),
-                            "Wait for Block {next_block_height}"
-                        }
-                    }
-                }
-                div { class: "game-view__action-group game-view__action-group--requires-trade",
-                    span { class: "game-view__action-label", "Requires" br {} "Trade Route" }
-                    div { class: "game-view__action-controls",
-                        button {
-                            class: "secondary-action",
-                            r#type: "button",
-                            disabled: is_busy || !can_buy_item,
-                            onclick: move |_| on_buy_item.call(()),
-                            if is_busy && can_buy_item {
-                                "Buying..."
-                            } else {
-                                "Buy Item"
-                            }
-                        }
-                        button {
-                            class: "secondary-action",
-                            r#type: "button",
-                            disabled: is_busy || !can_sell_item,
-                            onclick: move |_| on_sell_item.call(()),
-                            if is_busy && can_sell_item {
-                                "Selling..."
-                            } else {
-                                "Sell Item"
+                            button {
+                                class: "secondary-action",
+                                r#type: "button",
+                                disabled: is_busy || !can_sell_item,
+                                onclick: move |_| on_sell_item.call(()),
+                                if is_busy && can_sell_item {
+                                    "Selling..."
+                                } else {
+                                    "Sell Item"
+                                }
                             }
                         }
                     }

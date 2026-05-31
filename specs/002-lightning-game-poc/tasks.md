@@ -10,7 +10,7 @@ Generated during implementation because this feature folder did not include a pr
 - [X] T004 Persist non-sensitive setup preferences and demo lab state through `storage_service` for web localStorage and desktop `data/` JSON files.
 - [X] T005 Replace placeholder routes with `Home`, `Set Up`, `Play Game`, and `Network Dashboard`.
 - [X] T006 Implement the `Set Up` page with Polar setup guidance, sats validation, setup modes, connection testing, save/reset actions, and node status feedback.
-- [X] T007 Implement the `Play Game` page with Alice/Bob/Carol locations, trade route opening, next-block confirmation, purchases, and action log feedback.
+- [X] T007 Implement the `Play Game` page with Jack/Bob/Carol locations, trade route opening, next-block confirmation, purchases, and action log feedback.
 - [X] T008 Implement the `Network Dashboard` page with channel visuals, balances, AutoSend, and invoice/payment histories.
 - [X] T008a Move why-this-demo-exists and FAQ/concepts content into `Home` with Bitcoin and Lightning summaries, a Bitcoin vs Lightning pros/cons table, and the LND operation vs block table.
 - [X] T009 Update shared CSS for the lab UI across web and desktop assets.

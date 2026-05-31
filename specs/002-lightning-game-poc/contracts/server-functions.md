@@ -11,7 +11,7 @@ These contracts describe the domain operations exposed from the Dioxus UI to the
 
 ## `test_setup`
 
-**Purpose**: Verify that Alice, Bob, and Carol are reachable and match regtest expectations.
+**Purpose**: Verify that Jack, Bob, and Carol are reachable and match regtest expectations.
 
 **Input**:
 
@@ -54,7 +54,7 @@ These contracts describe the domain operations exposed from the Dioxus UI to the
 
 ## `create_polar_demo_nodes`
 
-**Purpose**: Ask Polar to create Alice, Bob, and Carol LND nodes from an existing Bitcoin backend node.
+**Purpose**: Ask Polar to create Jack, Bob, and Carol LND nodes from an existing Bitcoin backend node.
 
 **Input**:
 
@@ -77,7 +77,7 @@ These contracts describe the domain operations exposed from the Dioxus UI to the
 
 ## `destroy_polar_demo_nodes`
 
-**Purpose**: Ask Polar to remove Alice, Bob, and Carol and clear active lab state.
+**Purpose**: Ask Polar to remove Jack, Bob, and Carol and clear active lab state.
 
 **Input**:
 

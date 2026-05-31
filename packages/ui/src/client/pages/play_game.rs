@@ -61,12 +61,11 @@ enum PlayGameRefreshStatus {
 }
 
 impl PlayGameRefreshStatus {
-    fn label(self) -> &'static str {
+    fn visible_label(self) -> Option<&'static str> {
         match self {
-            Self::Idle => "Waiting to refresh sats and inventory",
-            Self::Refreshing => "Refreshing sats and TRA inventory...",
-            Self::Refreshed => "Sats and TRA inventory refreshed",
-            Self::Failed => "Refresh needs attention",
+            Self::Idle | Self::Refreshed => None,
+            Self::Refreshing => Some("Refreshing sats and TRA inventory..."),
+            Self::Failed => Some("Refresh needs attention"),
         }
     }
 }
@@ -115,7 +114,7 @@ impl GameLocation {
         match self.merchant() {
             DemoNodeId::Bob => GAME_NPC,
             DemoNodeId::Carol => GAME_NPC_ALT,
-            DemoNodeId::Alice | DemoNodeId::GameTreasury => GAME_NPC,
+            DemoNodeId::Jack | DemoNodeId::GameTreasury => GAME_NPC,
         }
     }
 }
@@ -281,13 +280,13 @@ pub fn PlayGame() -> Element {
         .find(|route| route.to_node == merchant)
         .cloned();
     let catalog = item_catalog();
-    let player_items = tradable_items_for(&state, DemoNodeId::Alice, &catalog);
+    let player_items = tradable_items_for(&state, DemoNodeId::Jack, &catalog);
     let npc_items = tradable_items_for(&state, merchant, &catalog);
     let selected_npc_item = rightmost_transferable_item(&npc_items);
     let selected_player_item = rightmost_transferable_item(&player_items);
-    let left_inventory = inventory_slots_for(&state, DemoNodeId::Alice, &catalog);
+    let left_inventory = inventory_slots_for(&state, DemoNodeId::Jack, &catalog);
     let right_inventory = inventory_slots_for(&state, merchant, &catalog);
-    let player_name = node_display_name(&state, DemoNodeId::Alice);
+    let player_name = node_display_name(&state, DemoNodeId::Jack);
     let npc_name = node_display_name(&state, merchant);
     let (player_sats, npc_sats) = game_sats_for_nodes(&state, merchant);
     let channel_visual = focused_route
@@ -354,6 +353,7 @@ pub fn PlayGame() -> Element {
     let selected_player_item_for_sell = selected_player_item.clone();
     let refresh_status = play_game_refresh_status();
     let is_route_refreshing = refresh_status == PlayGameRefreshStatus::Refreshing;
+    let refresh_status_label = refresh_status.visible_label();
     let profile_username = nostr_profile()
         .and_then(|profile| profile.username)
         .unwrap_or_default();
@@ -368,7 +368,9 @@ pub fn PlayGame() -> Element {
                     p {
                         "Open a Lightning trade with the NPC, wait for the next block when the channel needs confirmation, then buy books over the active channel."
                     }
-                    span { class: "status-pill", "{refresh_status.label()}" }
+                    if let Some(refresh_status_label) = refresh_status_label {
+                        span { class: "status-pill", "{refresh_status_label}" }
+                    }
                 }
                 LabStatusWidget {
                     sats_per_transaction: state.profile.sats_per_transaction,
@@ -555,14 +557,14 @@ pub fn PlayGame() -> Element {
                         match execute_tra_item_trade(
                             setup_profile(),
                             merchant,
-                            DemoNodeId::Alice,
+                            DemoNodeId::Jack,
                             selected_item.cost_sats,
                             memo,
                             trade_approval,
                             TransferTraRequest {
                                 tra_id: selected_item.tra_id.clone(),
                                 from_node: merchant,
-                                to_node: DemoNodeId::Alice,
+                                to_node: DemoNodeId::Jack,
                             },
                         )
                         .await
@@ -652,14 +654,14 @@ pub fn PlayGame() -> Element {
                         );
                         match execute_tra_item_trade(
                             setup_profile(),
-                            DemoNodeId::Alice,
+                            DemoNodeId::Jack,
                             merchant,
                             selected_item.cost_sats,
                             memo,
                             trade_approval,
                             TransferTraRequest {
                                 tra_id: selected_item.tra_id.clone(),
-                                from_node: DemoNodeId::Alice,
+                                from_node: DemoNodeId::Jack,
                                 to_node: merchant,
                             },
                         )
@@ -787,7 +789,7 @@ pub fn PlayGame() -> Element {
 
 fn game_sats_for_nodes(state: &LabState, merchant: DemoNodeId) -> (u64, u64) {
     (
-        available_node_sats(state, DemoNodeId::Alice),
+        available_node_sats(state, DemoNodeId::Jack),
         available_node_sats(state, merchant),
     )
 }
@@ -1215,7 +1217,7 @@ fn can_buy_item_from_current_npc(
             route.to_node == merchant
                 && route.status == RouteStatus::Active
                 && selected_npc_item.is_some()
-                && owner_item_count(state, DemoNodeId::Alice) < MAX_TRA_ITEMS_PER_NODE
+                && owner_item_count(state, DemoNodeId::Jack) < MAX_TRA_ITEMS_PER_NODE
                 && route.local_balance_sats
                     >= selected_npc_item
                         .map(|item| item.cost_sats)
@@ -1428,7 +1430,7 @@ async fn restart_game_from_polar_setup(
                 operation_prompt,
                 operation_id,
                 format!(
-                    "Game restarted. Alice, Bob, and Carol are ready with {required_balance_sats} sats each."
+                    "Game restarted. Jack, Bob, and Carol are ready with {required_balance_sats} sats each."
                 ),
                 ToastTone::Success,
                 false,
@@ -2136,7 +2138,7 @@ mod tests {
     #[test]
     fn sell_is_available_to_current_npc_with_sats_and_empty_inventory_slot() {
         let catalog = item_catalog();
-        let mut apple = item(DemoNodeId::Alice, "Apple", TraOwnershipStatus::Verified);
+        let mut apple = item(DemoNodeId::Jack, "Apple", TraOwnershipStatus::Verified);
         apple.item_id = APPLE_ITEM_ID;
         let mut state = state_with_items(vec![
             apple,
@@ -2145,7 +2147,7 @@ mod tests {
         ]);
         activate_route_to(&mut state, DemoNodeId::Bob);
         let selected =
-            rightmost_transferable_item(&tradable_items_for(&state, DemoNodeId::Alice, &catalog))
+            rightmost_transferable_item(&tradable_items_for(&state, DemoNodeId::Jack, &catalog))
                 .expect("player item");
         let focused_route = state
             .trade_routes
@@ -2163,7 +2165,7 @@ mod tests {
     #[test]
     fn sell_is_unavailable_when_current_npc_inventory_is_full() {
         let catalog = item_catalog();
-        let mut apple = item(DemoNodeId::Alice, "Apple", TraOwnershipStatus::Verified);
+        let mut apple = item(DemoNodeId::Jack, "Apple", TraOwnershipStatus::Verified);
         apple.item_id = APPLE_ITEM_ID;
         let mut state = state_with_items(vec![
             apple,
@@ -2173,7 +2175,7 @@ mod tests {
         ]);
         activate_route_to(&mut state, DemoNodeId::Bob);
         let selected =
-            rightmost_transferable_item(&tradable_items_for(&state, DemoNodeId::Alice, &catalog))
+            rightmost_transferable_item(&tradable_items_for(&state, DemoNodeId::Jack, &catalog))
                 .expect("player item");
         let focused_route = state
             .trade_routes
@@ -2191,7 +2193,7 @@ mod tests {
     #[test]
     fn sell_is_available_when_npc_wallet_can_fund_without_route_outbound_liquidity() {
         let catalog = item_catalog();
-        let mut apple = item(DemoNodeId::Alice, "Apple", TraOwnershipStatus::Verified);
+        let mut apple = item(DemoNodeId::Jack, "Apple", TraOwnershipStatus::Verified);
         apple.item_id = APPLE_ITEM_ID;
         let mut state = state_with_items(vec![apple]);
         activate_route_to(&mut state, DemoNodeId::Bob);
@@ -2202,7 +2204,7 @@ mod tests {
             .expect("route to Bob");
         route.remote_balance_sats = 0;
         let selected =
-            rightmost_transferable_item(&tradable_items_for(&state, DemoNodeId::Alice, &catalog))
+            rightmost_transferable_item(&tradable_items_for(&state, DemoNodeId::Jack, &catalog))
                 .expect("player item");
         let focused_route = state
             .trade_routes
@@ -2220,7 +2222,7 @@ mod tests {
     #[test]
     fn buy_and_sell_are_unavailable_without_active_trade_route() {
         let catalog = item_catalog();
-        let mut apple = item(DemoNodeId::Alice, "Apple", TraOwnershipStatus::Verified);
+        let mut apple = item(DemoNodeId::Jack, "Apple", TraOwnershipStatus::Verified);
         apple.item_id = APPLE_ITEM_ID;
         let state = state_with_items(vec![
             apple,
@@ -2230,7 +2232,7 @@ mod tests {
             rightmost_transferable_item(&tradable_items_for(&state, DemoNodeId::Bob, &catalog))
                 .expect("npc item");
         let selected_player_item =
-            rightmost_transferable_item(&tradable_items_for(&state, DemoNodeId::Alice, &catalog))
+            rightmost_transferable_item(&tradable_items_for(&state, DemoNodeId::Jack, &catalog))
                 .expect("player item");
         let focused_route = state
             .trade_routes

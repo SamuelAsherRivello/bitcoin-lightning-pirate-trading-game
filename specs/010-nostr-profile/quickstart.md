@@ -38,7 +38,7 @@ Verify:
 - Clicking opens a prompt with `username:`, `Submit`, and `Cancel`.
 - Invalid usernames are rejected without publishing.
 - Cancel leaves the previous name unchanged.
-- Successful mock/real Nostr auth updates the button to `Set Name (alice)`.
+- Successful mock/real Nostr auth updates the button to `Set Name (jack)`.
 - Buy/Sell item still uses Lightning auth and does not open the Nostr profile prompt.
 
 ## Research Notes

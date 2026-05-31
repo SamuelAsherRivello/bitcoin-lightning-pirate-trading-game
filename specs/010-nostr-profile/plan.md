@@ -113,7 +113,7 @@ Browser-visible implementation check:
 .\Scripts\Common\RunWeb.ps1
 ```
 
-Verify the Play Game route shows `Profile`, displays `Set Name ()` before profile data exists, opens the username prompt, validates bad names, preserves state on cancel, updates to `Set Name (alice)` after successful mock/real Nostr authorization, and does not trigger Lightning payment approval.
+Verify the Play Game route shows `Profile`, displays `Set Name ()` before profile data exists, opens the username prompt, validates bad names, preserves state on cancel, updates to `Set Name (jack)` after successful mock/real Nostr authorization, and does not trigger Lightning payment approval.
 
 ## Complexity Tracking
 

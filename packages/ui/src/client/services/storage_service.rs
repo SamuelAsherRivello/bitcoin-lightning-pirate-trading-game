@@ -277,7 +277,7 @@ mod tests {
     fn nostr_profile_snapshot_allows_public_summary() {
         let profile = NostrProfile {
             public_key: "abcdef123456".to_string(),
-            username: Some("alice".to_string()),
+            username: Some("jack".to_string()),
             source: NostrProfileSource::Mock,
             publish_status: NostrProfilePublishStatus::Published,
             updated_at: Some(Utc::now()),
@@ -293,7 +293,7 @@ mod tests {
     fn nostr_profile_snapshot_rejects_secret_like_values() {
         let profile = NostrProfile {
             public_key: "nsec1private".to_string(),
-            username: Some("alice".to_string()),
+            username: Some("jack".to_string()),
             source: NostrProfileSource::Mock,
             publish_status: NostrProfilePublishStatus::Published,
             updated_at: Some(Utc::now()),

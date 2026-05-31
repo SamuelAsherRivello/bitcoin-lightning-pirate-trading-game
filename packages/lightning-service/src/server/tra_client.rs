@@ -160,12 +160,12 @@ mod tests {
                 &TransferTraRequest {
                     tra_id: item.tra_id.clone(),
                     from_node: DemoNodeId::Bob,
-                    to_node: DemoNodeId::Alice,
+                    to_node: DemoNodeId::Jack,
                 },
             )
             .expect("transfer fake TRA item");
 
-        assert_eq!(item.owner_node, DemoNodeId::Alice);
+        assert_eq!(item.owner_node, DemoNodeId::Jack);
         assert_eq!(item.transfer_status, TraTransferStatus::Succeeded);
     }
 

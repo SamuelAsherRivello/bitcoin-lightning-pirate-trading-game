@@ -19,7 +19,7 @@ The implementation approach is incremental but not mock-only: preserve the curre
 **Project Type**: Dioxus fullstack web/desktop app plus internal Rust service crate  
 **Performance Goals**: TRA setup status appears within 1 second of each user action; setup prepares at least 3 TRA-backed mock items within 2 minutes after Lightning nodes are running and funded; final served-web verification records these two timing checks manually; inventory updates render immediately after verified ownership changes; Play Game inventory must not render item images from payment-derived counts or other mock ownership substitutes  
 **Constraints**: No mainnet use; no real monetary value; no browser-stored Taproot Assets private keys, macaroons, seeds, or proofs with sensitive material; keep web and desktop support; keep direct LND/TRA access behind `packages/lightning-service`; do not introduce browser SQLite/OPFS  
-**Scale/Scope**: Single-user local learning lab; Alice as player, Bob/Carol as NPCs; maximum 3 TRA inventory items per node; first catalog item is Book with `item_id=1`
+**Scale/Scope**: Single-user local learning lab; Jack as player, Bob/Carol as NPCs; maximum 3 TRA inventory items per node; first catalog item is Book with `item_id=1`
 
 ## Constitution Check
 

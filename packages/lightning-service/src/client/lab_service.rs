@@ -64,7 +64,7 @@ pub fn test_setup(mut profile: SetupProfile) -> Result<LabState, LightningError>
         push_log(
             &mut state,
             "Setup verified",
-            "Alice, Bob, and Carol are available for the local regtest learning lab.",
+            "Jack, Bob, and Carol are available for the local regtest learning lab.",
             &[],
         );
     }
@@ -550,7 +550,7 @@ pub fn get_operation_faq() -> Vec<OperationFaqRow> {
             needs_bitcoin_node: true,
             needs_mined_block: true,
             plain_explanation: "A wallet funding transaction needs a mined Bitcoin block before LND treats it as confirmed.".to_string(),
-            game_example: Some("Polar funds Alice before the lab starts.".to_string()),
+            game_example: Some("Polar funds Jack before the lab starts.".to_string()),
         },
         OperationFaqRow {
             operation: "Open channel".to_string(),
@@ -614,7 +614,7 @@ fn default_nodes(connected: bool) -> Vec<DemoNode> {
                 )
             }),
             wallet_balance_sats: if connected { 1_000_000 } else { 0 },
-            channel_balance_sats: if connected && node_id == DemoNodeId::Alice {
+            channel_balance_sats: if connected && node_id == DemoNodeId::Jack {
                 DEFAULT_ROUTE_CAPACITY_SATS
             } else {
                 0
@@ -658,8 +658,8 @@ pub fn upsert_game_treasury_node(state: &mut LabState, wallet_balance_sats: u64)
 
 fn default_routes() -> Vec<TradeRoute> {
     vec![
-        missing_route(DemoNodeId::Alice, DemoNodeId::Bob),
-        missing_route(DemoNodeId::Alice, DemoNodeId::Carol),
+        missing_route(DemoNodeId::Jack, DemoNodeId::Bob),
+        missing_route(DemoNodeId::Jack, DemoNodeId::Carol),
     ]
 }
 
@@ -746,7 +746,7 @@ fn apply_payment_to_route(
         return Ok(true);
     }
 
-    if payer_node == DemoNodeId::Alice {
+    if payer_node == DemoNodeId::Jack {
         return route_payment_result.map(|_| true);
     }
 
@@ -939,7 +939,7 @@ mod tests {
         let state = default_lab_state(connected_profile());
         let state = open_trade_route(
             state,
-            DemoNodeId::Alice,
+            DemoNodeId::Jack,
             DemoNodeId::Bob,
             DEFAULT_ROUTE_CAPACITY_SATS,
         )
@@ -962,7 +962,7 @@ mod tests {
         let state = default_lab_state(connected_profile());
         let state = open_trade_route(
             state,
-            DemoNodeId::Alice,
+            DemoNodeId::Jack,
             DemoNodeId::Bob,
             DEFAULT_ROUTE_CAPACITY_SATS,
         )
@@ -970,11 +970,11 @@ mod tests {
         let state = wait_for_next_block(
             state,
             BlockWaitReason::ChannelOpenConfirmation,
-            Some("alice-bob".to_string()),
+            Some("jack-bob".to_string()),
         )
         .expect("activate route");
         let state =
-            close_trade_route(state, DemoNodeId::Alice, DemoNodeId::Bob).expect("close route");
+            close_trade_route(state, DemoNodeId::Jack, DemoNodeId::Bob).expect("close route");
 
         assert_eq!(state.trade_routes[0].status, RouteStatus::Closing);
         assert!(state.trade_routes[0].requires_next_block);
@@ -982,7 +982,7 @@ mod tests {
         let state = wait_for_next_block(
             state,
             BlockWaitReason::ChannelCloseConfirmation,
-            Some("alice-bob".to_string()),
+            Some("jack-bob".to_string()),
         )
         .expect("finish close");
 
@@ -1001,16 +1001,16 @@ mod tests {
             .find(|node| node.node_id == DemoNodeId::Bob)
             .expect("Bob node")
             .wallet_balance_sats;
-        let alice_wallet_before = state
+        let jack_wallet_before = state
             .nodes
             .iter()
-            .find(|node| node.node_id == DemoNodeId::Alice)
-            .expect("Alice node")
+            .find(|node| node.node_id == DemoNodeId::Jack)
+            .expect("Jack node")
             .wallet_balance_sats;
 
         let state = create_invoice_and_maybe_autosend(
             state,
-            DemoNodeId::Alice,
+            DemoNodeId::Jack,
             DemoNodeId::Bob,
             1_000,
             "Player sells an item to Bob".to_string(),
@@ -1024,16 +1024,16 @@ mod tests {
             .find(|node| node.node_id == DemoNodeId::Bob)
             .expect("Bob node")
             .wallet_balance_sats;
-        let alice_wallet_after = state
+        let jack_wallet_after = state
             .nodes
             .iter()
-            .find(|node| node.node_id == DemoNodeId::Alice)
-            .expect("Alice node")
+            .find(|node| node.node_id == DemoNodeId::Jack)
+            .expect("Jack node")
             .wallet_balance_sats;
 
         assert_eq!(bob_wallet_after, bob_wallet_before - 1_000);
-        assert_eq!(alice_wallet_after, alice_wallet_before + 1_000);
+        assert_eq!(jack_wallet_after, jack_wallet_before + 1_000);
         assert_eq!(state.recent_payments[0].payer_node, DemoNodeId::Bob);
-        assert_eq!(state.recent_payments[0].payee_node, DemoNodeId::Alice);
+        assert_eq!(state.recent_payments[0].payee_node, DemoNodeId::Jack);
     }
 }

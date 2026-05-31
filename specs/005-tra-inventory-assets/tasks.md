@@ -94,8 +94,8 @@
 
 ### Implementation for User Story 3
 
-- [X] T028 [US3] Update Buy Item flow in `packages/ui/src/client/pages/play_game.rs` to select a concrete NPC-owned `tra_id`, create/pay the NPC invoice, call `transfer_tra` from NPC to Alice, and finalize inventory only after verified ownership
-- [X] T029 [US3] Update Sell Item flow in `packages/ui/src/client/pages/play_game.rs` to select a concrete Alice-owned `tra_id`, create/pay the Alice invoice, call `transfer_tra` from Alice to NPC, and finalize inventory only after verified ownership
+- [X] T028 [US3] Update Buy Item flow in `packages/ui/src/client/pages/play_game.rs` to select a concrete NPC-owned `tra_id`, create/pay the NPC invoice, call `transfer_tra` from NPC to Jack, and finalize inventory only after verified ownership
+- [X] T029 [US3] Update Sell Item flow in `packages/ui/src/client/pages/play_game.rs` to select a concrete Jack-owned `tra_id`, create/pay the Jack invoice, call `transfer_tra` from Jack to NPC, and finalize inventory only after verified ownership
 - [X] T030 [US3] Add recoverable partial-completion handling in `packages/ui/src/client/pages/play_game.rs` when payment succeeds but TRA transfer or verification fails
 - [X] T031 [US3] Add TRA transfer details to action log entries in `packages/lightning-service/src/client/tra_service.rs` so the game log distinguishes payment from item transfer
 - [X] T032 [US3] Ensure duplicate transfer attempts are disabled for pending or failed item transfers in `packages/ui/src/client/pages/play_game.rs`

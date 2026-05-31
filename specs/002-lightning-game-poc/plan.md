@@ -5,7 +5,7 @@
 
 ## Summary
 
-Replace the template pages with a Dioxus 0.7 fullstack learning app that starts with a Home page explaining why the demo exists and Bitcoin/Lightning FAQ concepts, guides a learner through a local Polar regtest setup, creates Alice/Bob/Carol Lightning nodes from an existing Polar Bitcoin backend through Polar's localhost bridge, unlocks a playful Lightning trading game, and exposes a network dashboard view that proves the underlying channel, invoice, payment, and block-confirmation operations.
+Replace the template pages with a Dioxus 0.7 fullstack learning app that starts with a Home page explaining why the demo exists and Bitcoin/Lightning FAQ concepts, guides a learner through a local Polar regtest setup, creates Jack/Bob/Carol Lightning nodes from an existing Polar Bitcoin backend through Polar's localhost bridge, unlocks a playful Lightning trading game, and exposes a network dashboard view that proves the underlying channel, invoice, payment, and block-confirmation operations.
 
 ## Technical Context
 
@@ -17,7 +17,7 @@ Replace the template pages with a Dioxus 0.7 fullstack learning app that starts 
 **Project Type**: Dioxus fullstack web/desktop app plus internal Rust service crate  
 **Performance Goals**: Setup test should complete in under 5 seconds against running Polar; invoice/payment status refresh should show user feedback within 1 second for local regtest operations; UI animations should remain responsive during async network calls  
 **Constraints**: Never require mainnet credentials; do not expose macaroons in browser storage by default; keep all production-spend actions out of scope; keep web and desktop support; no browser SQLite/OPFS for this feature  
-**Scale/Scope**: Single-user local learning app controlling one existing Polar Bitcoin backend and three app-created local demo LND nodes: Alice, Bob, Carol
+**Scale/Scope**: Single-user local learning app controlling one existing Polar Bitcoin backend and three app-created local demo LND nodes: Jack, Bob, Carol
 
 ## Constitution Check
 
@@ -61,7 +61,7 @@ packages/
 │       ├── lib.rs
 │       ├── client/
 │       │   ├── error.rs           # Domain error mapping
-│       │   ├── lab_service.rs     # Alice/Bob/Carol state operations
+│       │   ├── lab_service.rs     # Jack/Bob/Carol state operations
 │       │   └── models.rs          # Shared service DTOs
 │       └── server/
 │           ├── config.rs          # Local profile loading and credential validation
@@ -105,7 +105,7 @@ packages/
 See [research.md](research.md). Key decisions:
 
 - Use Polar regtest as the required first environment.
-- Use LND nodes Alice, Bob, and Carol.
+- Use LND nodes Jack, Bob, and Carol.
 - Use `tonic_lnd` as the first Rust LND gRPC client.
 - Keep LDK/`ldk-node` out of v1 because the app should control existing Polar LND nodes rather than embed a new node.
 - Use Dioxus server functions to cross the client/server boundary.
@@ -125,7 +125,7 @@ See [data-model.md](data-model.md) and [contracts/server-functions.md](contracts
 - First implementation lets learners paste the throwaway Polar bridge URL directly in the `Polar Connection (Networked)` tab instead of manually editing setup files.
 - Polar automation must stay visibly labeled for local regtest use only and must never be presented as a production wallet permission model.
 - Use exact page labels requested by the user: `Home`, `Set Up`, `Play Game`, `Network Dashboard`.
-- Use plain readable personas and locations: Alice, Bob, Carol; Town, Desert, Beach, Mountain.
+- Use plain readable personas and locations: Jack, Bob, Carol; Town, Desert, Beach, Mountain.
 - Treat receive as `Create Invoice`; do not imply receive happens without a payer.
 - Treat send as `Pay Invoice`.
 - Treat channel open as `Open Trade Route`; pending as `Under Construction`; confirmation as `Wait for Next Block`.

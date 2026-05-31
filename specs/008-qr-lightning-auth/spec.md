@@ -168,7 +168,7 @@ As a developer building another Rust game, I want authentication, payment, route
 - The current Play Game Buy/Sell paths are the first sats-send gates because they already call a single service wrapper that creates/pays the invoice and transfers the TRA.
 - Channel opens/closes and TRA ownership transfers remain service-extensible authorization events, but v1 user-facing QR prompts should focus on Play Game login and sats sends unless those operations directly include a sats send.
 - QR authentication represents Lightning wallet-based proof of player identity using a standard challenge and signature flow.
-- The player's external Lightning wallet is not expected to be created in Polar. Polar remains the local lab backend for Alice, Bob, Carol, Game Treasury, channels, mock/regtest invoices, and TRA state.
+- The player's external Lightning wallet is not expected to be created in Polar. Polar remains the local lab backend for Jack, Bob, Carol, Game Treasury, channels, mock/regtest invoices, and TRA state.
 - Polar setup must support both fresh and existing networks. Existing user nodes may already hold sats or TRAs, so setup balances user-node targets by transferring to or from Game Treasury instead of assuming every node starts empty.
 - In the local/regtest demo, per-send QR approval authorizes the app to execute the corresponding Polar lab payment on behalf of the authenticated player; it does not require the player's production wallet to pay a regtest invoice.
 - "Player chain transactions" means player-affecting actions with on-chain or channel consequences, including route/channel open or close work and asset-transfer flows that depend on those transactions.

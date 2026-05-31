@@ -13,7 +13,7 @@ A learner can playfully stop the Polar network, delete the Polar network, or rem
 
 **Why this priority**: The current learning loop depends on local Polar resources that can be changed outside the app.
 
-**Independent Test**: Complete setup, stop the Polar network or remove `alice`, `bob`, or `carol` in Polar, return to the app or refresh any route, and verify gameplay/debug routes lock with a blocking prompt and the setup wizard resumes at the right step.
+**Independent Test**: Complete setup, stop the Polar network or remove `jack`, `bob`, or `carol` in Polar, return to the app or refresh any route, and verify gameplay/debug routes lock with a blocking prompt and the setup wizard resumes at the right step.
 
 **Acceptance Scenarios**:
 
@@ -66,7 +66,7 @@ The app records an event-first observer boundary for native/server LND streams w
 - **FR-012**: Prompt messages MUST remain onscreen for at least 0.25 seconds per message and support cancel requests for reset operations that can restore the previous app state after the external Polar call completes.
 - **FR-013**: Resetting Polar setup step 4 after the app has been unlocked MUST first show an "Are you sure?" blocking prompt because this action locks a properly running app.
 - **FR-014**: Submitting Polar setup step 3 MUST use the blocking prompt with a red cancel button because demo-node creation can take long enough that subtle toast progress is easy to miss.
-- **FR-015**: Polar setup step 3 MUST NOT confirm success until polling verifies that the server is running, `alice`, `bob`, and `carol` are running with exact lowercase app-owned names, and each node reports the exact fresh demo wallet balance required by the app rules.
+- **FR-015**: Polar setup step 3 MUST NOT confirm success until polling verifies that the server is running, `jack`, `bob`, and `carol` are running with exact lowercase app-owned names, and each node reports the exact fresh demo wallet balance required by the app rules.
 - **FR-016**: Polar setup step 2 MUST match the typed server name to a Polar network name only, ignoring unrelated running servers and unrelated numeric ids; it MUST create the named server when no name match exists and verify the named server is running before passing the step.
 
 ### Key Entities

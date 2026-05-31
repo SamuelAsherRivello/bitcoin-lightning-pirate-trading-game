@@ -1163,6 +1163,12 @@ table {
     --game-right-character-offset-x: -150px;
     --game-right-character-offset-y: 0px;
     --game-player-ui-gap: 8px;
+    /* Edit these four values to move the trade-route connection endpoints. */
+    --game-channel-left-end-x: 35%;
+    --game-channel-left-end-y: 55%;
+    
+    --game-channel-right-end-x: 62%;
+    --game-channel-right-end-y: 80%;
 
     position: relative;
     min-height: 400px;
@@ -1202,11 +1208,11 @@ table {
 }
 
 .game-view__channel {
-    left: 18%;
-    top: 42%;
+    left: var(--game-channel-left-end-x);
+    top: var(--game-channel-left-end-y);
     z-index: 4;
-    width: 64%;
-    height: 28%;
+    width: calc(var(--game-channel-right-end-x) - var(--game-channel-left-end-x));
+    height: calc(var(--game-channel-right-end-y) - var(--game-channel-left-end-y));
     object-fit: fill;
     opacity: 1;
 }
@@ -1322,42 +1328,25 @@ table {
 .game-view__player-ui {
     position: absolute;
     top: 16px;
-    display: grid;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
     gap: var(--game-player-ui-gap);
-    width: min(calc(50% - 24px), 280px);
+    width: 200px;
     pointer-events: auto;
 }
 
 .game-view__player-ui--left {
     left: 16px;
-    justify-items: start;
 }
 
 .game-view__player-ui--right {
     right: 16px;
-    justify-items: end;
-}
-
-.game-view__player-ui--left .game-view__identity {
-    justify-content: flex-start;
-}
-
-.game-view__player-ui--right .game-view__identity {
-    justify-content: flex-end;
-}
-
-.game-view__player-ui--left .game-view__inventory {
-    justify-self: start;
-}
-
-.game-view__player-ui--right .game-view__inventory {
-    justify-self: end;
 }
 
 .game-view__identity {
     display: flex;
     align-items: center;
-    justify-content: center;
     gap: var(--game-player-ui-gap);
     width: 100%;
     min-width: 0;
@@ -1373,18 +1362,23 @@ table {
     color: var(--app-text);
     font-size: 13px;
     font-weight: 850;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     text-align: center;
 }
 
 .game-view__name {
-    min-width: 0;
-    max-width: 150px;
+    flex: 1 1 0;
+    min-width: 100px;
+    max-width: 300px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .game-view__sats {
+    flex: 2 1 0;
     min-width: 0;
     background: color-mix(in srgb, var(--app-raised) 78%, transparent);
     color: var(--app-text-muted);
@@ -1396,7 +1390,7 @@ table {
 .game-view__inventory {
     display: flex;
     align-items: stretch;
-    grid-template-columns: repeat(3, 54px);
+    width: 100%;
     gap: var(--game-player-ui-gap);
 }
 
@@ -1404,7 +1398,9 @@ table {
     display: grid;
     place-items: center;
     appearance: none;
-    width: 54px;
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
     min-height: 78px;
     height: 78px;
     border: 1px solid color-mix(in srgb, var(--app-border) 78%, transparent);
@@ -1550,16 +1546,27 @@ table {
 
 .game-view__actions {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 10px;
-    align-items: center;
+    align-items: stretch;
+    width: 100%;
+}
+
+.game-view__actions-row {
+    display: flex;
+    align-items: stretch;
+    width: 100%;
+    min-height: 68px;
+    gap: 10px;
 }
 
 .game-view__action-group {
     display: grid;
     grid-template-columns: max-content minmax(0, 1fr);
+    flex: 1 1 0;
     gap: 12px;
     align-items: center;
+    min-width: 0;
     max-width: 100%;
     padding: 10px 12px;
     border: 1px solid var(--app-border);
@@ -1579,8 +1586,17 @@ table {
 
 .game-view__action-controls {
     display: flex;
+    flex: 1 1 auto;
     flex-wrap: nowrap;
     gap: 10px;
+    min-width: 0;
+}
+
+.game-view__action-controls > button {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 44px;
+    white-space: normal;
 }
 
 @keyframes game-payment-travel {
@@ -2053,6 +2069,8 @@ table {
         --game-character-height: 230px;
         --game-left-character-base-x: 12px;
         --game-right-character-base-x: calc(100% - var(--game-character-width) - 12px);
+        --game-channel-left-end-x: 14%;
+        --game-channel-right-end-x: 86%;
 
         min-height: 400px;
     }
@@ -2076,12 +2094,11 @@ table {
     }
 
     .game-view__inventory {
-        grid-template-columns: repeat(3, 42px);
-        gap: 6px;
+        gap: var(--game-player-ui-gap);
     }
 
     .game-view__slot {
-        width: 42px;
+        width: auto;
         height: 36px;
     }
 
@@ -2089,14 +2106,23 @@ table {
         font-size: 9px;
     }
 
-    .game-view__channel {
-        left: 14%;
-        width: 72%;
-    }
-
     .game-view__action-group {
         grid-template-columns: 1fr;
         justify-items: start;
+    }
+
+    .game-view__actions-row {
+        flex-direction: column;
+        min-height: 0;
+    }
+
+    .game-view__action-controls {
+        flex-wrap: wrap;
+        width: 100%;
+    }
+
+    .game-view__action-controls > button {
+        flex-basis: min(100%, 160px);
     }
 
     .wizard-step__actions {

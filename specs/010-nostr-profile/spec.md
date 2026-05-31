@@ -13,12 +13,12 @@ As a player on Play Game, I can open a Profile control and set my display userna
 
 **Why this priority**: This is the smallest useful Nostr profile slice: it proves identity-backed profile edits, visible gameplay integration, and the no-custom-game-DB approach.
 
-**Independent Test**: Can be tested by selecting `Set Name ()`, completing Nostr QR authorization, entering a username, submitting, and seeing the button update to `Set Name (alice)` without adding a game DB table.
+**Independent Test**: Can be tested by selecting `Set Name ()`, completing Nostr QR authorization, entering a username, submitting, and seeing the button update to `Set Name (jack)` without adding a game DB table.
 
 **Acceptance Scenarios**:
 
 1. **Given** Play Game is available and no profile name is set, **When** the player views the Profile group, **Then** the group shows a `Set Name ()` button.
-2. **Given** the player clicks `Set Name ()`, **When** the Nostr QR auth succeeds and the player submits `alice`, **Then** the app publishes or stages Nostr profile metadata for the authenticated public key and updates the button to `Set Name (alice)`.
+2. **Given** the player clicks `Set Name ()`, **When** the Nostr QR auth succeeds and the player submits `jack`, **Then** the app publishes or stages Nostr profile metadata for the authenticated public key and updates the button to `Set Name (jack)`.
 3. **Given** the player clicks `Cancel` in the username prompt, **When** the prompt closes, **Then** the existing profile name remains unchanged.
 
 ---

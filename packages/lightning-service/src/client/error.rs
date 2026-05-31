@@ -5,10 +5,10 @@ pub enum LightningError {
     #[error("Sats per transaction must be a whole number from 1 to 100,000.")]
     InvalidDemoAmount,
 
-    #[error("The local server profile is missing Alice, Bob, or Carol.")]
+    #[error("The local server profile is missing Jack, Bob, or Carol.")]
     MissingRequiredNodes,
 
-    #[error("Paste Polar endpoint, TLS cert, and macaroon values for Alice, Bob, and Carol.")]
+    #[error("Paste Polar endpoint, TLS cert, and macaroon values for Jack, Bob, and Carol.")]
     MissingPolarConnectionValues,
 
     #[error("Paste the local Polar bridge URL before creating Lightning nodes.")]

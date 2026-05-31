@@ -75,11 +75,11 @@ These contracts describe UI-facing operations for setup and gameplay. They are t
 
 ## create_or_verify_user_nodes
 
-**Purpose**: Create or verify Alice, Bob, and Carol after Game Treasury is ready.
+**Purpose**: Create or verify Jack, Bob, and Carol after Game Treasury is ready.
 
 **Request**:
 
-- `required_users`: Alice, Bob, Carol
+- `required_users`: Jack, Bob, Carol
 - `treasury_status`
 
 **Response**:

@@ -213,7 +213,7 @@ mod tests {
         let response = futures::executor::block_on(start_nostr_profile_authorization(
             StartNostrProfileAuthorizationRequest {
                 action: NostrProfileAction::SetProfileName,
-                draft_username: Some("alice".to_string()),
+                draft_username: Some("jack".to_string()),
                 identity_public_key: Some("abcdef123456".to_string()),
             },
         ))
@@ -230,14 +230,14 @@ mod tests {
         let response =
             futures::executor::block_on(submit_nostr_profile_name(SubmitNostrProfileNameRequest {
                 session: approved_session(),
-                username: " alice ".to_string(),
+                username: " jack ".to_string(),
                 preferred_relays: vec!["wss://relay.example".to_string()],
             }))
             .expect("profile saved");
 
         assert_eq!(response.identity.public_key, "abcdef123456");
         assert_eq!(response.profile.public_key, "abcdef123456");
-        assert_eq!(response.profile.username.as_deref(), Some("alice"));
+        assert_eq!(response.profile.username.as_deref(), Some("jack"));
         storage_service::clear_nostr_profile_snapshot();
     }
 
@@ -245,8 +245,8 @@ mod tests {
     fn profile_summary_is_scoped_to_current_identity() {
         storage_service::clear_nostr_profile_snapshot();
         let profile = NostrProfile {
-            public_key: "alice-key".to_string(),
-            username: Some("alice".to_string()),
+            public_key: "jack-key".to_string(),
+            username: Some("jack".to_string()),
             source: NostrProfileSource::Mock,
             publish_status: NostrProfilePublishStatus::Published,
             updated_at: Some(Utc::now()),
@@ -259,7 +259,7 @@ mod tests {
             futures::executor::block_on(get_nostr_profile_summary(GetNostrProfileSummaryRequest {
                 preferred_relays: Vec::new(),
                 allow_local_snapshot: true,
-                identity_public_key: Some("alice-key".to_string()),
+                identity_public_key: Some("jack-key".to_string()),
             }))
             .expect("matching summary");
         let switched =
@@ -272,7 +272,7 @@ mod tests {
 
         assert_eq!(
             matching.profile.and_then(|profile| profile.username),
-            Some("alice".to_string())
+            Some("jack".to_string())
         );
         assert!(switched.profile.is_none());
         storage_service::clear_nostr_profile_snapshot();
@@ -286,7 +286,7 @@ mod tests {
         let result =
             futures::executor::block_on(submit_nostr_profile_name(SubmitNostrProfileNameRequest {
                 session,
-                username: "alice".to_string(),
+                username: "jack".to_string(),
                 preferred_relays: Vec::new(),
             }));
 
@@ -301,7 +301,7 @@ mod tests {
         let result =
             futures::executor::block_on(submit_nostr_profile_name(SubmitNostrProfileNameRequest {
                 session,
-                username: "alice".to_string(),
+                username: "jack".to_string(),
                 preferred_relays: Vec::new(),
             }));
 

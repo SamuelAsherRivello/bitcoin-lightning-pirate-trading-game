@@ -28,7 +28,7 @@ Represents one mock inventory instance backed by one TRA.
 | `asset_id` | `String` | Taproot Assets identity or mock local identity until real adapter is wired. |
 | `unique_name` | `String` | Human-readable unique instance name, e.g. `Book`. Must be unique within the local lab. |
 | `item_id` | `u32` | Game type ID carried by the TRA. `1` means Book. |
-| `owner_node` | `DemoNodeId` | Current owner: Alice, Bob, or Carol. |
+| `owner_node` | `DemoNodeId` | Current owner: Jack, Bob, or Carol. |
 | `ownership_status` | `TraOwnershipStatus` | Verification state for the current owner. |
 | `transfer_status` | `TraTransferStatus` | Latest transfer lifecycle state. |
 

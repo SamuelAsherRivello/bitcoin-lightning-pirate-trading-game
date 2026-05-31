@@ -7,11 +7,11 @@
 **Alternatives considered**:
 
 - Hidden accounting balance only: rejected because it would not teach value movement or explain where NPC items originate.
-- Reuse Alice as treasury: rejected because it mixes player ownership with game-bank ownership.
+- Reuse Jack as treasury: rejected because it mixes player ownership with game-bank ownership.
 
 ## Decision: Setup sequence becomes seven ordered steps
 
-**Rationale**: The treasury must exist after bridge/server connection but before Alice, Bob, and Carol are created. NPC item transfers depend on both treasury inventory and user nodes, so they occur after User Nodes and before Block Height.
+**Rationale**: The treasury must exist after bridge/server connection but before Jack, Bob, and Carol are created. NPC item transfers depend on both treasury inventory and user nodes, so they occur after User Nodes and before Block Height.
 
 **Alternatives considered**:
 

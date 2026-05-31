@@ -67,13 +67,13 @@
 
 ## Phase 4: User Story 2 - Distribute NPC Items From Treasury (Priority: P2)
 
-**Goal**: Setup creates/verifies Alice, Bob, and Carol as user nodes, then transfers Bob and Carol's starting items from Game Treasury to those NPCs.
+**Goal**: Setup creates/verifies Jack, Bob, and Carol as user nodes, then transfers Bob and Carol's starting items from Game Treasury to those NPCs.
 
 **Independent Test**: Complete User Nodes and NPC Item Transfers setup, then confirm Bob and Carol receive the same starting items they currently receive, with each item visibly originating from Game Treasury.
 
 ### Implementation for User Story 2
 
-- [x] T022 [US2] Rename or revise the setup node-creation step to User Nodes while preserving Alice, Bob, and Carol creation behavior in packages/ui/src/client/pages/setup.rs
+- [x] T022 [US2] Rename or revise the setup node-creation step to User Nodes while preserving Jack, Bob, and Carol creation behavior in packages/ui/src/client/pages/setup.rs
 - [x] T023 [P] [US2] Implement reusable NPC item transfer setup UI with per-item transfer progress and recoverable failure states in packages/ui/src/client/components/setup/npc_item_transfers.rs
 - [x] T024 [US2] Render NPC Item Transfers setup step and block Block Height progression until transfer state is complete or visibly recoverable in packages/ui/src/client/pages/setup.rs
 - [x] T025 [US2] Define Bob and Carol starting item transfer intents from existing item configuration in packages/lightning-service/src/client/tra_service.rs
