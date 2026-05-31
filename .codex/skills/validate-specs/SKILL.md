@@ -50,7 +50,7 @@ Resolve the target before reading deeply:
    - Recommend the default only when the specs appear current and unambiguous.
    - Recommend updating specs or both when code clearly reflects later accepted behavior or when specs are incomplete.
 
-## Dioxus Bitcoin Lightning Game Evidence Map
+## Bitcoin Lightning Pirate Trading Game Evidence Map
 
 For this repo, validate common spec claims against these implementation owners:
 

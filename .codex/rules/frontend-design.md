@@ -1,6 +1,6 @@
 # Frontend Design Rule
 
-Use this rule when changing user-visible UI, CSS, layout, component composition, route presentation, loading states, toasts, empty/error states, or visual assets in this Dioxus Bitcoin Lightning Game workspace.
+Use this rule when changing user-visible UI, CSS, layout, component composition, route presentation, loading states, toasts, empty/error states, or visual assets in this Bitcoin Lightning Pirate Trading Game workspace.
 
 ## Direction
 

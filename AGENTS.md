@@ -4,7 +4,7 @@ This file is the shared operating guide for AI agents working in this repository
 
 ## Mission
 
-Build and maintain the Dioxus Bitcoin Lightning Game demo as a Rust 2021 workspace with shared Dioxus 0.7 UI, web and desktop entrypoints, local/regtest Lightning lab behavior, and durable documentation.
+Build and maintain the Bitcoin Lightning Pirate Trading Game demo as a Rust 2021 workspace with shared Dioxus 0.7 UI, web and desktop entrypoints, local/regtest Lightning lab behavior, and durable documentation.
 
 This repo is not a place for speculative rewrites. Inspect the relevant files first, make focused diffs, preserve web and desktop support, and verify with the narrowest command that proves the change.
 

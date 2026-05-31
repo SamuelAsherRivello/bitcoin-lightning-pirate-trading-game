@@ -1,5 +1,5 @@
 {
-  "name": "dioxus-bitcoin-lightning-game",
+  "name": "bitcoin-lightning-pirate-trading-game",
   "devDependencies": {
     "playwright": "^1.59.1"
   }

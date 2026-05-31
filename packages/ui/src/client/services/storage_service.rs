@@ -7,7 +7,7 @@ use crate::client::services::localization_service::AppLanguage;
 use crate::client::models::TemplateDataLoadResult;
 
 #[cfg(target_arch = "wasm32")]
-const TEMPLATE_DATA_SNAPSHOT_KEY: &str = "dioxus-bitcoin-lightning-game:data-snapshot";
+const TEMPLATE_DATA_SNAPSHOT_KEY: &str = "bitcoin-lightning-pirate-trading-game:data-snapshot";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Theme {
@@ -331,12 +331,12 @@ mod platform {
 
     use super::{AppLanguage, Theme, TEMPLATE_DATA_SNAPSHOT_KEY};
 
-    const THEME_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:theme";
-    const LANGUAGE_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:language";
-    const SETUP_PROFILE_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:setup-profile";
-    const SETUP_POLAR_TAB_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:setup-polar-tab";
-    const LAB_STATE_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:lab-state";
-    const NOSTR_PROFILE_STORAGE_KEY: &str = "dioxus-bitcoin-lightning-game:nostr-profile";
+    const THEME_STORAGE_KEY: &str = "bitcoin-lightning-pirate-trading-game:theme";
+    const LANGUAGE_STORAGE_KEY: &str = "bitcoin-lightning-pirate-trading-game:language";
+    const SETUP_PROFILE_STORAGE_KEY: &str = "bitcoin-lightning-pirate-trading-game:setup-profile";
+    const SETUP_POLAR_TAB_STORAGE_KEY: &str = "bitcoin-lightning-pirate-trading-game:setup-polar-tab";
+    const LAB_STATE_STORAGE_KEY: &str = "bitcoin-lightning-pirate-trading-game:lab-state";
+    const NOSTR_PROFILE_STORAGE_KEY: &str = "bitcoin-lightning-pirate-trading-game:nostr-profile";
 
     pub fn load_theme() -> Option<Theme> {
         let value = local_storage()?

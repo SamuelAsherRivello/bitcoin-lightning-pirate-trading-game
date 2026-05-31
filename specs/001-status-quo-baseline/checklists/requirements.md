@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Dioxus Bitcoin Lightning Game Baseline
+# Specification Quality Checklist: Bitcoin Lightning Pirate Trading Game Baseline
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning  
 **Created**: 2026-04-30  
@@ -22,4 +22,4 @@
 
 ## Notes
 
-- Baseline now documents the generic Dioxus Bitcoin Lightning Game instead of copied app-specific behavior.
+- Baseline now documents the generic Bitcoin Lightning Pirate Trading Game instead of copied app-specific behavior.

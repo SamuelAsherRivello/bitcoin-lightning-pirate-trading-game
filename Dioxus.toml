@@ -2,4 +2,4 @@
 sub_package = "web"
 
 [web.app]
-title = "Dioxus Bitcoin Lightning Game"
+title = "Bitcoin Lightning Pirate Trading Game"

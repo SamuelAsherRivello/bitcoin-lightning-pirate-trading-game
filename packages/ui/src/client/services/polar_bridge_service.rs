@@ -4435,7 +4435,7 @@ mod tests {
                 PolarDeleteAllNetworkFailure {
                     network: PolarNetworkRecord {
                         id: "12".to_string(),
-                        name: "Dioxus Bitcoin Lightning Game".to_string(),
+                        name: "Bitcoin Lightning Pirate Trading Game".to_string(),
                         status: "Error".to_string(),
                     },
                     error:
@@ -4461,7 +4461,7 @@ mod tests {
                 },
                 PolarNetworkRecord {
                     id: "12".to_string(),
-                    name: "Dioxus Bitcoin Lightning Game".to_string(),
+                    name: "Bitcoin Lightning Pirate Trading Game".to_string(),
                     status: "Error".to_string(),
                 },
             ],

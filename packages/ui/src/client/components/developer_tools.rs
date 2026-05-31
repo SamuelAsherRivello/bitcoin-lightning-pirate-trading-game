@@ -23,7 +23,7 @@ pub fn DeveloperTools() -> Element {
                 div { class: "developer-tools__controls",
                     a {
                     class: "developer-tools__github",
-                    href: "https://github.com/SamuelAsherRivello/dioxus-bitcoin-lightning-game",
+                    href: "https://github.com/SamuelAsherRivello/bitcoin-lightning-pirate-trading-game",
                     target: "_blank",
                     rel: "noopener noreferrer",
                     aria_label: t!("open-github-repository"),

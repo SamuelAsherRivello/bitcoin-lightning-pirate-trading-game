@@ -1,10 +1,10 @@
 # Codex Project Boilerplate
 
-Use this folder for Codex-specific project context that should travel with this repository. Spec Kit workflow skills live in `.agents/skills`; keep `.codex` focused on project-specific rules for the Dioxus Bitcoin Lightning Game.
+Use this folder for Codex-specific project context that should travel with this repository. Spec Kit workflow skills live in `.agents/skills`; keep `.codex` focused on project-specific rules for the Bitcoin Lightning Pirate Trading Game.
 
 ## Project
 
-`dioxus-bitcoin-lightning-game` is a Rust workspace for a Dioxus 0.7 template app with shared UI code and separate web and desktop entrypoints.
+`bitcoin-lightning-pirate-trading-game` is a Rust workspace for a Dioxus 0.7 template app with shared UI code and separate web and desktop entrypoints.
 
 | Path | Purpose |
 | ---- | ------- |
