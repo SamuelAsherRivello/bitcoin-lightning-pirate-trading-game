@@ -1,6 +1,10 @@
 # Bitcoin Lightning Pirate Trading Game
 
-Reusable Dioxus 0.7 workspace template with a shared UI crate, separate web and desktop entrypoints, three routed pages, localization, theme persistence, toast status feedback, and a small local data-cache example.
+Fight rival crews with smart trades in this pirate game.
+
+Use Bitcoin Lightning to move sats and settle deals.
+
+Run the same Dioxus app on web or desktop.
 
 <BR>
 
