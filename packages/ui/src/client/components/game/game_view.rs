@@ -360,6 +360,14 @@ fn GameActor(
         GameSide::Left => "game-view__actor game-view__actor--left",
         GameSide::Right => "game-view__actor game-view__actor--right",
     };
+    let body_class = match side {
+        GameSide::Left => "game-view__body game-view__body--left",
+        GameSide::Right => "game-view__body game-view__body--right",
+    };
+    let player_ui_class = match side {
+        GameSide::Left => "game-view__player-ui game-view__player-ui--left",
+        GameSide::Right => "game-view__player-ui game-view__player-ui--right",
+    };
     let purse_class = match side {
         GameSide::Left => "game-view__purse game-view__purse--left",
         GameSide::Right => "game-view__purse game-view__purse--right",
@@ -367,7 +375,7 @@ fn GameActor(
 
     rsx! {
         div { class: actor_class,
-            div { class: "game-view__body",
+            div { class: body_class,
                 if character_src.is_some() {
                     CrossFadeImage {
                         src: character_src,
@@ -382,13 +390,15 @@ fn GameActor(
                     img { class: purse_class, src, alt: "{name} wallet" }
                 }
             }
-            div { class: "game-view__identity",
-                div { class: "game-view__name", "{name}" }
-                div { class: "game-view__sats", "{sats} sats" }
-            }
-            div { class: "game-view__inventory", aria_label: "{name} inventory",
-                for slot in normalized_inventory(inventory) {
-                    InventorySlot { slot }
+            div { class: player_ui_class,
+                div { class: "game-view__identity",
+                    div { class: "game-view__name", "{name}" }
+                    div { class: "game-view__sats", "{sats} sats" }
+                }
+                div { class: "game-view__inventory", aria_label: "{name} inventory",
+                    for slot in normalized_inventory(inventory) {
+                        InventorySlot { slot }
+                    }
                 }
             }
         }
@@ -400,7 +410,11 @@ fn InventorySlot(slot: GameInventorySlot) -> Element {
     let slot_class = inventory_slot_class(&slot).to_string();
 
     rsx! {
-        div { class: slot_class,
+        button {
+            class: slot_class,
+            r#type: "button",
+            aria_disabled: "true",
+            tabindex: "-1",
             match slot {
                 GameInventorySlot::Empty => rsx! { span { class: "game-view__empty-slot", "Empty" } },
                 GameInventorySlot::Item {

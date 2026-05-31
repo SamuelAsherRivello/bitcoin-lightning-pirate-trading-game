@@ -1289,8 +1289,7 @@ mod tests {
         let mut profile = connected_profile();
         profile.game_treasury_ready = false;
 
-        let error =
-            require_game_treasury_ready(&profile).expect_err("treasury should be required");
+        let error = require_game_treasury_ready(&profile).expect_err("treasury should be required");
         assert_eq!(error, GAME_TREASURY_REQUIRED_MESSAGE);
     }
 

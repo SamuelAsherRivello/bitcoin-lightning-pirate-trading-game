@@ -1152,6 +1152,18 @@ table {
 }
 
 .game-view__stage {
+    --game-character-width: min(28%, 190px);
+    --game-character-height: 268px;
+    --game-left-character-base-x: clamp(18px, 8vw, 86px);
+    --game-left-character-base-y: calc(100% - var(--game-character-height) - 16px);
+    --game-right-character-base-x: calc(100% - var(--game-character-width) - clamp(18px, 8vw, 86px));
+    --game-right-character-base-y: var(--game-left-character-base-y);
+    --game-left-character-offset-x: 90px;
+    --game-left-character-offset-y: -40px;
+    --game-right-character-offset-x: -150px;
+    --game-right-character-offset-y: 0px;
+    --game-player-ui-gap: 8px;
+
     position: relative;
     min-height: 400px;
     overflow: hidden;
@@ -1230,26 +1242,25 @@ table {
 
 .game-view__actor {
     position: absolute;
+    inset: 0;
     z-index: 6;
-    bottom: 16px;
-    display: grid;
-    justify-items: center;
-    gap: 8px;
-    width: min(28%, 220px);
-}
-
-.game-view__actor--left {
-    left: clamp(18px, 8vw, 86px);
-}
-
-.game-view__actor--right {
-    right: clamp(18px, 8vw, 86px);
+    pointer-events: none;
 }
 
 .game-view__body {
-    position: relative;
-    width: min(100%, 190px);
-    height: 268px;
+    position: absolute;
+    width: var(--game-character-width);
+    height: var(--game-character-height);
+}
+
+.game-view__body--left {
+    left: calc(var(--game-left-character-base-x) + var(--game-left-character-offset-x));
+    top: calc(var(--game-left-character-base-y) + var(--game-left-character-offset-y));
+}
+
+.game-view__body--right {
+    left: calc(var(--game-right-character-base-x) + var(--game-right-character-offset-x));
+    top: calc(var(--game-right-character-base-y) + var(--game-right-character-offset-y));
 }
 
 .game-view__character {
@@ -1308,11 +1319,46 @@ table {
     left: 18px;
 }
 
+.game-view__player-ui {
+    position: absolute;
+    top: 16px;
+    display: grid;
+    gap: var(--game-player-ui-gap);
+    width: min(calc(50% - 24px), 280px);
+    pointer-events: auto;
+}
+
+.game-view__player-ui--left {
+    left: 16px;
+    justify-items: start;
+}
+
+.game-view__player-ui--right {
+    right: 16px;
+    justify-items: end;
+}
+
+.game-view__player-ui--left .game-view__identity {
+    justify-content: flex-start;
+}
+
+.game-view__player-ui--right .game-view__identity {
+    justify-content: flex-end;
+}
+
+.game-view__player-ui--left .game-view__inventory {
+    justify-self: start;
+}
+
+.game-view__player-ui--right .game-view__inventory {
+    justify-self: end;
+}
+
 .game-view__identity {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: var(--game-player-ui-gap);
     width: 100%;
     min-width: 0;
 }
@@ -1348,14 +1394,16 @@ table {
 }
 
 .game-view__inventory {
-    display: grid;
+    display: flex;
+    align-items: stretch;
     grid-template-columns: repeat(3, 54px);
-    gap: 8px;
+    gap: var(--game-player-ui-gap);
 }
 
 .game-view__slot {
     display: grid;
     place-items: center;
+    appearance: none;
     width: 54px;
     min-height: 78px;
     height: 78px;
@@ -1363,6 +1411,9 @@ table {
     border-radius: 7px;
     background: color-mix(in srgb, var(--app-surface) 76%, transparent);
     padding: 5px;
+    color: inherit;
+    font: inherit;
+    cursor: default;
     text-align: center;
     overflow: hidden;
 }
@@ -1998,23 +2049,30 @@ table {
     }
 
     .game-view__stage {
+        --game-character-width: min(34%, 190px);
+        --game-character-height: 230px;
+        --game-left-character-base-x: 12px;
+        --game-right-character-base-x: calc(100% - var(--game-character-width) - 12px);
+
         min-height: 400px;
     }
 
-    .game-view__actor {
-        width: 34%;
+    .game-view__body {
+        width: var(--game-character-width);
+        height: var(--game-character-height);
     }
 
-    .game-view__actor--left {
+    .game-view__player-ui {
+        top: 12px;
+        width: calc(50% - 18px);
+    }
+
+    .game-view__player-ui--left {
         left: 12px;
     }
 
-    .game-view__actor--right {
+    .game-view__player-ui--right {
         right: 12px;
-    }
-
-    .game-view__body {
-        height: 230px;
     }
 
     .game-view__inventory {
