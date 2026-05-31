@@ -4,14 +4,6 @@ Reusable Dioxus 0.7 workspace template with a shared UI crate, separate web and 
 
 <BR>
 
-## Live Web App
-
-https://samuelasherrivello.github.io/bitcoin-lightning-pirate-trading-game/
-
-The static web build is exported and hosted automatically with each push to the main branch.
-
-<BR>
-
 ## Pics
  
 ### Screenshot
