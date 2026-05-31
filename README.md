@@ -8,14 +8,6 @@ Run the same Dioxus app on web or desktop.
 
 <BR>
 
-## Live Web App
-
-https://samuelasherrivello.github.io/bitcoin-lightning-pirate-trading-game/
-
-The static web build is exported and hosted automatically with each push to the main branch.
-
-<BR>
-
 ## Pics
  
 ### Screenshot
